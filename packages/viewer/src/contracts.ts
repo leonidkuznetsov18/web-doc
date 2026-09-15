@@ -307,9 +307,9 @@ export interface ViewerEventMap {
 
 /**
  * Tuning for the fuzzy fallback that runs when the exact search finds
- * nothing. Matching is delegated to Fuse.js: the query is compared to each
- * page's text with a bounded edit budget, so spacing, line breaks, list
- * bullets, table separators and typographic punctuation may differ from the
+ * nothing. Fuse.js selects candidate pages; a contiguous edit alignment
+ * determines the original-text boundaries with a bounded edit budget. Spacing,
+ * line breaks, list bullets, table separators and punctuation may differ from the
  * source, and every hit maps back to the verbatim page text.
  */
 export interface FuzzySearchOptions {
@@ -319,15 +319,15 @@ export interface FuzzySearchOptions {
    */
   readonly threshold?: number;
   /**
-   * Highest Fuse.js score (`0` perfect, `1` no resemblance) a page may have to
-   * count as a match. Default `0.4`; raise it to accept a passage that only
-   * partly survives on a page, such as a citation that spans a page break.
+   * Highest Fuse.js score and whole-passage edit ratio (`0` perfect, `1` no
+   * resemblance) a match may have. Default `0.4`; raise it to accept a passage
+   * that only partly survives on a page, such as one spanning a page break.
    */
   readonly maxScore?: number;
   /**
    * Query characters considered. The matcher's cost grows with the query and
    * a passage is identified well before its end, so the default `600` keeps
-   * a page under about 100 ms; the highlight covers the matched prefix.
+   * the work bounded; the highlight covers the matched prefix.
    */
   readonly maxQueryLength?: number;
   /** Characters of each page's text considered. Default `20000`. */

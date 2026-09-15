@@ -124,12 +124,12 @@ The optional controls, shortcuts, localization, and CSS variables are documented
 
 `nearPage` is an approximate 0-based page hint for callers whose page numbers come from another pagination of the same file (a citation produced from a server-side render, while the viewer paginates DOCX itself). It is clamped into the scanned window rather than rejected. The result's `activeIndex` — and the page the viewer navigates to — becomes the match closest to the hint, and the fuzzy fallback scans pages nearest to it first.
 
-`fuzzy` enables a fallback that runs only when the exact search finds nothing. Matching is delegated to [Fuse.js](https://www.fusejs.io/): the query is compared to each page's text with a bounded edit budget, so spacing, line breaks, list bullets, table separators and typographic punctuation may differ from the source, and every hit is mapped back to the verbatim page text so highlights land on the original. Pages are compared nearest to `nearPage` first, a batch at a time, and the scan stops at the first batch that holds the passage. `true` uses the viewer's defaults (`ViewerOptions.search.fuzzy`, so an integration can turn it on once at `createViewer`), an object enables it and overrides them, `false` disables it for one call:
+`fuzzy` enables a fallback that runs only when the exact search finds nothing. [Fuse.js](https://www.fusejs.io/) selects candidate pages and a whole-query edit alignment locates one contiguous passage: the query is compared to each page's text with a bounded edit budget, so spacing, line breaks, list bullets, table separators and typographic punctuation may differ from the source, and every hit is mapped back to the verbatim page text so highlights land on the original. Pages are compared nearest to `nearPage` first, a batch at a time, and the scan stops at the first batch that holds the passage. `true` uses the viewer's defaults (`ViewerOptions.search.fuzzy`, so an integration can turn it on once at `createViewer`), an object enables it and overrides them, `false` disables it for one call:
 
 | Option              | Default | Meaning                                                                                                               |
 | ------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `threshold`         | `0.3`   | Fuse.js edit budget per 32-character chunk of the query, `0` exact to `1` anything.                                   |
-| `maxScore`          | `0.4`   | Highest Fuse.js score a page may have to count (`0` perfect); raise it to accept a passage that spans a page break.   |
+| `maxScore`          | `0.4`   | Highest Fuse.js score and whole-passage edit ratio allowed (`0` perfect); raise it to accept a passage that spans a page break.   |
 | `maxQueryLength`    | `600`   | Query characters considered; the matcher's cost grows with the query and a passage is identified well before its end. |
 | `maxPageTextLength` | `20000` | Characters of each page's text considered.                                                                            |
 | `pagesPerBatch`     | `2`     | Main-thread fallback only: pages compared per batch, yielding to the event loop between batches.                      |
@@ -140,7 +140,7 @@ With `worker` on, the first fuzzy search of a document ships its page texts to `
 
 `SearchResult.strategy` reports how the matches were found (`exact` or `fuzzy`) and is absent when there are none.
 
-A search, `searchNext()` and `searchPrevious()` land on the active match itself, not only on its page: once the page's text runs are known the viewport scrolls so the match sits about a third of the way down, so a hit low on a page taller than the viewport is visible without a manual scroll. A fuzzy result carries one match per page, spanning the passage from its first to its last matched character.
+A search, `searchNext()` and `searchPrevious()` land on the active match itself, not only on its page: once the page's text runs are known the viewport scrolls so the match sits about a third of the way down, so a hit low on a page taller than the viewport is visible without a manual scroll. A fuzzy result carries one match per page, covering the best contiguous occurrence. Fuse character masks are not used as offsets: repeated occurrences and unrelated chunks cannot stretch the range across a page. Equal-cost occurrences prefer the earliest end. The `maxScore` ceiling also bounds whole-passage edit distance divided by normalized query length; a candidate that fails this check produces no match, allowing callers to try a shorter citation anchor.
 
 ```ts
 const result = await viewer.search("привет");
