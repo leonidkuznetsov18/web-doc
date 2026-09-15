@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.6.0...v0.6.1) (2026-09-15)
+
+### Bug fixes
+
+* **viewer:** bound fuzzy citation highlights to one passage ([4e3e3d0](https://github.com/leonidkuznetsov18/web-doc/commit/4e3e3d0bd50ef7da1f630754133236f4f2c2d54b))
+
 ## [0.6.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.5.0...v0.6.0) (2026-09-12)
 
 ### Features
