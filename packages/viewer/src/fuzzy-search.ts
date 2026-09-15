@@ -1,10 +1,12 @@
 import Fuse, { type FuseIndex, type IFuseOptions } from "fuse.js";
 
 import type { FuzzySearchOptions, SearchMatch } from "./contracts.js";
+import { alignFuzzyPassage } from "./fuzzy-alignment.js";
 
 /**
- * Fuzzy matching is delegated to Fuse.js (Bitap with a bounded edit budget per
- * 32-character chunk). It bridges the gaps NFKC + case folding leave open when
+ * Fuse.js selects candidate pages (Bitap with a bounded edit budget per
+ * 32-character chunk); contiguous alignment determines highlight boundaries.
+ * This bridges the gaps NFKC + case folding leave open when
  * a query was not copied verbatim from the document: AI-generated citations
  * and OCR'd passages differ from the source in spacing, line breaks, list
  * bullets, table separators and typographic punctuation. Every hit maps back
@@ -25,7 +27,7 @@ export const DEFAULT_FUZZY_SEARCH_OPTIONS: ResolvedFuzzySearchOptions =
     threshold: 0.3,
     maxScore: 0.4,
     // Bitap cost grows with the query; 600 characters still identifies a
-    // passage while keeping a page under ~100 ms on a laptop.
+    // passage while bounding both candidate scoring and alignment work.
     maxQueryLength: 600,
     maxPageTextLength: 20_000,
     pagesPerBatch: 2,
@@ -87,7 +89,6 @@ function fuseOptions(
     keys: ["text"],
     isCaseSensitive: caseSensitive,
     ignoreDiacritics: false,
-    includeMatches: true,
     includeScore: true,
     // A citation can sit anywhere on the page; Fuse's location bias would
     // otherwise penalize matches far from the start of the text.
@@ -105,9 +106,10 @@ function fuseOptions(
  * reuses the normalized records instead of rebuilding them: a citation
  * lookup tries several anchors in a row, and each used to pay for the index
  * again. A scan restricted to a page window reuses the same records through
- * `Fuse.parseIndex`, so only the Bitap pass runs for those pages.
+ * `Fuse.parseIndex`, so only scoring and alignment run for those pages.
  */
 export class FuzzyPageIndex {
+  readonly #caseSensitive: boolean;
   readonly #pages: readonly FuzzyPageText[];
   readonly #index: FuseIndex<FuzzyPageText>;
   readonly #options: IFuseOptions<FuzzyPageText>;
@@ -118,6 +120,7 @@ export class FuzzyPageIndex {
     options: { threshold: number; maxPageTextLength: number },
     caseSensitive = false,
   ) {
+    this.#caseSensitive = caseSensitive;
     this.#pages = pages.map((page) => ({
       pageIndex: page.pageIndex,
       text: page.text.slice(0, options.maxPageTextLength),
@@ -133,9 +136,9 @@ export class FuzzyPageIndex {
 
   /**
    * One match per page whose text holds the query within the edit budget:
-   * the span from the first to the last matched character, so the highlight
-   * covers the passage as one block. `pageIndices` restricts the scan; the
-   * result is in page order either way.
+   * the best contiguous alignment, so neighbouring text and repeated
+   * occurrences cannot expand the highlight. `pageIndices` restricts the scan;
+   * the result is in page order either way.
    */
   search(
     query: string,
@@ -147,14 +150,14 @@ export class FuzzyPageIndex {
     const matches: SearchMatch[] = [];
     for (const result of fuse.search(query)) {
       if ((result.score ?? 1) > maxScore) continue;
-      const indices = result.matches?.[0]?.indices ?? [];
-      if (indices.length === 0) continue;
-      let start = Number.POSITIVE_INFINITY;
-      let end = 0;
-      for (const [first, last] of indices) {
-        start = Math.min(start, first);
-        end = Math.max(end, last + 1);
-      }
+      const span = alignFuzzyPassage(
+        result.item.text,
+        query,
+        this.#caseSensitive,
+        maxScore,
+      );
+      if (!span) continue;
+      const { start, end } = span;
       const text = result.item.text.slice(start, end);
       matches.push({ pageIndex: result.item.pageIndex, start, end, text });
     }
