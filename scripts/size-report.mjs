@@ -1,13 +1,19 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
+import { createRequire } from "node:module";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 
 const root = resolve(import.meta.dirname, "..");
 const dist = resolve(root, "packages/viewer/dist");
+const viewerRequire = createRequire(
+  new URL("../packages/viewer/package.json", import.meta.url),
+);
+const officeDist = dirname(viewerRequire.resolve("@silurus/ooxml/docx"));
+const pptxDist = dirname(viewerRequire.resolve("@silurus/ooxml-pptx/pptx"));
 const wasmArtifacts = [
-  ["ooxml-docx", "node_modules/@silurus/ooxml/dist/docx_parser_bg.wasm"],
-  ["ooxml-xlsx", "node_modules/@silurus/ooxml/dist/xlsx_parser_bg.wasm"],
-  ["ooxml-pptx", "node_modules/@silurus/ooxml/dist/pptx_parser_bg.wasm"],
+  ["ooxml-docx", resolve(officeDist, "docx_parser_bg.wasm")],
+  ["ooxml-xlsx", resolve(officeDist, "xlsx_parser_bg.wasm")],
+  ["ooxml-pptx", resolve(pptxDist, "pptx_parser_bg.wasm")],
   ["legacy-office", "packages/viewer/dist/assets/legacy/index_bg.wasm"],
   ["tiff-image", "packages/viewer/dist/assets/image/index_bg.wasm"],
 ];

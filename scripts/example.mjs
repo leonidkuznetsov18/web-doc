@@ -1,10 +1,16 @@
 import { context } from "esbuild";
 import { copyFile, cp, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { createRequire } from "node:module";
 
 const mode = process.argv[2] ?? "build";
 const root = process.cwd();
 const outdir = resolve(root, "dist");
+const viewerRequire = createRequire(
+  new URL("../packages/viewer/package.json", import.meta.url),
+);
+const officeDist = dirname(viewerRequire.resolve("@silurus/ooxml/docx"));
+const pptxDist = dirname(viewerRequire.resolve("@silurus/ooxml-pptx/pptx"));
 
 await mkdir(outdir, { recursive: true });
 await copyFile(resolve(root, "index.html"), resolve(outdir, "index.html"));
@@ -12,22 +18,15 @@ await copyFile(
   resolve(root, "../../packages/viewer/dist/styles.css"),
   resolve(outdir, "viewer.css"),
 );
-await cp(
-  resolve(root, "../../node_modules/@silurus/ooxml/dist"),
-  resolve(outdir, "vendor/ooxml"),
-  {
-    recursive: true,
-  },
-);
-for (const wasm of [
-  "docx_parser_bg.wasm",
-  "xlsx_parser_bg.wasm",
-  "pptx_parser_bg.wasm",
+await cp(officeDist, resolve(outdir, "vendor/ooxml"), {
+  recursive: true,
+});
+for (const [directory, wasm] of [
+  [officeDist, "docx_parser_bg.wasm"],
+  [officeDist, "xlsx_parser_bg.wasm"],
+  [pptxDist, "pptx_parser_bg.wasm"],
 ])
-  await copyFile(
-    resolve(root, "../../node_modules/@silurus/ooxml/dist", wasm),
-    resolve(outdir, wasm),
-  );
+  await copyFile(resolve(directory, wasm), resolve(outdir, wasm));
 try {
   await cp(
     resolve(root, "../../packages/viewer/dist/workers"),

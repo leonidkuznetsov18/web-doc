@@ -666,7 +666,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   ): Promise<PptxBackend> {
     if (this.#options.engines?.pptx)
       return this.#options.engines.pptx(data, options);
-    const { PptxPresentation } = await import("@silurus/ooxml/pptx");
+    const { PptxPresentation } = await import("@silurus/ooxml-pptx/pptx");
     return PptxPresentation.load(data, options);
   }
 }

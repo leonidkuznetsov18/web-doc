@@ -69,6 +69,7 @@
   },
   "dependencies": {
     "@silurus/ooxml": "0.72.2",
+    "@silurus/ooxml-pptx": "npm:@silurus/ooxml@0.88.0",
     "fuse.js": "7.5.0",
     "pdfjs-dist": "6.2.108"
   }
