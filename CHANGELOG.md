@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.2](https://github.com/leonidkuznetsov18/web-doc/compare/v0.6.1...v0.6.2) (2026-09-22)
+
+### Bug fixes
+
+* **viewer:** preserve pptx chart colors and axis intervals ([d7f4ca2](https://github.com/leonidkuznetsov18/web-doc/commit/d7f4ca29289836be0fffb73bd90b8eaad2a91760))
+
 ## [0.6.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.6.0...v0.6.1) (2026-09-15)
 
 ### Bug fixes

@@ -1,6 +1,6 @@
 {
   "name": "web-doc",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "web-doc — embeddable browser-only document viewer with Rust/WASM adapters (a fork of Zrimo)",
   "keywords": [
     "document-viewer",
