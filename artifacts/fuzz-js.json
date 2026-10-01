@@ -3,12 +3,13 @@
   "seed": "0x5eed1234",
   "iterations": 2000,
   "failures": 0,
-  "elapsedMs": 103.56,
-  "slowestCaseMs": 1.66,
+  "elapsedMs": 124.26,
+  "slowestCaseMs": 1.69,
   "targets": [
     "detection/ZIP/CFB",
     "SVG sanitizer",
     "CSV/TSV parser",
-    "PDF full-save compaction"
+    "PDF full-save compaction",
+    "OOXML ZIP reader"
   ]
 }

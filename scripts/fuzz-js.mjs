@@ -10,6 +10,10 @@ import {
   sanitizeSvg,
 } from "../packages/viewer/dist/index.js";
 import { compactPdf } from "../packages/viewer/dist/edit/pdf/engine/compact.js";
+import {
+  localRecordOf,
+  parseZip,
+} from "../packages/viewer/dist/edit/ooxml/zip.js";
 
 const root = resolve(import.meta.dirname, "..");
 const iterations = Number(process.env.FUZZ_ITERATIONS ?? 2_000);
@@ -20,6 +24,7 @@ const seeds = [
     "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 5 0 R >>\nstream\nBT (x) Tj ET\nendstream\nendobj\n5 0 obj\n12\nendobj\n6 0 obj\n<< /Orphan (endobj stream) >>\nendobj\nxref\n0 7\n0000000000 65535 f \ntrailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n9\n%%EOF\n",
   ),
   Uint8Array.of(0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0),
+  tinyZip(),
   Uint8Array.of(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1),
   bytes('<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>'),
   bytes('a,b\n"quoted\nfield",c'),
@@ -57,6 +62,7 @@ const report = {
     "SVG sanitizer",
     "CSV/TSV parser",
     "PDF full-save compaction",
+    "OOXML ZIP reader",
   ],
 };
 await mkdir(resolve(root, "artifacts"), { recursive: true });
@@ -88,6 +94,51 @@ function exercise(sample) {
   try {
     compactPdf(sample);
   } catch {}
+  // The OOXML ZIP reader must refuse or finish on any bytes.
+  try {
+    const archive = parseZip(sample, defaultResourceLimits);
+    for (const entry of archive.entries)
+      try {
+        localRecordOf(archive, entry);
+      } catch {}
+  } catch {}
+}
+
+/** A stored one-entry archive, the seed for the ZIP reader. */
+function tinyZip() {
+  const name = bytes("a.xml");
+  const data = bytes("<a/>");
+  const local = new Uint8Array(30 + name.length);
+  const view = new DataView(local.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint32(14, 0x1a8e3f3c, true);
+  view.setUint32(18, data.length, true);
+  view.setUint32(22, data.length, true);
+  view.setUint16(26, name.length, true);
+  local.set(name, 30);
+  const central = new Uint8Array(46 + name.length);
+  const centralView = new DataView(central.buffer);
+  centralView.setUint32(0, 0x02014b50, true);
+  centralView.setUint16(6, 20, true);
+  centralView.setUint32(16, 0x1a8e3f3c, true);
+  centralView.setUint32(20, data.length, true);
+  centralView.setUint32(24, data.length, true);
+  centralView.setUint16(28, name.length, true);
+  central.set(name, 46);
+  const eocd = new Uint8Array(22);
+  const eocdView = new DataView(eocd.buffer);
+  eocdView.setUint32(0, 0x06054b50, true);
+  eocdView.setUint16(8, 1, true);
+  eocdView.setUint16(10, 1, true);
+  eocdView.setUint32(12, central.length, true);
+  eocdView.setUint32(16, local.length + data.length, true);
+  const out = new Uint8Array(local.length + data.length + central.length + 22);
+  out.set(local, 0);
+  out.set(data, local.length);
+  out.set(central, local.length + data.length);
+  out.set(eocd, local.length + data.length + central.length);
+  return out;
 }
 
 function mutate(seed) {

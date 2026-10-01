@@ -55,6 +55,14 @@ export type ViewerErrorCode =
   | "invalid-operation"
   | "edit-conflict"
   | "edit-failed"
+  /** An OOXML package the editing layer cannot open: ZIP64, encryption, an unknown method, several disks. */
+  | "unsupported-package"
+  /** An OOXML part that can be read but not patched: not UTF-8, or not byte-stable through decoding. */
+  | "unsupported-part"
+  /** An XML part the scanner cannot parse. */
+  | "malformed-xml"
+  /** A patch that overlaps, is stale, is not well-formed, or does not read back as expected. */
+  | "invalid-patch"
   | "internal";
 
 export type ViewerWarningCode =

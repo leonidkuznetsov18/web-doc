@@ -1204,17 +1204,17 @@ recorded: compression streams in Node 22 and the matrix; corpus facts.
 
 **Acceptance criteria:**
 
-- [ ] Hand-built archives (stored, deflated, data descriptors with and
+- [x] Hand-built archives (stored, deflated, data descriptors with and
       without signature, extra fields, archive comment) read back exactly;
       every refusal and every error code has a test.
-- [ ] Every corpus and fixture PPTX/DOCX opens, every entry inflates with a
+- [x] Every corpus and fixture PPTX/DOCX opens, every entry inflates with a
       matching CRC, `[Content_Types].xml` is found; open time of the corpus
       deck is recorded.
-- [ ] `parseZip` is a fuzz target.
+- [x] `parseZip` is a fuzz target.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/ooxml-zip.test.ts`),
+- [x] `npm run test --workspace web-doc` (`test/ooxml-zip.test.ts`),
       `npm run fuzz:js`
 
 **Dependencies:** none

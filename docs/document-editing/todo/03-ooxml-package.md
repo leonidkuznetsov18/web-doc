@@ -692,7 +692,27 @@ are reported as warnings in `CommittedChange`, not refused (decision 9).
 
 ## Spike results
 
-To be filled by T38.
+Task 38, 2026-10-02, Node 22.23 on an Apple M4 Pro
+(`packages/viewer/test/ooxml-zip.test.ts`):
+
+- **Compression streams.** `DecompressionStream` and `CompressionStream`
+  are globals in Node 22; `"deflate-raw"` inflates every corpus entry with a
+  matching CRC. The browser matrix proves the same path in task 43.
+- **Corpus packages** (`sample.pptx`, `sample.docx` from Apache POI;
+  `chart-point-colors.pptx`, `oversized-inline-image.docx` from
+  `tests/fixtures`): every entry is stored or deflated, none uses a data
+  descriptor, one entry of `sample.pptx` carries an extra field, no archive
+  has a comment, and `sample.pptx` is the only one with a stored entry (its
+  JPEG thumbnail). Reading the central directory takes under 0.2 ms for all
+  four; inflating every part takes 5–7 ms per package (46 parts, 107 KB for
+  the deck; 18 parts, 830 KB for the image-heavy DOCX).
+- **Shapes the reader refuses**, each with a test: a ZIP64 locator or entry
+  count, a ZIP64 size marker, the encryption flag, a method other than stored
+  or deflated, no end record, a truncated directory, a local header whose
+  name, method or sizes disagree with the central record, a data descriptor
+  that disagrees, a CRC mismatch, corrupt deflate data, an entry over
+  `maxZipEntryBytes`, and an entry whose every header understates its size
+  (caught by metering during inflation, as `resource-limit`).
 
 ## Actual result
 
