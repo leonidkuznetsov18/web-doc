@@ -294,18 +294,18 @@ empty method set.
 
 **Acceptance criteria:**
 
-- [ ] In the browser, `edit()` on a PDF loads the worker and PDFium; neither
+- [x] In the browser, `edit()` on a PDF loads the worker and PDFium; neither
       `pdf-edit-worker.js` nor `pdfium.wasm` is requested before `edit()`;
       `save()` without changes returns the original bytes; ending the session
       terminates the worker.
-- [ ] A crashed worker rejects pending calls with a typed error, and `edit()`
+- [x] A crashed worker rejects pending calls with a typed error, and `edit()`
       can be called again afterwards.
-- [ ] `session.format` narrows the session union in a compile-only test.
+- [x] `session.format` narrows the session union in a compile-only test.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
-- [ ] `npm run test --workspace web-doc`
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc`
 
 **Dependencies:** Tasks 1 and 5
 
@@ -326,13 +326,13 @@ PDFium WASM and the edit worker; the pack test requires them.
 
 **Acceptance criteria:**
 
-- [ ] `npm run report:size` lists the PDFium WASM and the edit worker and stays
+- [x] `npm run report:size` lists the PDFium WASM and the edit worker and stays
       within the 20 MiB target.
-- [ ] `npm run test:pack` passes with the new files required.
+- [x] `npm run test:pack` passes with the new files required.
 
 **Verification:**
 
-- [ ] `npm run report:size` and `npm run test:pack`
+- [x] `npm run report:size` and `npm run test:pack`
 
 **Dependencies:** Task 9
 

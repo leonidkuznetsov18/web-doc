@@ -69,6 +69,8 @@ const required = [
   "dist/workers/image-worker.js",
   "dist/workers/fuzzy-search-worker.js",
   "dist/workers/legacy-converter-worker.js",
+  "dist/workers/pdf-edit-worker.js",
+  "dist/assets/pdfium/pdfium.wasm",
   "dist/assets/pdfjs/cmaps/Adobe-CNS1-UCS2.bcmap",
   "dist/assets/pdfjs/standard_fonts/LiberationSans-Regular.ttf",
   "dist/assets/pdfjs/wasm/openjpeg.wasm",

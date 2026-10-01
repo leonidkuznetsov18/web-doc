@@ -16,6 +16,8 @@ const wasmArtifacts = [
   ["ooxml-pptx", resolve(pptxDist, "pptx_parser_bg.wasm")],
   ["legacy-office", "packages/viewer/dist/assets/legacy/index_bg.wasm"],
   ["tiff-image", "packages/viewer/dist/assets/image/index_bg.wasm"],
+  // Fetched by the PDF edit worker on the first edit() of a PDF.
+  ["pdfium-edit", "packages/viewer/dist/assets/pdfium/pdfium.wasm"],
 ];
 
 const files = await walk(dist);
