@@ -186,7 +186,8 @@ function canKeepFont(
     if (!coverage) return false;
     for (const character of text) {
       const code = character.codePointAt(0)!;
-      if (code !== 0x0a && code !== 0x20 && !coverage.has(code)) return false;
+      if (code !== 0x0a && code !== 0x20 && !coverage.drawable(code))
+        return false;
     }
     return true;
   });

@@ -22,6 +22,9 @@ export interface PdfiumFunctions {
   FPDF_SaveAsCopy(document: number, writer: number, flags: number): boolean;
   FPDF_GetPageCount(document: number): number;
   FPDF_GetSignatureCount(document: number): number;
+  FPDF_StructTree_GetForPage(page: number): number;
+  FPDF_StructTree_CountChildren(tree: number): number;
+  FPDF_StructTree_Close(tree: number): void;
   FPDF_LoadPage(document: number, pageIndex: number): number;
   FPDF_ClosePage(page: number): void;
   FPDF_GetPageWidthF(page: number): number;

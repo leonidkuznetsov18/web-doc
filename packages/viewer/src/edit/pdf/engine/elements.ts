@@ -1,5 +1,5 @@
 import { validateSchema } from "../../schema.js";
-import type { PageRect } from "../../types.js";
+import type { PagePoint, PageRect } from "../../types.js";
 import {
   tableMarkSchema,
   tableMemberMarkSchema,
@@ -142,6 +142,68 @@ function isValidMark(params: object): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * Whether a marked group still looks like what its inputs describe. Another
+ * tool may have moved, resized or retyped the objects while keeping the mark;
+ * rebuilding from stale inputs would then undo that edit silently, so such a
+ * group is listed as plain objects instead.
+ */
+export function markIsFresh(
+  pdfium: Pdfium,
+  page: number,
+  textPage: number,
+  geometry: PageGeometry,
+  mark: MarkParams,
+  indexes: readonly number[],
+): boolean {
+  const { lib } = pdfium;
+  const objects = indexes.map((index) => lib.FPDFPage_GetObject(page, index));
+  const bounds = objects
+    .map((object) => objectBounds(pdfium, object, geometry))
+    .filter((rect): rect is PageRect => rect !== undefined);
+  if (bounds.length === 0) return false;
+  const union = unionRects(bounds);
+  const drawn = normalizeText(
+    objects
+      .filter((object) => lib.FPDFPageObj_GetType(object) === OBJECT_TEXT)
+      .map((object) => textOf(pdfium, object, textPage))
+      .join(" "),
+  );
+  const tolerance = 2;
+  if (mark.kind === "textBox") {
+    const rect = mark.rect as PageRect;
+    const text = mark.text as string;
+    const style = mark.style as {
+      readonly fontSize: number;
+      readonly lineHeight: number;
+    };
+    return (
+      drawn === normalizeText(text) &&
+      union.x >= rect.x - tolerance &&
+      union.x + union.width <= rect.x + rect.width + tolerance &&
+      // The first line's ink starts inside the box's first line band; the
+      // bottom is not checked because overflowing text runs past the box.
+      union.y >= rect.y - tolerance &&
+      union.y <= rect.y + style.fontSize * style.lineHeight + tolerance
+    );
+  }
+  const at = mark.at as PagePoint;
+  const widths = mark.columnWidths as readonly number[];
+  const style = mark.style as { readonly borderWidth: number };
+  const rows = mark.rows as readonly (readonly string[])[];
+  const slack = tolerance + style.borderWidth;
+  return (
+    drawn === normalizeText(rows.flat().join(" ")) &&
+    Math.abs(union.x - at.x) <= slack &&
+    Math.abs(union.y - at.y) <= slack &&
+    Math.abs(union.width - widths.reduce((sum, w) => sum + w, 0)) <= 2 * slack
+  );
+}
+
+function normalizeText(text: string): string {
+  return text.replaceAll(/\s+/g, " ").trim();
 }
 
 export function objectBounds(

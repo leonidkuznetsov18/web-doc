@@ -294,12 +294,19 @@ export class FakeEditEngine implements EditEngine {
     this.pages.forEach((text, pageIndex) => {
       const haystack = options.caseSensitive ? text : text.toLowerCase();
       const needle = options.caseSensitive ? query : query.toLowerCase();
-      if (haystack.includes(needle))
+      const at = haystack.indexOf(needle);
+      if (at >= 0)
         targets.push({
           pageIndex,
           text: query,
           rects: [{ x: 0, y: 0, width: 10, height: 10 }],
           elementIds: [`p${pageIndex}w0`],
+          ranges: [
+            {
+              start: { elementId: `p${pageIndex}w0`, offset: at },
+              end: { elementId: `p${pageIndex}w0`, offset: at + needle.length },
+            },
+          ],
         });
     });
     return targets;

@@ -871,7 +871,7 @@ warnings; `findText` ranges; subset-font and font-dedupe tests.
 
 **Acceptance criteria:**
 
-- [ ] A full save drops deleted content and is identical with and without
+- [x] A full save drops deleted content and is identical with and without
       prior queries; a moved marked group degrades to plain objects; the three
       warnings fire on their fixtures; ranges round-trip through
       `EditElement.text` offsets; a subset font whose `cmap` maps to an
@@ -879,7 +879,7 @@ warnings; `findText` ranges; subset-font and font-dedupe tests.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 26
 

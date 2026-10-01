@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { before, describe, it } from "node:test";
 import { inflateSync } from "node:zlib";
 
 import { PdfEditDocument } from "../src/edit/pdf/engine/document.js";
+import { parseCmap } from "../src/edit/pdf/engine/fonts.js";
 import { createPdfEditHandler } from "../src/edit/pdf/engine/handler.js";
 import { loadPdfEditEngine } from "../src/edit/pdf/provider.js";
 import { PdfSession } from "../src/edit/pdf/session.js";
@@ -25,7 +27,7 @@ import {
   extractPageText,
   fixturePdfium,
 } from "./fixtures/pdf-builder.js";
-import { signedPdf } from "./fixtures/signed-pdf.js";
+import { handPdf, signedPdf } from "./fixtures/signed-pdf.js";
 import { tinyJpeg } from "./fixtures/tiny-jpeg.js";
 
 const signal = new AbortController().signal;
@@ -102,7 +104,10 @@ describe("signed PDFs", () => {
       ]);
       assert.equal(first.warnings[0]?.code, "fidelity-degraded");
       assert.match(first.warnings[0]!.message, /signature/);
-      assert.deepEqual(first.warnings[0]?.details, { signatures: 1 });
+      assert.deepEqual(first.warnings[0]?.details, {
+        signatures: 1,
+        features: [],
+      });
       const second = model.apply([
         { op: "replaceText", target: "p0:n1.0.0", text: "Changed" },
       ]);
@@ -603,6 +608,300 @@ describe("save modes (revision 2)", () => {
       assert.equal(full.stateToken, incremental.stateToken);
     } finally {
       await end();
+    }
+  });
+});
+
+describe("document features and marks (revision 2)", () => {
+  it("names DocMDP, tagging and PDF/A in the first-change warning", async () => {
+    const pdfium = await fixturePdfium();
+    const model = new PdfEditDocument(
+      pdfium,
+      handPdf({ signed: true, docMdp: true, tagged: true, pdfa: true }),
+    );
+    try {
+      assert.deepEqual(model.features, ["docmdp", "tagged", "pdfa"]);
+      assert.equal(model.pageCount, 1);
+      const change = model.apply([
+        {
+          op: "insertTextBox",
+          pageIndex: 0,
+          rect: { x: 72, y: 72, width: 200, height: 40 },
+          text: "x",
+        },
+      ]);
+      assert.equal(change.warnings[0]?.code, "fidelity-degraded");
+      assert.deepEqual(change.warnings[0]?.details, {
+        signatures: 1,
+        features: ["docmdp", "tagged", "pdfa"],
+      });
+      assert.match(change.warnings[0]!.message, /DocMDP.*tagged.*PDF\/A/);
+    } finally {
+      model.dispose();
+    }
+    const plain = new PdfEditDocument(pdfium, await buildPdf(["One"]));
+    try {
+      assert.deepEqual(plain.features, []);
+      assert.equal(plain.signatureCount, 0);
+    } finally {
+      plain.dispose();
+    }
+  });
+
+  it("lists a marked group another tool moved or retyped as plain objects", async () => {
+    const pdfium = await fixturePdfium();
+    const { lib } = pdfium;
+    const original = await buildPdf(["One"]);
+    const model = new PdfEditDocument(pdfium, original);
+    let saved: Uint8Array;
+    try {
+      model.apply([
+        {
+          op: "insertTextBox",
+          pageIndex: 0,
+          rect: { x: 72, y: 72, width: 120, height: 60 },
+          text: "wrapped box text that spans lines",
+        },
+      ]);
+      saved = model.materialize("show");
+    } finally {
+      model.dispose();
+    }
+    /** Edits the saved file's marked objects the way a foreign tool would. */
+    const tamper = (change: (object: number, index: number) => void) => {
+      const document = pdfium.openDocument(saved);
+      try {
+        const page = lib.FPDF_LoadPage(document.handle, 0);
+        try {
+          for (
+            let index = 1;
+            index < lib.FPDFPage_CountObjects(page);
+            index += 1
+          )
+            change(lib.FPDFPage_GetObject(page, index), index);
+          lib.FPDFPage_GenerateContent(page);
+        } finally {
+          lib.FPDF_ClosePage(page);
+        }
+        return document.save("full");
+      } finally {
+        document.close();
+      }
+    };
+    const kinds = (bytes: Uint8Array) => {
+      const reopened = new PdfEditDocument(pdfium, bytes);
+      try {
+        return reopened.getElements({ pageIndex: 0 }).map((e) => e.kind);
+      } finally {
+        reopened.dispose();
+      }
+    };
+    assert.deepEqual(kinds(saved), ["text", "textBox"], "untouched: one box");
+    const moved = tamper((object) =>
+      lib.FPDFPageObj_Transform(object, 1, 0, 0, 1, 0, -150),
+    );
+    const plain = (bytes: Uint8Array) => {
+      const found = kinds(bytes);
+      return found.length > 2 && found.every((kind) => kind === "text");
+    };
+    assert.equal(plain(moved), true, "moved lines are plain text objects");
+    const retyped = tamper((object, index) => {
+      if (index !== 1) return;
+      const wide = pdfium.writeWideString("retyped");
+      lib.FPDFText_SetText(object, wide);
+      pdfium.free(wide);
+    });
+    assert.equal(plain(retyped), true, "retyped lines are plain text objects");
+  });
+
+  it("returns findText ranges into element text", async () => {
+    const pdfium = await fixturePdfium();
+    const model = new PdfEditDocument(
+      pdfium,
+      await buildPdf(["Hello brave world"]),
+    );
+    try {
+      const [hit] = model.findText("brave", {});
+      assert.deepEqual(hit?.ranges, [
+        {
+          start: { elementId: "p0:o0", offset: 6 },
+          end: { elementId: "p0:o0", offset: 11 },
+        },
+      ]);
+      const text = model.getElement("p0:o0")!.text!;
+      assert.equal(text.slice(6, 11), "brave");
+
+      const boxText = "first line words here\nsecond line target word";
+      model.apply([
+        {
+          op: "insertTextBox",
+          pageIndex: 0,
+          rect: { x: 72, y: 200, width: 110, height: 100 },
+          text: boxText,
+        },
+        {
+          op: "insertTable",
+          pageIndex: 0,
+          at: { x: 72, y: 400 },
+          width: 200,
+          rows: [
+            ["alpha", "beta"],
+            ["gamma", "needle"],
+          ],
+        },
+      ]);
+      const [inBox] = model.findText("target", {});
+      assert.equal(inBox?.ranges.length, 1);
+      const range = inBox!.ranges[0]!;
+      assert.equal(range.start.elementId, "p0:n1.0.0");
+      assert.equal(
+        boxText.slice(range.start.offset, range.end.offset),
+        "target",
+      );
+      const [inTable] = model.findText("needle", {});
+      const tableText = model.getElement("p0:n1.1.0")!.text!;
+      const cell = inTable!.ranges[0]!;
+      assert.equal(cell.start.elementId, "p0:n1.1.0");
+      assert.equal(
+        tableText.slice(cell.start.offset, cell.end.offset),
+        "needle",
+      );
+    } finally {
+      model.dispose();
+    }
+  });
+});
+
+describe("fonts (revision 2)", () => {
+  const op = <T extends PdfOperation>(operation: T): T => operation;
+  const ttf = new Uint8Array(
+    readFileSync(
+      new URL("../../fonts/noto-sans-latin-cyrillic.ttf", import.meta.url),
+    ),
+  );
+  const FALLBACK_URL = "https://fonts.test/noto.ttf";
+
+  async function engineWithFallback(original: Uint8Array) {
+    const pair = loopbackWorker(
+      createPdfEditHandler({
+        loadPdfium: () => fixturePdfium(),
+        fetchBytes: async (url) => {
+          if (url === FALLBACK_URL) return ttf;
+          throw new Error(`No font at ${url}`);
+        },
+        decodeImage: async () => {
+          throw new Error("no images");
+        },
+      }),
+    );
+    return loadPdfEditEngine(
+      original,
+      { format: "pdf", limits: defaultResourceLimits, signal },
+      { createWorker: () => pair.worker, fallbackFontUrl: FALLBACK_URL },
+    );
+  }
+
+  /** A copy of the font whose glyph for `character` has no outline, like a careless subset. */
+  function withEmptiedGlyph(font: Uint8Array, character: string): Uint8Array {
+    const bytes = font.slice();
+    const view = new DataView(bytes.buffer);
+    const glyph = parseCmap(bytes).glyph(character.codePointAt(0)!);
+    assert.ok(glyph, "glyph present");
+    const tables = view.getUint16(4);
+    let loca = -1;
+    let head = -1;
+    for (let index = 0; index < tables; index += 1) {
+      const record = 12 + index * 16;
+      const tag = String.fromCharCode(...bytes.subarray(record, record + 4));
+      if (tag === "loca") loca = view.getUint32(record + 8);
+      if (tag === "head") head = view.getUint32(record + 8);
+    }
+    assert.ok(loca > 0 && head > 0);
+    const long = view.getInt16(head + 50) === 1;
+    // The glyph starts where it ends: zero length, the next glyph untouched.
+    if (long)
+      view.setUint32(loca + glyph * 4, view.getUint32(loca + glyph * 4 + 4));
+    else view.setUint16(loca + glyph * 2, view.getUint16(loca + glyph * 2 + 2));
+    return bytes;
+  }
+
+  async function pdfWithEmbedded(font: Uint8Array, text: string) {
+    const pdfium = await fixturePdfium();
+    const { lib } = pdfium;
+    const document = pdfium.createDocument();
+    try {
+      const page = lib.FPDFPage_New(document.handle, 0, 612, 792);
+      const data = pdfium.writeBytes(font);
+      const handle = lib.FPDFText_LoadFont(
+        document.handle,
+        data,
+        font.length,
+        1,
+        true,
+      );
+      const object = lib.FPDFPageObj_CreateTextObj(document.handle, handle, 14);
+      const wide = pdfium.writeWideString(text);
+      lib.FPDFText_SetText(object, wide);
+      pdfium.free(wide);
+      lib.FPDFPageObj_Transform(object, 1, 0, 0, 1, 72, 700);
+      lib.FPDFPage_InsertObject(page, object);
+      lib.FPDFPage_GenerateContent(page);
+      lib.FPDF_ClosePage(page);
+      const bytes = document.save("full");
+      pdfium.free(data);
+      return bytes;
+    } finally {
+      document.close();
+    }
+  }
+
+  it("rejects an emptied glyph of a subset font for in-place text", async () => {
+    const subset = withEmptiedGlyph(ttf, "B");
+    assert.equal(parseCmap(subset).has("B".codePointAt(0)!), true);
+    assert.equal(parseCmap(subset).drawable("B".codePointAt(0)!), false);
+    assert.equal(parseCmap(subset).drawable("A".codePointAt(0)!), true);
+    const engine = await engineWithFallback(
+      await pdfWithEmbedded(subset, "ABC"),
+    );
+    try {
+      const kept = await engine.apply(
+        [op({ op: "replaceText", target: "p0:o0", text: "AC" })],
+        signal,
+      );
+      assert.deepEqual(kept.warnings, []);
+      const fallen = await engine.apply(
+        [op({ op: "replaceText", target: "p0:o0", text: "BB" })],
+        signal,
+      );
+      assert.equal(fallen.warnings[0]?.code, "font-substitution");
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("embeds the fallback font once for several text boxes", async () => {
+    const engine = await engineWithFallback(await buildPdf(["One"]));
+    try {
+      for (const [index, text] of ["Перший", "Другий", "Третій"].entries())
+        await engine.apply(
+          [
+            op({
+              op: "insertTextBox",
+              pageIndex: 0,
+              rect: { x: 72, y: 100 + index * 60, width: 200, height: 40 },
+              text,
+            }),
+          ],
+          signal,
+        );
+      const saved = await engine.materialize("save", {}, signal);
+      const text = Array.from(saved, (byte) => String.fromCharCode(byte)).join(
+        "",
+      );
+      // PDFium embeds TrueType as a CID font with one /FontFile stream.
+      assert.equal(text.match(/\/FontFile[23]? /g)?.length, 1);
+    } finally {
+      await engine.dispose();
     }
   });
 });

@@ -460,7 +460,9 @@ same ids. Text boxes and tables are parametric: their objects carry a
 `WebDoc` marked-content tag holding the inputs they were drawn from, so they
 are listed as one element again after `save()` and a later `edit()` of the
 saved file, in this or another session. A tag that fails validation leaves its
-objects as plain `text` and `shape` elements.
+objects as plain `text` and `shape` elements, and so does a tag whose objects
+no longer match its inputs — a box or table that another tool moved, resized
+or retyped is never rebuilt from stale inputs.
 
 `elementsAt()` lists the elements under a point top-most first. Bounds of
 stroked shapes include the stroke, as PDFium reports them.
@@ -499,9 +501,11 @@ font covers is `font-unavailable`; right-to-left and complex-script text is
 `unsupported-script`. Text is horizontal and left-to-right.
 
 `replaceText` on an existing text object keeps its font when that font can
-draw the new text — a standard font for WinAnsi text, or an embedded font whose
-`cmap` covers it — and otherwise redraws the text at the same baseline, size
-and colour in a covering font with a `font-substitution` warning. The reported
+draw the new text — a standard font for WinAnsi text, or an embedded TrueType
+font whose `cmap` maps every character to a glyph with outline data (a subset
+font can keep the entry for a glyph it emptied) — and otherwise redraws the
+text at the same baseline, size and colour in a covering font with a
+`font-substitution` warning. The reported
 `fontFamily` of existing text is the family the file declares, not the face
 PDFium substitutes for a font that is not embedded.
 
@@ -550,15 +554,22 @@ changes returns the original bytes in either mode.
 
 A digitally signed PDF can be edited. The first change reports a
 `fidelity-degraded` warning with `details.signatures` because the signatures
-cover the original revision only; they remain valid for that revision, and a
-reader that checks them will show the document as modified since signing.
-Editing never signs.
+cover the original revision only; they remain valid for that revision (with an
+incremental save), and a reader that checks them will show the document as
+modified since signing. Editing never signs. The same first-change warning
+names, in `details.features`, a DocMDP certification (`"docmdp"`, which any
+change invalidates), a tagged structure (`"tagged"`: inserted content joins no
+structure tree) and a PDF/A claim (`"pdfa"`: inserted standard fonts are not
+embedded).
 
 ### `findText()` and `search()`
 
 `findText()` searches the text PDFium extracts from the edited document and
-returns page rectangles plus the ids of the text objects holding the match, so
-its results can be passed straight to `replaceText` or `deleteElement`. The
+returns page rectangles, the ids of the text objects holding the match and
+`ranges` — one `TextRange` per element the match touches, with offsets into
+that element's `text` (the whole box for a `textBox`, cells joined by tab and
+newline for a `table`) — so its results can be passed straight to
+`replaceText` or `deleteElement`. The
 viewer's `search()` reads the PDF.js text layer, which can join or split runs
 differently; use `findText()` to target edits and `search()` to highlight for
 the user.

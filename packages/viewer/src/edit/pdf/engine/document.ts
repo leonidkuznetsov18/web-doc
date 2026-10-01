@@ -7,10 +7,13 @@ import type {
   ElementQuery,
   OperationIssue,
   PagePoint,
+  TextPosition,
+  TextRange,
   TextTarget,
 } from "../../types.js";
 import type { PdfElement, PdfOperation } from "../types.js";
 import {
+  markIsFresh,
   readMark,
   scanPage,
   type MarkParams,
@@ -66,6 +69,79 @@ interface PageRecord {
 /** Batches arrive as plain JSON; unknown operations are reported, not typed away. */
 type PdfOrUnknownOperation = PdfOperation | EditOperation;
 
+/** Properties of the original that a change invalidates or leaves behind. */
+export type DocumentFeature = "docmdp" | "tagged" | "pdfa";
+
+/**
+ * Looks for a DocMDP certification, a tagged structure and a PDF/A claim.
+ * Signature dictionaries and XMP metadata are stored uncompressed, so the
+ * raw bytes answer for those; tagging also shows as a structure tree.
+ */
+function detectFeatures(
+  pdfium: Pdfium,
+  document: number,
+  original: Uint8Array,
+): DocumentFeature[] {
+  const features: DocumentFeature[] = [];
+  if (containsAscii(original, "/DocMDP")) features.push("docmdp");
+  const { lib } = pdfium;
+  let tagged = containsAscii(original, "/Marked true");
+  if (!tagged && lib.FPDF_GetPageCount(document) > 0) {
+    const page = lib.FPDF_LoadPage(document, 0);
+    if (page) {
+      const tree = lib.FPDF_StructTree_GetForPage(page);
+      if (tree) {
+        tagged = lib.FPDF_StructTree_CountChildren(tree) > 0;
+        lib.FPDF_StructTree_Close(tree);
+      }
+      lib.FPDF_ClosePage(page);
+    }
+  }
+  if (tagged) features.push("tagged");
+  if (containsAscii(original, "pdfaid:part")) features.push("pdfa");
+  return features;
+}
+
+function containsAscii(bytes: Uint8Array, needle: string): boolean {
+  const first = needle.charCodeAt(0);
+  const limit = bytes.length - needle.length;
+  for (
+    let at = bytes.indexOf(first);
+    at >= 0 && at <= limit;
+    at = bytes.indexOf(first, at + 1)
+  ) {
+    let index = 1;
+    while (
+      index < needle.length &&
+      bytes[at + index] === needle.charCodeAt(index)
+    )
+      index += 1;
+    if (index === needle.length) return true;
+  }
+  return false;
+}
+
+const FEATURE_NOTES: Readonly<Record<DocumentFeature, string>> = {
+  docmdp: "a DocMDP certification that any change invalidates",
+  tagged: "a tagged structure that inserted content does not join",
+  pdfa: "a PDF/A claim that inserted standard fonts do not meet",
+};
+
+function firstChangeMessage(
+  signatures: number,
+  features: readonly DocumentFeature[],
+): string {
+  const notes = [
+    ...(signatures > 0
+      ? [
+          `${signatures} digital signature${signatures === 1 ? "" : "s"} that will not cover the edited revision`,
+        ]
+      : []),
+    ...features.map((feature) => FEATURE_NOTES[feature]),
+  ];
+  return `The document carries ${notes.join("; ")}`;
+}
+
 /** Operations whose first created id a `"$<n>"` reference can name. */
 const CREATING_OPERATIONS = new Set<string>([
   "insertTextBox",
@@ -106,6 +182,8 @@ export class PdfEditDocument {
   readonly #assets: AssetSource;
   /** Signature fields in the original; an edit leaves them uncovering the new revision. */
   readonly #signatures: number;
+  /** What the first change will break or leave behind: certification, tagging, PDF/A. */
+  readonly #features: readonly DocumentFeature[];
   /** What the working copy was opened from: the original, or a checkpoint. */
   #base: Uint8Array;
   #document: PdfiumDocument;
@@ -132,6 +210,12 @@ export class PdfEditDocument {
     this.#measurer = new TextMeasurer(pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
     this.#signatures = pdfium.lib.FPDF_GetSignatureCount(this.#document.handle);
+    this.#features = detectFeatures(pdfium, this.#document.handle, original);
+  }
+
+  /** Features of the original a change affects, see `DocumentFeature`. */
+  get features(): readonly DocumentFeature[] {
+    return this.#features;
   }
 
   /** Signature fields in the document. */
@@ -216,14 +300,14 @@ export class PdfEditDocument {
     const removedIds: string[] = [];
     const changedPages = new Set<number>();
     const warnings: EngineChange["warnings"][number][] = [];
-    // The first change of a signed file is the point where the signatures
-    // stop covering what is shown; the incremental save keeps them valid for
-    // the original revision.
-    if (this.#batches === 0 && this.#signatures > 0)
+    // The first change of a signed, certified, tagged or PDF/A file is the
+    // point where those properties stop holding for what is shown; the
+    // warning names them once.
+    if (this.#batches === 0 && (this.#signatures > 0 || this.#features.length))
       warnings.push({
         code: "fidelity-degraded",
-        message: `The document carries ${this.#signatures} digital signature${this.#signatures === 1 ? "" : "s"} that will not cover the edited revision`,
-        details: { signatures: this.#signatures },
+        message: firstChangeMessage(this.#signatures, this.#features),
+        details: { signatures: this.#signatures, features: this.#features },
       });
     operations.forEach((raw, operationIndex) => {
       const handler = handlers[raw.op as PdfOperation["op"]];
@@ -384,7 +468,7 @@ export class PdfEditDocument {
     )
       this.#withPage(pageIndex, (page, textPage, geometry) => {
         const records = this.#objectsOf(pageIndex, page);
-        const { byObject } = scanPage(
+        const { byObject, elements } = scanPage(
           this.#pdfium,
           page,
           textPage,
@@ -392,10 +476,23 @@ export class PdfEditDocument {
           geometry,
           records,
         );
+        const offsets = this.#charOffsets(
+          page,
+          textPage,
+          byObject,
+          new Map(elements.map((element) => [element.id, element.text ?? ""])),
+        );
         for (const match of this.#matches(textPage, query, options)) {
           if (targets.length >= limit) break;
           targets.push(
-            this.#target(textPage, pageIndex, geometry, match, byObject),
+            this.#target(
+              textPage,
+              pageIndex,
+              geometry,
+              match,
+              byObject,
+              offsets,
+            ),
           );
         }
       });
@@ -569,13 +666,40 @@ export class PdfEditDocument {
       });
     }
     // A table's inputs sit on its first object; members without that head
-    // are plain objects again.
-    const heads = new Map<string, boolean>();
-    for (const object of objects)
-      if (object.mark && !heads.has(object.id))
-        heads.set(object.id, tableSpecOf(object.mark) !== undefined);
+    // are plain objects again. So is a group whose objects no longer match
+    // the inputs its mark stores.
+    const heads = new Map<string, MarkParams | undefined>();
+    const members = new Map<string, number[]>();
+    objects.forEach((object, index) => {
+      if (!object.mark) return;
+      if (!heads.has(object.id))
+        heads.set(
+          object.id,
+          object.mark.kind === "table"
+            ? tableSpecOf(object.mark) && object.mark
+            : object.mark,
+        );
+      members.set(object.id, [...(members.get(object.id) ?? []), index]);
+    });
+    const stale = new Set<string>();
+    if (members.size > 0) {
+      const geometry = this.#geometryOf(pageIndex, page);
+      const textPage = lib.FPDFText_LoadPage(page);
+      try {
+        for (const [id, indexes] of members) {
+          const head = heads.get(id);
+          if (
+            !head ||
+            !markIsFresh(this.#pdfium, page, textPage, geometry, head, indexes)
+          )
+            stale.add(id);
+        }
+      } finally {
+        lib.FPDFText_ClosePage(textPage);
+      }
+    }
     record.objects = objects.map((object, index) =>
-      object.mark?.kind === "table" && !heads.get(object.id)
+      object.mark && stale.has(object.id)
         ? { id: `${record.key}:o${index}`, type: object.type }
         : object,
     );
@@ -665,14 +789,60 @@ export class PdfEditDocument {
     }
   }
 
+  /**
+   * For every character of the text page: the element it belongs to and its
+   * offset in that element's text, so matches can be reported as ranges.
+   * Lines of a text box or cells of a table are separate objects; their
+   * offsets are found by locating each object's text inside the element's.
+   */
+  #charOffsets(
+    page: number,
+    textPage: number,
+    byObject: ReadonlyMap<number, string>,
+    elementTexts: ReadonlyMap<string, string>,
+  ): readonly (TextPosition | undefined)[] {
+    const { lib } = this.#pdfium;
+    const count = lib.FPDFText_CountChars(textPage);
+    const positions: (TextPosition | undefined)[] = [];
+    const seen = new Map<number, number>();
+    const cursors = new Map<string, number>();
+    const bases = new Map<number, number>();
+    for (let index = 0; index < count; index += 1) {
+      const object = lib.FPDFText_GetTextObject(textPage, index);
+      const elementId = byObject.get(object);
+      if (!object || elementId === undefined) {
+        positions.push(undefined);
+        continue;
+      }
+      if (!bases.has(object)) {
+        const own = this.#pdfium.readWideString((buffer, bytes) =>
+          lib.FPDFTextObj_GetText(object, textPage, buffer, bytes),
+        );
+        const whole = elementTexts.get(elementId) ?? "";
+        const from = cursors.get(elementId) ?? 0;
+        const at = whole.indexOf(own, from);
+        const base = at >= 0 ? at : whole.indexOf(own.trim(), from);
+        bases.set(object, base >= 0 ? base : from);
+        cursors.set(elementId, (base >= 0 ? base : from) + own.length);
+      }
+      const within = seen.get(object) ?? 0;
+      seen.set(object, within + 1);
+      positions.push({ elementId, offset: bases.get(object)! + within });
+    }
+    void page;
+    return positions;
+  }
+
   #target(
     textPage: number,
     pageIndex: number,
     geometry: PageGeometry,
     match: { readonly start: number; readonly end: number },
     byObject: ReadonlyMap<number, string>,
+    offsets: readonly (TextPosition | undefined)[],
   ): TextTarget {
     const { lib } = this.#pdfium;
+    const ranges: TextRange[] = [];
     const rects: {
       left: number;
       bottom: number;
@@ -689,6 +859,24 @@ export class PdfEditDocument {
       text += String.fromCodePoint(unit);
       const id = byObject.get(lib.FPDFText_GetTextObject(textPage, index));
       if (id && !ids.includes(id)) ids.push(id);
+      const position = offsets[index];
+      if (position) {
+        const last = ranges.at(-1);
+        if (
+          last &&
+          last.end.elementId === position.elementId &&
+          last.end.offset === position.offset
+        )
+          ranges[ranges.length - 1] = {
+            start: last.start,
+            end: { elementId: position.elementId, offset: position.offset + 1 },
+          };
+        else
+          ranges.push({
+            start: position,
+            end: { elementId: position.elementId, offset: position.offset + 1 },
+          });
+      }
       if (!box) continue;
       const [left, right, bottom, top] = box as [
         number,
@@ -719,6 +907,7 @@ export class PdfEditDocument {
           ? pageRects
           : [roundRect(unionRects([{ x: 0, y: 0, width: 0, height: 0 }]))],
       elementIds: ids,
+      ranges,
     };
   }
 }

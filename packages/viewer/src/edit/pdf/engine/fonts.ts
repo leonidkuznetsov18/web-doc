@@ -138,7 +138,11 @@ export class FontLibrary {
     // The fallback is only worth fetching for text no registered font covers.
     const needsFallback = requests.some(
       (request) =>
-        firstNonWinAnsi(request.text) !== undefined &&
+        // Text the standard fonts cannot encode, or a family only the
+        // fallback can stand in for (an embedded font that lost a glyph).
+        (firstNonWinAnsi(request.text) !== undefined ||
+          (!isStandardFamily(request.family) &&
+            !this.hasFamily(request.family))) &&
         !this.#coveringRegistered({ ...request, bold: false, italic: false }),
     );
     if (needsFallback && !this.#fallback && this.#fallbackUrl)
@@ -333,16 +337,49 @@ function firstUncovered(
 }
 
 /** The code points a TrueType font maps to glyphs, from its cmap table. */
+/**
+ * Whether glyphs of a TrueType font have outline data: a subset font can keep
+ * a cmap entry for a glyph it emptied. Returns undefined without a glyf table.
+ */
+function glyphOutlines(
+  view: DataView,
+  tables: ReadonlyMap<string, { offset: number; length: number }>,
+): ((glyph: number) => boolean) | undefined {
+  const head = tables.get("head");
+  const maxp = tables.get("maxp");
+  const loca = tables.get("loca");
+  if (!head || !maxp || !loca || !tables.has("glyf")) return undefined;
+  const longOffsets = view.getInt16(head.offset + 50) === 1;
+  const count = view.getUint16(maxp.offset + 4);
+  return (glyph) => {
+    if (glyph < 0 || glyph >= count) return false;
+    const at = loca.offset + glyph * (longOffsets ? 4 : 2);
+    const start = longOffsets ? view.getUint32(at) : view.getUint16(at) * 2;
+    const end = longOffsets
+      ? view.getUint32(at + 4)
+      : view.getUint16(at + 2) * 2;
+    return end > start;
+  };
+}
+
 export interface CmapCoverage {
   has(codePoint: number): boolean;
+  /** Mapped to a glyph with outline data; false for an emptied glyph of a subset font. */
+  drawable(codePoint: number): boolean;
+  /** The glyph id a code point maps to, when the font's cmap was parsed. */
+  glyph(codePoint: number): number | undefined;
 }
 
 export function parseCmap(bytes: Uint8Array): CmapCoverage {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const ranges: [number, number][] = [];
+  /** Glyph ids by code point, for the outline check; filled for format 4 and 12. */
+  const glyphs = new Map<number, number>();
+  let outlines: ((glyph: number) => boolean) | undefined;
   try {
     const tables = view.getUint16(4);
     let cmapOffset = -1;
+    const offsets = new Map<string, { offset: number; length: number }>();
     for (let index = 0; index < tables; index += 1) {
       const record = 12 + index * 16;
       const tag = String.fromCharCode(
@@ -351,9 +388,19 @@ export function parseCmap(bytes: Uint8Array): CmapCoverage {
         bytes[record + 2]!,
         bytes[record + 3]!,
       );
+      offsets.set(tag, {
+        offset: view.getUint32(record + 8),
+        length: view.getUint32(record + 12),
+      });
       if (tag === "cmap") cmapOffset = view.getUint32(record + 8);
     }
-    if (cmapOffset < 0) return { has: () => false };
+    outlines = glyphOutlines(view, offsets);
+    if (cmapOffset < 0)
+      return {
+        has: () => false,
+        drawable: () => false,
+        glyph: () => undefined,
+      };
     const subtables = view.getUint16(cmapOffset + 2);
     let best: { offset: number; format: number } | undefined;
     for (let index = 0; index < subtables; index += 1) {
@@ -368,28 +415,63 @@ export function parseCmap(bytes: Uint8Array): CmapCoverage {
       if (!unicode || (format !== 4 && format !== 12)) continue;
       if (!best || format > best.format) best = { offset, format };
     }
-    if (!best) return { has: () => false };
+    if (!best)
+      return {
+        has: () => false,
+        drawable: () => false,
+        glyph: () => undefined,
+      };
     if (best.format === 12) {
       const groups = view.getUint32(best.offset + 12);
       for (let index = 0; index < groups; index += 1) {
         const group = best.offset + 16 + index * 12;
-        ranges.push([view.getUint32(group), view.getUint32(group + 4)]);
+        const start = view.getUint32(group);
+        const end = view.getUint32(group + 4);
+        const startGlyph = view.getUint32(group + 8);
+        ranges.push([start, end]);
+        for (let code = start; code <= end && code - start < 0x10000; code += 1)
+          glyphs.set(code, startGlyph + (code - start));
       }
     } else {
       const segments = view.getUint16(best.offset + 6) / 2;
       const ends = best.offset + 14;
       const starts = ends + segments * 2 + 2;
+      const deltas = starts + segments * 2;
+      const rangeOffsets = deltas + segments * 2;
       for (let index = 0; index < segments; index += 1) {
         const end = view.getUint16(ends + index * 2);
         const start = view.getUint16(starts + index * 2);
-        if (start !== 0xffff) ranges.push([start, end]);
+        if (start === 0xffff) continue;
+        ranges.push([start, end]);
+        const delta = view.getInt16(deltas + index * 2);
+        const rangeOffset = view.getUint16(rangeOffsets + index * 2);
+        for (let code = start; code <= end; code += 1) {
+          let glyph: number;
+          if (rangeOffset === 0) glyph = (code + delta) & 0xffff;
+          else {
+            const at =
+              rangeOffsets + index * 2 + rangeOffset + (code - start) * 2;
+            const raw = view.getUint16(at);
+            glyph = raw === 0 ? 0 : (raw + delta) & 0xffff;
+          }
+          glyphs.set(code, glyph);
+        }
       }
     }
   } catch {
-    return { has: () => false };
+    return { has: () => false, drawable: () => false, glyph: () => undefined };
   }
   ranges.sort((a, b) => a[0] - b[0]);
   return {
+    glyph(codePoint) {
+      return glyphs.get(codePoint);
+    },
+    drawable(codePoint) {
+      const glyph = glyphs.get(codePoint);
+      if (glyph === undefined || glyph === 0) return false;
+      // Without a glyf table (CFF outlines) a mapped glyph is taken as drawn.
+      return outlines ? outlines(glyph) : true;
+    },
     has(codePoint) {
       let low = 0;
       let high = ranges.length - 1;

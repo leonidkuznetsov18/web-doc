@@ -155,7 +155,7 @@ export interface TextTarget {
   /** Elements that contain the matched text, in reading order. */
   readonly elementIds: readonly string[];
   /** The match as text ranges, one per element it touches, in reading order. */
-  readonly ranges?: readonly TextRange[];
+  readonly ranges: readonly TextRange[];
 }
 
 /** Every read says which state it describes. */
