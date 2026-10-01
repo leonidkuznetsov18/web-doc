@@ -1260,14 +1260,14 @@ remove, indexed lookups by id and type.
 
 **Acceptance criteria:**
 
-- [ ] Target resolution covers relative, `..`, absolute, external and
+- [x] Target resolution covers relative, `..`, absolute, external and
       case-different targets; `rId` allocation fills the smallest gap; adding
       a part adds an Override only when no Default covers it; an untouched
       `[Content_Types].xml` keeps its bytes.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/ooxml-opc.test.ts`)
+- [x] `npm run test --workspace web-doc` (`test/ooxml-opc.test.ts`)
 
 **Dependencies:** Task 41 (patches are written through the scanner)
 
@@ -1312,7 +1312,7 @@ restore.
 
 **Acceptance criteria:**
 
-- [ ] Every builder produces a patch whose read-back passes; overlapping,
+- [x] Every builder produces a patch whose read-back passes; overlapping,
       stale, malformed and mismatching patches are `invalid-patch` and leave
       the package unchanged, also when they are the last part of a
       multi-part transaction; snapshots restore exactly; media is stored once
@@ -1320,7 +1320,7 @@ restore.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/ooxml-patch.test.ts`)
+- [x] `npm run test --workspace web-doc` (`test/ooxml-patch.test.ts`)
 
 **Dependencies:** Tasks 39, 40, 41
 

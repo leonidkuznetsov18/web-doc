@@ -274,20 +274,29 @@ export interface XmlPatch {
   /**
    * What the patched position must read back as after the re-scan:
    * "element" — the range now holds exactly one element whose outer XML
-   * equals `text`; "content" — the parent element's content equals `text`;
-   * "attribute" — the named attribute of the element reads `value`;
-   * "removed" — no element starts at `start` any more.
+   * equals `text`; "content" — the element that starts at `at` (an offset
+   * in the unpatched text, mapped through the patches that precede it) has
+   * `text` as its content; "attribute" — that element's named attribute
+   * reads `value`; "removed" — the parent that starts at `parentAt` has
+   * `count` element children, or the removed element's own XML no longer
+   * starts where it was. Positions, not tree paths: an insertion before an
+   * ancestor in the same transaction must not break the check.
    */
   readonly expect:
     | { readonly kind: "element" }
-    | { readonly kind: "content"; readonly of: readonly number[] }
+    | { readonly kind: "content"; readonly at: number }
     | {
         readonly kind: "attribute";
-        readonly of: readonly number[];
+        readonly at: number;
         readonly name: string;
         readonly value: string | undefined;
       }
-    | { readonly kind: "removed" }
+    | {
+        readonly kind: "removed";
+        readonly parentAt: number;
+        readonly count: number;
+        readonly xml: string;
+      }
     | { readonly kind: "none" };
 }
 
@@ -324,7 +333,7 @@ export class PackageTransaction {
     type: string,
     target: string,
     mode?: "Internal" | "External",
-  ): string;
+  ): Promise<string>;
   removeRelationship(sourcePart: string, id: string): void;
   /**
    * Stores bytes under `folder` ("/ppt/media/") with a name derived from the
@@ -338,7 +347,7 @@ export class PackageTransaction {
     bytes: Uint8Array,
     mimeType: string,
     relationshipType?: string,
-  ): { readonly part: string; readonly rId: string };
+  ): Promise<{ readonly part: string; readonly rId: string }>;
   /** A part name that does not exist yet, e.g. uniquePartName("/ppt/slides/slide", ".xml") → "/ppt/slides/slide13.xml". */
   uniquePartName(prefix: string, extension: string): string;
   /** Applies everything or nothing; returns what changed. */
