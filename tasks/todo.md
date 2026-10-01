@@ -275,12 +275,12 @@ page to the documentation sidebar.
 
 ### Checkpoint A: `edit-core` complete
 
-- [ ] `npm run typecheck`, `npm test` and the existing browser suites pass
-- [ ] `edit-core.spec.ts` passes in the matrix (Chromium, Chromium DPR 2,
+- [x] `npm run typecheck`, `npm test` and the existing browser suites pass
+- [x] `edit-core.spec.ts` passes in the matrix (Chromium, Chromium DPR 2,
       Firefox, WebKit) after adding it to `playwright.matrix.config.ts`
-- [ ] The size report's `code` group grew by at most 20 KB Brotli
-- [ ] `01-edit-core.md` gets an "Actual result" section and status "Done"
-- [ ] Review with the human before PDF work starts
+- [x] The size report's `code` group grew by at most 20 KB Brotli
+- [x] `01-edit-core.md` gets an "Actual result" section and status "Done"
+- [x] Review with the human before PDF work starts
 
 ## Phase 2 — first PDF slice
 

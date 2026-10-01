@@ -12,6 +12,7 @@ export default defineConfig({
     "selection.spec.ts",
     "pdf.spec.ts",
     "doc.spec.ts",
+    "edit-core.spec.ts",
   ],
   fullyParallel: true,
   projects: [

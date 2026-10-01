@@ -1,6 +1,6 @@
 # Module 01. `edit-core` — editing contract and viewer integration
 
-**Status:** Approved 2026-10-01; implementation not started
+**Status:** ✅ Done 2026-10-01
 
 ## Goal
 
@@ -557,3 +557,34 @@ Resolved on 2026-10-01 together with the approval of this spec:
 3. `maxEditHistory` defaults to 200 batches, to be revisited after measuring
    memory with real engines.
 4. `reset()` cannot be undone; hosts that need it can `save()` first.
+
+## Actual result
+
+- Public contracts, four error codes, the two limits, the `editing`
+  capability, the optional `edit` and `reopen` adapter members and the two
+  events shipped as specified; `src/edit/` holds the schema validator, the
+  shape checks, the history and the session controller.
+- `EditSessionController` serializes calls, validates in two stages, applies
+  batches atomically with rollback, supports dry runs, undo, redo, reset, save,
+  element and text queries, and bounds each call by `maxOperationMs`. A rollback
+  that itself fails makes the session unusable instead of leaving it
+  inconsistent.
+- The viewer starts engines lazily through the adapter, reopens edited bytes
+  with `reopen` or `open`, swaps handles, drops text maps, the fuzzy index
+  key, search results and the selection, clamps the page index, keeps zoom,
+  fit and scroll, and ends the session on `load`, `close` and `destroy`. The
+  content revision is part of the viewport render key; the built-in UI follows
+  `documentchange`.
+- `pageToClient` and `clientToPage` read the painted slot geometry and
+  match the canvas within one CSS pixel at zoom 0.5, 1 and 2, device pixel
+  ratio 1 and 2, and after scrolling.
+- Tests: 48 new unit tests (contracts, schema, history, session, viewer
+  integration) over a fake engine and adapter; `tests/e2e/edit-core.spec.ts`
+  passes on Chromium, Chromium at DPR 2, Firefox and WebKit and joined the
+  matrix. Compiled eager code grew by 11.3 KB Brotli against `main`.
+- The six pre-existing failures of the full Chromium suite on macOS (Linux-only
+  SSIM goldens and a headless fullscreen assertion) reproduce without these
+  changes and are unrelated.
+- Added beyond the spec: `edit-failed` with `details.stage: "load"` when an
+  engine fails to start, and an optional `getElement` on the engine
+  interface so engines can answer id lookups without a scan.
