@@ -1,7 +1,9 @@
 # Roadmap: document editing API
 
-> **Status, 2026-10-01 (evening):** `edit-core` and `pdf-edit` are done and
-> documented. The capability map below is approved, and so are the
+> **Status, 2026-10-01 (evening):** `edit-core` and `pdf-edit` revision 1 are
+> done and documented; revision 2 of the contract (Linear ACTION-821, from the
+> architecture review) is drafted and awaits approval before any code changes.
+> The capability map below is approved, and so are the
 > specs for `edit-core` and `pdf-edit`. Module specs are written one at a time,
 > right before a module starts, so each one can use what the previous modules
 > taught us.
@@ -67,6 +69,10 @@ User stories for the MVP:
 1. **API only.** web-doc ships no editing UI: no toolbars, dialogs, caret or
    text-input overlays. It ships methods, element inspection, events and
    view-geometry helpers that let the host draw its own UI over the viewer.
+   The supported interaction model (revision 2, ACTION-821) is **overlay
+   editing with commit on blur or idle**: the host's input surface collects
+   the change and commits it as one batch. Word-like continuous typing with
+   live reflow is out of scope; see [Hard limits](#hard-limits).
 2. **One operation vocabulary for the UI, the public API and AI.** Every typed
    method is a single-operation `apply()`. Operations are plain JSON objects with
    exported JSON Schemas, so an AI tool call and a button click take the same
@@ -301,6 +307,22 @@ browser round-trip test, and every error code has a test that triggers it.
 - Build editing UI, or add Markdown or plain-text support, as part of this
   package.
 
+## Hard limits
+
+Stated so that hosts plan around them rather than discover them:
+
+- No Word-like continuous typing with live reflow: `apply()` reopens the file
+  and is a commit path, not a keystroke path.
+- PDF text editing is bounded by the file's text objects, which are often
+  single words; paragraphs are not reflowed.
+- "What you see is what you save" holds against web-doc's renderers; Word and
+  PowerPoint may lay the same bytes out differently (autofit, line breaking,
+  theme colours).
+- A global revision with positional ids has no rebase path; collaboration needs
+  more than serializable operations.
+- Only a full PDF save truly deletes content; incremental saves keep earlier
+  revisions recoverable inside the file.
+
 ## Success criteria for the MVP
 
 - For PDF, PPTX and DOCX, every method in the module's MVP list works in
@@ -318,19 +340,23 @@ browser round-trip test, and every error code has a test that triggers it.
 
 ## Decisions log
 
-| Date       | Decision                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------- |
-| 2026-10-01 | API only, shared by the host UI and AI; formats PDF, PPTX, DOCX; Markdown and plain text dropped entirely.  |
-| 2026-10-01 | PDF changes are written by PDFium WASM (`@embedpdf/pdfium` 2.15.1); PDF.js keeps rendering.                 |
-| 2026-10-01 | Order: PDF, then PPTX, then DOCX; specs are written module by module.                                       |
-| 2026-10-01 | Specs are written in English.                                                                               |
-| 2026-10-01 | `edit-core` and `pdf-edit` specs approved together with their recommended answers to open questions.        |
-| 2026-10-01 | A TrueType build of the bundled Noto Sans Latin/Cyrillic face ships as a lazy PDF fallback font.            |
-| 2026-10-01 | Signed PDFs may be edited, with a warning.                                                                  |
-| 2026-10-01 | The competitor research report stays outside this public repository.                                        |
-| 2026-10-01 | PNG images are decoded by the host (`createImageBitmap` in the worker) rather than inside PDFium's WASM.    |
-| 2026-10-01 | A table's inputs live in the mark of its path objects only; its text objects carry just the table's id.     |
-| 2026-10-01 | `edit-core` and `pdf-edit` are done: matrix 100/100, `npm run check` green, results recorded in both specs. |
+| Date       | Decision                                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-01 | API only, shared by the host UI and AI; formats PDF, PPTX, DOCX; Markdown and plain text dropped entirely.                |
+| 2026-10-01 | PDF changes are written by PDFium WASM (`@embedpdf/pdfium` 2.15.1); PDF.js keeps rendering.                               |
+| 2026-10-01 | Order: PDF, then PPTX, then DOCX; specs are written module by module.                                                     |
+| 2026-10-01 | Specs are written in English.                                                                                             |
+| 2026-10-01 | `edit-core` and `pdf-edit` specs approved together with their recommended answers to open questions.                      |
+| 2026-10-01 | A TrueType build of the bundled Noto Sans Latin/Cyrillic face ships as a lazy PDF fallback font.                          |
+| 2026-10-01 | Signed PDFs may be edited, with a warning.                                                                                |
+| 2026-10-01 | The competitor research report stays outside this public repository.                                                      |
+| 2026-10-01 | PNG images are decoded by the host (`createImageBitmap` in the worker) rather than inside PDFium's WASM.                  |
+| 2026-10-01 | A table's inputs live in the mark of its path objects only; its text objects carry just the table's id.                   |
+| 2026-10-01 | `edit-core` and `pdf-edit` are done: matrix 100/100, `npm run check` green, results recorded in both specs.               |
+| 2026-10-01 | Architecture review accepted (Linear ACTION-821): `edit-core` revision 2 before the first release; `pdf-edit` follows it. |
+| 2026-10-01 | PDF `save()` defaults to a full rewrite for unsigned files; incremental for signed files and on request.                  |
+| 2026-10-01 | Reads return `{ sessionId, revision, items }` envelopes now; paging stays additive for later.                             |
+| 2026-10-01 | PDF overlay text-input primitives are a separate ticket after ACTION-821.                                                 |
 
 ## Open questions
 

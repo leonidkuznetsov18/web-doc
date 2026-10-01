@@ -733,3 +733,203 @@ in both specs.
 
 - [x] Every item of both definitions of done is checked
 - [x] Roadmap statuses updated; ready for merge review with the human
+
+## Phase 5 — contract revision 2 (Linear ACTION-821)
+
+Gate: Leonid approves `docs/document-editing/todo/01-edit-core.md` revision 2
+before any task below starts. Every commit carries `[linear:ACTION-821]`.
+
+### Task 23: Revision 2 types and docs
+
+**Description:** Add the R2 contract types (`sessionId`, envelopes,
+`SavedDocument`, `TextPosition`/`TextRange`, `fragments`, `story`, `frame`,
+`EditColor`, `LayoutChange`, `removedIds`/`remappedIds`, `EngineBatch`,
+`maxEditCheckpointBytes`, `edit-conflict` details), update the engine interface
+and write the R2 parts of `docs/api/editing.md` and `reference.md`.
+
+**Acceptance criteria:**
+
+- [ ] Every R2 type in the spec exists and is exported; the compile-only test
+      narrows the union and calls `applyJson` on it.
+- [ ] Docs describe the interaction model, envelopes, `save`/`markSaved`,
+      assets, `$n` references, text ranges, `layoutchange` and the id rules.
+
+**Verification:**
+
+- [ ] `npm run typecheck --workspace web-doc`, `npm run pages:build`
+
+**Dependencies:** Approved spec
+
+**Files likely touched:** `packages/viewer/src/edit/types.ts`,
+`src/edit/engine.ts`, `src/contracts.ts`, `src/limits.ts`,
+`docs/api/editing.md`, `docs/api/reference.md`
+
+**Estimated scope:** Medium
+
+### Task 24: Session fixes
+
+**Description:** Synchronous batch snapshot before queueing; listener
+isolation; queued calls reject with `aborted` on `end()`; pure `save()` and
+`markSaved()`; last committed bytes so a broken session still saves;
+`expectedSessionId`.
+
+**Acceptance criteria:**
+
+- [ ] A batch mutated after `apply()` is applied as it was; a throwing listener
+      never rejects a committed call; `end()` rejects queued calls with
+      `aborted`; `markSaved` with a stale token keeps `dirty`; a broken session
+      returns the last committed bytes.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`edit-session.test.ts`)
+
+**Dependencies:** Task 23
+
+**Files likely touched:** `src/edit/session.ts`, `src/viewer.ts`,
+`test/edit-session.test.ts`
+
+**Estimated scope:** Medium
+
+### Task 25: Two-phase reopen, renderer page count, layoutchange
+
+**Description:** `prepareDocument`/`commitDocument`/`discardDocument` on the
+session host; `pageCount` taken from the renderer; `layoutchange` after the
+viewport paints; render keys change only for `changedPages`.
+
+**Acceptance criteria:**
+
+- [ ] An abort or a throwing listener after the commit point leaves viewer and
+      engine on the same state; `layoutchange` follows `documentchange` and
+      the geometry helpers are exact once it fired; untouched pages keep their
+      bitmaps.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
+
+**Dependencies:** Task 24
+
+**Files likely touched:** `src/viewer.ts`, `src/viewport.ts`,
+`src/edit/session.ts`, `test/edit-viewer.test.ts`, `tests/e2e/edit-core.spec.ts`
+
+**Estimated scope:** Medium
+
+### Task 26: stateId ids, removedIds, same-batch references, envelopes
+
+**Description:** `EngineBatch` with `stateId`; PDF ids and page keys derived
+from it; `removedIds` from delete operations and undo/redo; `$n` references
+resolved while applying; `applyJson`; read envelopes with `AbortSignal`.
+
+**Acceptance criteria:**
+
+- [ ] Ids after undo differ from the undone ones; `removedIds` lists deleted
+      elements and the elements of deleted pages; `$n` resolves and fails as
+      specified; every read carries `sessionId` and `revision`.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+
+**Dependencies:** Task 24
+
+**Files likely touched:** `src/edit/session.ts`, `src/edit/pdf/engine/document.ts`,
+`src/edit/pdf/provider.ts`, `src/edit/pdf/session.ts`, PDF tests
+
+**Estimated scope:** Large (many expected ids in tests change)
+
+### Task 27: Checkpoints and the asset store
+
+**Description:** Retained checkpoints at the fold boundary and every
+`maxEditHistory / 4`-th commit within `maxEditCheckpointBytes`;
+`restore({ base, batches })`; SHA-256 interning of inline payloads;
+`addAsset()`; `asset:` references in the PDF image operation.
+
+**Acceptance criteria:**
+
+- [ ] A checkpoint restore yields the same bytes and ids as a replay from the
+      original; an interned payload crosses to the worker once; undo after 50
+      image insertions replays at most a quarter of the history.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc`
+
+**Dependencies:** Task 26
+
+**Files likely touched:** `src/edit/history.ts`, `src/edit/session.ts`,
+`src/edit/assets.ts`, `src/edit/pdf/engine/handler.ts`, `src/worker-protocol.ts`
+
+**Estimated scope:** Medium
+
+### Task 28: PDF revision 2
+
+**Description:** `save({ mode })` with full as the unsigned default; marked
+groups checked against drawn text and bounds; DocMDP, tagged and PDF/A
+warnings; `findText` ranges; subset-font and font-dedupe tests.
+
+**Acceptance criteria:**
+
+- [ ] A full save drops deleted content and is identical with and without
+      prior queries; a moved marked group degrades to plain objects; the three
+      warnings fire on their fixtures; ranges round-trip through
+      `EditElement.text` offsets.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+
+**Dependencies:** Task 26
+
+**Files likely touched:** `src/edit/pdf/engine/document.ts`, `elements.ts`,
+`existing-text.ts`, `src/edit/pdf/session.ts`, `types.ts`, PDF tests
+
+**Estimated scope:** Medium
+
+### Task 29: apply() latency measurement
+
+**Description:** One `insertTextBox` on 10-, 100- and 500-page PDFs in
+Chromium, with and without a warm PDF.js worker; numbers recorded under the
+PDF spec's Actual result.
+
+**Acceptance criteria:**
+
+- [ ] The three numbers are in the spec with the machine they were measured on.
+
+**Verification:**
+
+- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+
+**Dependencies:** Task 28
+
+**Files likely touched:** `tests/e2e/edit-pdf.spec.ts`,
+`docs/document-editing/todo/02-pdf-edit.md`
+
+**Estimated scope:** Small
+
+### Task 30: Docs, matrix, full gate
+
+**Description:** Final R2 docs pass, `npm run test:e2e:matrix`,
+`npm run check`, results recorded in both specs and the roadmap; Linear
+ACTION-821 proofs attached.
+
+**Acceptance criteria:**
+
+- [ ] Matrix and `npm run check` pass; both specs' R2 definitions of done are
+      ticked.
+
+**Verification:**
+
+- [ ] `npm run pages:build`, `npm run test:e2e:matrix`, `npm run check`
+
+**Dependencies:** Tasks 25, 27, 29
+
+**Files likely touched:** docs and specs
+
+**Estimated scope:** Small
+
+### Checkpoint F: revision 2 done
+
+- [ ] Every R2 item of both definitions of done is checked
+- [ ] Linear: ACTION-821 Done with proofs; PR opened and ACTION-808/811 moved
+      to Code Review with the human

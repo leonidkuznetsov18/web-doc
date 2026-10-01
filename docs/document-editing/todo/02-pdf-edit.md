@@ -1,6 +1,8 @@
 # Module 02. `pdf-edit` — PDF editing on PDFium
 
-**Status:** Approved 2026-10-01; implementation not started
+**Status:** ✅ Revision 1 done 2026-10-01 (T9–T22) · 🔄 Revision 2 (ACTION-821)
+drafted 2026-10-01, awaiting approval. **R2** marks the changes; they land only
+after `edit-core` revision 2 is approved.
 
 ## Goal
 
@@ -171,14 +173,23 @@ Which operations an element accepts is listed in its `operations` field:
 
 - Ids are stable for the whole session — across undo, redo, page insertion,
   deletion and moves — and derived deterministically from the original page and
-  object order and from the operation that created an element.
+  object order and from the operation that created an element. **R2** The
+  batch part of a created id is the history entry's `stateId`
+  (`p0:n<stateId>.<op>.<k>`), which the core never reuses, so an id undone
+  away is never given to a later element; a page created by a batch is keyed
+  `q<stateId>.<op>` the same way. Deleting an element or a page reports every
+  id it removes in `removedIds`; PDF never remaps ids.
 - Text boxes and tables are parametric: their objects carry a marked-content
   tag (`WebDoc`) whose parameters store the element's kind and its inputs
   (rectangle, text, style, rows). Editing one rebuilds its objects from those
   parameters. After save and reopen in a new session they are listed again as
   one `textBox` or `table`. Tags from untrusted files are validated with the same
   schemas and limits as operations; an invalid tag makes its objects plain
-  `text` and `shape` elements.
+  `text` and `shape` elements. **R2** A tag is also checked against what is
+  actually drawn: the member objects' extracted text and the union of their
+  bounds must match the stored inputs within tolerance, so a text box or
+  table that another tool moved, resized or retyped degrades to plain
+  objects instead of being rebuilt from stale inputs.
 
 ### Text and fonts
 
@@ -241,17 +252,33 @@ Which operations an element accepts is listed in its `operations` field:
 
 - Only pages touched by an operation have their content regenerated; other
   pages keep their content streams.
-- `save()` writes an incremental update: the original bytes followed by the
-  appended changes, so earlier signed revisions stay intact. Without changes
-  it returns the original bytes without calling PDFium.
+- **R2** `save({ mode })` takes `"full"` or `"incremental"`. The default is
+  `"full"` for a document without signature fields and `"incremental"` for a
+  signed one. A full save rewrites the file (`FPDF_SaveAsCopy` without
+  `FPDF_INCREMENTAL`), so deleted or replaced content is gone from the output
+  — the privacy expectation of an enterprise host — and the bytes do not
+  depend on which pages were read. An incremental save appends the changes to
+  the original bytes, keeps earlier signed revisions intact, and leaves the
+  old content recoverable; the docs say so. Without changes either mode
+  returns the original bytes without calling PDFium.
+- The viewer's reopen after a change (`materialize("show")`) always uses the
+  incremental form, which is cheaper to produce and read; the content is the
+  same.
 - PDFium's incremental section also repeats every object it has parsed, not
   only the changed ones (see [Spike results](#spike-results)). The engine
-  therefore loads only the pages an operation or a query needs.
+  therefore loads only the pages an operation or a query needs, and **R2**
+  the docs state that an incremental save after many queries is larger; a
+  test proves a full save is identical with and without prior queries.
 - Output is deterministic; a test guards it (see
-  [Spike results](#spike-results)).
+  [Spike results](#spike-results)). **R2** A restore from a checkpoint (the
+  bytes of an earlier state, incremental or full) yields the same ids and the
+  same output as a replay from the original.
 - A document with digital signatures can be edited; the first change emits a
   `fidelity-degraded` warning saying the signatures do not cover the new
-  revision.
+  revision. **R2** The same first-change warning names, when present, a
+  DocMDP certification (which any change invalidates), a tagged structure
+  (inserted content is untagged) and a PDF/A claim (inserted standard fonts
+  are not embedded); `details.features` lists them.
 
 ### Viewer refresh
 
@@ -267,6 +294,12 @@ Which operations an element accepts is listed in its `operations` field:
 
 ## Out of scope
 
+- **R2** Overlay text-input primitives — `getTextLayout(elementId)` (lines
+  and glyph boxes from PDFium's char boxes mapped to objects), `positionAt`,
+  `rangeRects`, a page rendered without one element (`FPDFPageObj_SetIsActive`,
+  rendered by PDFium in the worker) and the PDF.js-selection-to-element
+  mapping — are a separate ticket after ACTION-821. The `TextRange` types they
+  need ship with `edit-core` revision 2, and `findText()` returns ranges.
 - Annotations: highlights, comments, ink, stamps; form filling.
 - Redaction and OCR.
 - Treating several text objects as one editable paragraph, or reflowing
@@ -312,6 +345,14 @@ Which operations an element accepts is listed in its `operations` field:
 - **Fixtures:** PDFs generated inside the tests with PDFium (several pages,
   rotated pages, an offset crop box, text in standard fonts, an image), plus
   public corpus files for robustness.
+- **R2 Unit:** full save drops deleted content and is identical with and
+  without prior queries; ids after undo differ; a checkpoint restore equals a
+  replay; a moved or retyped marked group degrades to plain objects; a subset
+  TrueType fixture proves the in-place `replaceText` coverage rule; two text
+  boxes embed one font file; warnings for DocMDP, tagged and PDF/A fixtures;
+  `findText` ranges round-trip through `EditElement.text` offsets.
+- **R2 Performance:** `apply()` latency of one `insertTextBox` on 10-, 100-
+  and 500-page fixtures in Chromium, recorded under Actual result.
 
 ### Docs
 
@@ -336,6 +377,9 @@ Which operations an element accepts is listed in its `operations` field:
   and stays within the 20 MiB Brotli target; the license gate passes.
 - The PDF editing browser suite passes on Chromium, Firefox and WebKit.
 - `npm run check` passes.
+- **R2** The module passes on `edit-core` revision 2: envelopes, `stateId`
+  ids, save modes, removed ids, ranges in `findText`, the staleness check and
+  the extra warnings, with the latency numbers recorded.
 
 ## Spike results
 
@@ -385,6 +429,13 @@ Resolved on 2026-10-01 together with the approval of this spec:
 3. **Signed PDFs.** Editing is allowed; the first change emits a
    `fidelity-degraded` warning, and the incremental save keeps the signed
    revision intact.
+4. **R2, 2026-10-01.** Full save is the default for unsigned files (privacy;
+   read-independent bytes); incremental stays for signed files and on request.
+5. **R2, 2026-10-01.** The overlay text-input primitives are a separate
+   ticket after ACTION-821.
+6. **R2, 2026-10-01.** The in-place `replaceText` rule stays glyph-coverage
+   based (the embedded font's `cmap`; CFF subsets always fall back) rather
+   than GenOffice's ASCII-only rule; a subset fixture proves it.
 
 ## Actual result
 

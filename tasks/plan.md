@@ -74,6 +74,14 @@ T9 PDF worker, provider, session start (T1, T5)
             └── T20 Tables                                  ── Checkpoint D
 T21 Hardening (signatures, file id, crash recovery, performance, JSON-only client)
 T22 PDF docs, browser matrix, full gate                     ── Checkpoint E (done)
+T23 Contract revision 2: types and docs (approved spec)      [linear:ACTION-821]
+├── T24 Session fixes: snapshot, listeners, aborted on end, save/markSaved, broken-session save
+├── T25 Two-phase reopen, renderer page count, layoutchange, per-page render keys
+├── T26 stateId ids, removedIds, same-batch references, applyJson, envelopes, read signals
+├── T27 Checkpoints and the asset store
+└── T28 PDF: save modes, mark staleness, feature warnings, findText ranges, subset-font and font-dedupe tests
+    └── T29 apply() latency on 10/100/500 pages (PDF)
+        └── T30 Docs, matrix, full gate                      ── Checkpoint F
 ```
 
 T1 runs first because it is the riskiest assumption; it does not depend on the
@@ -90,6 +98,26 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 | 2. First PDF slice         | T9–T13  | Checkpoint B: insert and edit a text box in a real PDF, save, reload — demo               |
 | 3. PDF method set          | T14–T20 | Checkpoints C and D: all 15 operations                                                    |
 | 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review |
+| 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821) |
+
+## Revision 2 decisions (ACTION-821)
+
+11. **Ids from `stateId`.** The core passes each batch's history `stateId` to
+    the engine; PDF ids become `p0:n<stateId>.<op>.<k>` and page keys
+    `q<stateId>.<op>`. Replays reproduce them because `stateId`s are stored
+    in the history.
+12. **Two-phase reopen.** `prepareDocument` opens the edited bytes next to the
+    current handle and may fail; `commitDocument` swaps synchronously and
+    cannot; abort after the commit point is ignored.
+13. **Checkpoints are retained `materialize("show")` outputs** at the fold
+    boundary and every `maxEditHistory / 4`-th commit, within
+    `maxEditCheckpointBytes`; `restore` takes `{ base, batches }`.
+14. **Asset store.** Inline payloads are hashed (SHA-256) and interned before a
+    batch enters the history; operations in history hold `asset:` references;
+    the worker keeps the bytes once per session.
+15. **Read envelopes without paging**; `sessionId` is a random 128-bit value.
+16. **PDF saves default to full** for unsigned files; the viewer reopen keeps
+    using the incremental form.
 
 ## Gate and configuration changes needing approval
 
@@ -134,5 +162,5 @@ npm run check                                         # at the final checkpoint
 
 ## Open questions
 
-None blocking. Spike findings from T1 are written into the `pdf-edit` spec
-before T9 starts.
+None blocking. Phase 5 starts only after Leonid approves `01-edit-core.md`
+revision 2; its commits carry `[linear:ACTION-821]`.
