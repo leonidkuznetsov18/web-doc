@@ -256,6 +256,9 @@ export const IMPLEMENTED_OPERATIONS: readonly string[] = [
   "resizeElement",
   "deleteElement",
   "insertTextBox",
+  "insertImage",
+  "insertTable",
+  "setTableCell",
 ];
 
 export const pptxOperationSchemas: OperationSchemaSet = Object.freeze({

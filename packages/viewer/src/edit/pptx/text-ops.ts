@@ -147,12 +147,13 @@ function draftOf(part: XmlPart, paragraph: ParagraphInfo): ParagraphDraft {
 
 /** The whole body's new content with the paragraphs `[first, last]` replaced by `drafts`. */
 function bodyContent(
-  target: TextTarget,
+  part: XmlPart,
+  txBody: XmlElement,
+  model: TextModel,
   first: number,
   last: number,
   drafts: readonly ParagraphDraft[],
 ): string {
-  const { part, txBody, model } = target;
   const paragraphs = model.paragraphs;
   const prefix = bodyPrefix(part, txBody, paragraphs[0]?.node);
   const suffix = bodySuffix(part, txBody, paragraphs.at(-1)?.node);
@@ -199,55 +200,77 @@ export const replaceTextHandler: PptxOperationHandler<PptxReplaceTextOperation> 
         operation.range,
         () => {},
       )!;
-      const { part, model } = target;
-      const paragraphs = model.paragraphs;
-      if (paragraphs.length === 0) {
-        // A body without paragraphs: the new text becomes its paragraphs.
-        const drafts = operation.text.split(PARAGRAPH_BREAK).map((segment) => ({
-          pPr: "",
-          items: itemsOfSegment(segment, ""),
-          endParaRPr: "",
-        }));
-        return commitBody(context, target, bodyContent(target, 0, -1, drafts));
-      }
-      const first = paragraphAt(model, start);
-      const last = paragraphAt(model, end);
-      const firstParagraph = paragraphs[first]!;
-      const lastParagraph = paragraphs[last]!;
-      const whole = !operation.range;
-      // The style of the new text: the first run with text for a whole
-      // replacement, otherwise the run at the start of the range.
-      const style = whole
-        ? firstTextStyle(part, model)
-        : end > start
-          ? (styleOfRunAt(part, firstParagraph, start) ??
-            styleAt(part, firstParagraph, start))
-          : styleAt(part, firstParagraph, start);
-      const head: RunItem[] = [];
-      for (const run of firstParagraph.runs)
-        head.push(...runItems(part, run, run.start, Math.min(run.end, start)));
-      const tail: RunItem[] = [];
-      for (const run of lastParagraph.runs)
-        tail.push(...runItems(part, run, Math.max(run.start, end), run.end));
-      const segments = operation.text.split(PARAGRAPH_BREAK);
-      const drafts: ParagraphDraft[] = [];
-      segments.forEach((segment, index) => {
-        const draft = draftOf(part, firstParagraph);
-        if (index === 0) draft.items.push(...head);
-        draft.items.push(...itemsOfSegment(segment, style));
-        if (index === segments.length - 1) {
-          draft.items.push(...tail);
-          draft.endParaRPr = sliceOf(part, lastParagraph.endParaRPr);
-        }
-        drafts.push(draft);
-      });
       return commitBody(
         context,
         target,
-        bodyContent(target, first, last, drafts),
+        replacedBodyContent(
+          target.part,
+          target.txBody,
+          target.model,
+          operation.text,
+          start,
+          end,
+          !operation.range,
+        ),
       );
     },
   };
+
+/**
+ * The new content of a text body with `[start, end)` of its text replaced:
+ * the paragraphs the range touches are rebuilt, the others keep their
+ * bytes. A whole replacement styles the new text like the first run that
+ * had text; a ranged one like the run at the start of the range.
+ */
+export function replacedBodyContent(
+  part: XmlPart,
+  txBody: XmlElement,
+  model: TextModel,
+  text: string,
+  start: number,
+  end: number,
+  whole: boolean,
+): string {
+  const paragraphs = model.paragraphs;
+  if (paragraphs.length === 0) {
+    // A body without paragraphs: the new text becomes its paragraphs.
+    const drafts = text.split(PARAGRAPH_BREAK).map((segment) => ({
+      pPr: "",
+      items: itemsOfSegment(segment, ""),
+      endParaRPr: "",
+    }));
+    return bodyContent(part, txBody, model, 0, -1, drafts);
+  }
+  const first = paragraphAt(model, start);
+  const last = paragraphAt(model, end);
+  const firstParagraph = paragraphs[first]!;
+  const lastParagraph = paragraphs[last]!;
+  const style = whole
+    ? firstTextStyle(part, model)
+    : end > start
+      ? (styleOfRunAt(part, firstParagraph, start) ??
+        styleAt(part, firstParagraph, start))
+      : styleAt(part, firstParagraph, start);
+  const head: RunItem[] = [];
+  for (const run of firstParagraph.runs)
+    head.push(...runItems(part, run, run.start, Math.min(run.end, start)));
+  const tail: RunItem[] = [];
+  for (const run of lastParagraph.runs)
+    tail.push(...runItems(part, run, Math.max(run.start, end), run.end));
+  const segments = text.split(PARAGRAPH_BREAK);
+  const drafts: ParagraphDraft[] = [];
+  segments.forEach((segment, index) => {
+    const draft = draftOf(part, firstParagraph);
+    if (index === 0) draft.items.push(...head);
+    draft.items.push(...itemsOfSegment(segment, style));
+    if (index === segments.length - 1) {
+      draft.items.push(...tail);
+      draft.endParaRPr = sliceOf(part, lastParagraph.endParaRPr);
+    }
+    drafts.push(draft);
+  });
+  return bodyContent(part, txBody, model, first, last, drafts);
+}
 
 /** The rPr of the run that holds the first replaced character. */
 function styleOfRunAt(
@@ -338,7 +361,7 @@ export const setTextStyleHandler: PptxOperationHandler<PptxSetTextStyleOperation
       return commitBody(
         context,
         target,
-        bodyContent(target, first, last, drafts),
+        bodyContent(part, target.txBody, model, first, last, drafts),
       );
     },
   };

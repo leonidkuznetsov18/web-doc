@@ -1457,13 +1457,13 @@ relationships, groups), `insertTextBox`.
 
 **Acceptance criteria:**
 
-- [ ] An inserted PNG and JPEG render in the viewer; the same bytes twice
+- [x] An inserted PNG and JPEG render in the viewer; the same bytes twice
       produce one media part.
-- [ ] A table renders with its cell text; `setTableCell` keeps `a:tcPr`.
+- [x] A table renders with its cell text; `setTableCell` keeps `a:tcPr`.
 
 **Verification:**
 
-- [ ] `node --test .test-dist/test/pptx-edit-tables.test.js`; the e2e spec
+- [x] `node --test .test-dist/test/pptx-edit-tables.test.js`; the e2e spec
 
 **Dependencies:** Task 46
 

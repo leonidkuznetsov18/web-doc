@@ -452,6 +452,114 @@ test("recolours, moves, resizes, deletes and inserts shapes that the renderer dr
   expect(red).toBe(400);
 });
 
+test("inserts a picture and a table that the renderer draws, and edits a cell", async ({
+  page,
+}) => {
+  const original = new Uint8Array(
+    await readFile(new URL("sample.pptx", CORPUS)),
+  );
+  const png = Array.from(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DwHwyBFJAAgAAA//8R7AP8Ky7YKAAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+  await loadDeck(page, original, "sample.pptx");
+  const result = await page.evaluate(
+    async ({ png, renderer }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const receipt = await session.apply([
+        {
+          op: "insertImage",
+          pageIndex: 1,
+          rect: { x: 600, y: 80, width: 120, height: 120 },
+          data: new Uint8Array(png),
+          mimeType: "image/png",
+        },
+        {
+          op: "insertTable",
+          pageIndex: 1,
+          rect: { x: 60, y: 420, width: 500, height: 100 },
+          rows: [
+            ["Metric", "Value"],
+            ["Edits", "two"],
+          ],
+        },
+        { op: "setTableCell", target: "$1", row: 1, column: 1, text: "three" },
+      ]);
+      const elements = (await session.getElements({ pageIndex: 1 })).items as {
+        id: string;
+        kind: string;
+        frame: { x: number; y: number; width: number; height: number };
+        table?: { rows: string[][] };
+      }[];
+      const saved = await session.save();
+      const { PptxPresentation } = (await import(renderer)) as any;
+      const presentation = await PptxPresentation.load(
+        (saved.bytes as Uint8Array).slice().buffer,
+        { useGoogleFonts: false, mode: "main" },
+      );
+      const bounds = await presentation.getElementBoundsByIds(
+        1,
+        elements.map((element) => element.id.split(":")[1]!),
+      );
+      presentation.destroy();
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(1, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const { data } = canvas.getContext("2d")!.getImageData(610, 90, 100, 100);
+      let painted = 0;
+      for (let offset = 0; offset < data.length; offset += 4)
+        if (data[offset]! + data[offset + 1]! + data[offset + 2]! < 720)
+          painted += 1;
+      return {
+        createdIds: receipt.createdIds,
+        elements,
+        oracle: bounds.map((item: any) => ({
+          id: item.elementId,
+          type: item.elementType,
+          x: item.bounds.x / 9525,
+          y: item.bounds.y / 9525,
+          width: item.bounds.width / 9525,
+          height: item.bounds.height / 9525,
+        })),
+        painted,
+        text: await viewer.getPageText(1),
+      };
+    },
+    { png, renderer: RENDERER },
+  );
+  expect(result.createdIds).toEqual(["sld2:4", "sld2:5"]);
+  expect(result.elements.map((element) => element.kind)).toEqual([
+    "shape",
+    "shape",
+    "image",
+    "table",
+  ]);
+  expect(result.elements[3]!.table).toEqual({
+    rows: [
+      ["Metric", "Value"],
+      ["Edits", "three"],
+    ],
+  });
+  expect(result.text).toContain("Metric");
+  expect(result.text).toContain("three");
+  expect(result.painted).toBeGreaterThan(300);
+  for (const element of result.elements) {
+    const expected = result.oracle.find(
+      (item: { id: string }) => item.id === element.id.split(":")[1],
+    );
+    expect(expected, `${element.id} drawn by the renderer`).toBeDefined();
+    expect(Math.abs(element.frame.x - expected.x)).toBeLessThan(1);
+    expect(Math.abs(element.frame.y - expected.y)).toBeLessThan(1);
+    expect(Math.abs(element.frame.width - expected.width)).toBeLessThan(1);
+    expect(Math.abs(element.frame.height - expected.height)).toBeLessThan(1);
+  }
+  expect(
+    result.oracle.map((item: { type: string }) => item.type).sort(),
+  ).toEqual(["picture", "shape", "shape", "table"].sort());
+});
+
 test("spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout", async ({
   page,
 }) => {

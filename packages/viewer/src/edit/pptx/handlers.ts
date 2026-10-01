@@ -6,6 +6,11 @@ import {
   resizeElementHandler,
   setShapeStyleHandler,
 } from "./shape-ops.js";
+import {
+  insertImageHandler,
+  insertTableHandler,
+  setTableCellHandler,
+} from "./image-table-ops.js";
 import { replaceTextHandler, setTextStyleHandler } from "./text-ops.js";
 
 /** Handlers by operation name; `IMPLEMENTED_OPERATIONS` in schemas.ts lists the same names. */
@@ -20,4 +25,7 @@ export const pptxHandlers: ReadonlyMap<string, PptxOperationHandler> = new Map<
   ["resizeElement", resizeElementHandler as PptxOperationHandler],
   ["deleteElement", deleteElementHandler as PptxOperationHandler],
   ["insertTextBox", insertTextBoxHandler as PptxOperationHandler],
+  ["insertImage", insertImageHandler as PptxOperationHandler],
+  ["insertTable", insertTableHandler as PptxOperationHandler],
+  ["setTableCell", setTableCellHandler as PptxOperationHandler],
 ]);
