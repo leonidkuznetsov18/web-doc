@@ -165,6 +165,10 @@ export function createPdfEditHandler(
         };
         return engine().renderPageWithout(pageIndex, elementIds, scale);
       }
+      case "edit-page-layout":
+        return engine().pageLayout(
+          (payload as { readonly pageIndex: number }).pageIndex,
+        );
       case "edit-dispose":
         state?.dispose();
         state = undefined;

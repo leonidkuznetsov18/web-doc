@@ -30,7 +30,7 @@ import type {
   TextTarget,
 } from "../types.js";
 import { pdfOperationSchemas } from "./schemas.js";
-import type { PageBitmap, TextLayout } from "./types.js";
+import type { PageBitmap, PageLayout, TextLayout } from "./types.js";
 
 /** The reads behind the overlay primitives, beyond the core engine interface. */
 export interface PdfEngineReads {
@@ -50,6 +50,10 @@ export interface PdfEngineReads {
     scale: number,
     signal: AbortSignal,
   ): Promise<PageBitmap>;
+  pageLayout(
+    pageIndex: number,
+    signal: AbortSignal,
+  ): Promise<PageLayout | undefined>;
 }
 
 /** How long disposal waits for the worker's answer before terminating it. */
@@ -269,6 +273,13 @@ export class PdfEditEngineClient implements EditEngine, PdfEngineReads {
       signal,
     );
     return { ...bitmap, data: new Uint8Array(bitmap.data) };
+  }
+
+  pageLayout(
+    pageIndex: number,
+    signal: AbortSignal,
+  ): Promise<PageLayout | undefined> {
+    return this.#request("edit-page-layout", { pageIndex }, signal);
   }
 
   async dispose(): Promise<void> {

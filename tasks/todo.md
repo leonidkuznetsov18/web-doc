@@ -1066,16 +1066,16 @@ entries.
 
 **Acceptance criteria:**
 
-- [ ] A selection built from the fixture's PDF.js runs resolves to the right
+- [x] A selection built from the fixture's PDF.js runs resolves to the right
       element and offsets on each ladder rung (overlap, containment, text
       match); a selection of nothing resolves to `items: []`.
-- [ ] After `replaceText` with a range before, inside and after a saved
+- [x] After `replaceText` with a range before, inside and after a saved
       range, `mapRange` returns the moved range; after `deleteElement` it
       returns `undefined`; after `undo` the original range.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-selection.test.ts`),
+- [x] `npm run test --workspace web-doc` (`test/pdf-edit-selection.test.ts`),
       `npm run licenses`
 
 **Dependencies:** Task 32

@@ -72,6 +72,28 @@ export function layoutOf(
   };
 }
 
+/** The layouts of every text element of the page, in reading order, from one pass. */
+export function layoutsOf(pdfium: Pdfium, scan: TextPageScan): TextLayout[] {
+  const glyphs = glyphsOf(pdfium, scan, () => true);
+  const byElement = new Map<string, Glyph[]>();
+  for (const glyph of glyphs) {
+    const own = byElement.get(glyph.position.elementId);
+    if (own) own.push(glyph);
+    else byElement.set(glyph.position.elementId, [glyph]);
+  }
+  const layouts: TextLayout[] = [];
+  for (const element of scan.elements) {
+    const own = byElement.get(element.id);
+    if (!own || !TEXT_KINDS.has(element.kind)) continue;
+    layouts.push({
+      elementId: element.id,
+      pageIndex: element.pageIndex,
+      lines: linesOf(pdfium, scan, own),
+    });
+  }
+  return layouts;
+}
+
 /** The caret position nearest to a page-space point, or none without text. */
 export function positionIn(
   pdfium: Pdfium,

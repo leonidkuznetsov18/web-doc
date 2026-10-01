@@ -1,3 +1,4 @@
+import type { TextSelection } from "../../contracts.js";
 import type {
   ApplyOptions,
   BinaryData,
@@ -286,6 +287,15 @@ export interface TextLayout {
   readonly lines: readonly TextLayoutLine[];
 }
 
+/** Every text element of a page with its layout, plus the page's displayed size in points. */
+export interface PageLayout {
+  readonly pageIndex: number;
+  readonly width: number;
+  readonly height: number;
+  /** In reading order. */
+  readonly layouts: readonly TextLayout[];
+}
+
 /** A page rendered by PDFium in the worker: RGBA pixels, row-major, unpremultiplied over white. */
 export interface PageBitmap {
   readonly pageIndex: number;
@@ -341,6 +351,30 @@ export interface PdfEditSession extends EditSessionBase<
     elementIds: readonly string[],
     options?: RenderOptions,
   ): Promise<ReadItem<PageBitmap>>;
+  /** The layouts of every text element on a page, in one read. */
+  getPageLayout(
+    pageIndex: number,
+    options?: ReadOptions,
+  ): Promise<ReadItem<PageLayout>>;
+  /**
+   * Maps the viewer's text selection (PDF.js runs in page space) to elements
+   * and ranges: a line whose box the run covers by half, else the one line
+   * that contains the run, else a line whose folded text contains the run's.
+   */
+  elementsForSelection(
+    selection: TextSelection,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TextRange>>;
+  /**
+   * Where a range taken at `fromRevision` is now, after the batches, undos,
+   * redos and resets of this session since then; none when its element is
+   * gone or the revision is older than the session remembers.
+   */
+  mapRange(
+    range: TextRange,
+    fromRevision: number,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextRange>>;
   /** Lays `text` out inside `rect` as new text objects; the box's id is in `createdIds`. */
   insertTextBox(
     fields: Fields<InsertTextBoxOperation>,

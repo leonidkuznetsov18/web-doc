@@ -34,6 +34,7 @@ export type EditWorkerOperation =
   | "edit-position-at"
   | "edit-range-rects"
   | "edit-render-without"
+  | "edit-page-layout"
   | "edit-dispose";
 
 export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;

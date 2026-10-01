@@ -12,9 +12,20 @@ import type {
   TextRange,
   TextTarget,
 } from "../../types.js";
-import type { PdfElement, PdfOperation, TextLayout } from "../types.js";
+import type {
+  PageLayout,
+  PdfElement,
+  PdfOperation,
+  TextLayout,
+} from "../types.js";
 import type { EditWorkerBitmap } from "../../../worker-protocol.js";
-import { layoutOf, positionIn, rectsOf, type TextPageScan } from "./layout.js";
+import {
+  layoutOf,
+  layoutsOf,
+  positionIn,
+  rectsOf,
+  type TextPageScan,
+} from "./layout.js";
 import {
   markIsFresh,
   readMark,
@@ -45,6 +56,7 @@ import {
   displayedSize,
   rectContains,
   rectsIntersect,
+  round,
   roundRect,
   unionRects,
   userRectToPage,
@@ -499,6 +511,20 @@ export class PdfEditDocument {
     return this.#scanText(pageIndex, (scan) => {
       const element = scan.elements.find((entry) => entry.id === elementId);
       return element ? layoutOf(this.#pdfium, scan, element) : undefined;
+    });
+  }
+
+  /** The layouts of every text element on a page, with the page's displayed size. */
+  pageLayout(pageIndex: number): PageLayout | undefined {
+    if (pageIndex < 0 || pageIndex >= this.#pages.length) return undefined;
+    return this.#scanText(pageIndex, (scan) => {
+      const size = displayedSize(scan.geometry);
+      return {
+        pageIndex,
+        width: round(size.width),
+        height: round(size.height),
+        layouts: layoutsOf(this.#pdfium, scan),
+      };
     });
   }
 
