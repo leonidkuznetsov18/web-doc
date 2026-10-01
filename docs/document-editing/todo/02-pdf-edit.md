@@ -212,7 +212,12 @@ Which operations an element accepts is listed in its `operations` field:
   same font in this document. After changing it the engine reads the text back;
   a mismatch, or an unsafe case, replaces the object with a new text object in a
   fallback font at the same position, size and colour, with a
-  `font-substitution` warning.
+  `font-substitution` warning. **R2** As implemented, "safe" means glyph
+  coverage of the embedded font: every code point of the new text (whitespace
+  excepted) maps through the font's `cmap` to a glyph whose `glyf` entry has a
+  non-zero length — a subset font can keep a `cmap` entry for an emptied
+  glyph — and CFF-based fonts always fall back. A subset fixture with an
+  emptied glyph proves it.
 - `setTextStyle` on an existing `text` element supports `color` and `fontSize`
   (scaled around the top-left of its bounds); any other field is a validation
   issue coded `unsupported-style`. On a `textBox` every field is supported and
@@ -280,6 +285,40 @@ Which operations an element accepts is listed in its `operations` field:
   (inserted content is untagged) and a PDF/A claim (inserted standard fonts
   are not embedded); `details.features` lists them.
 
+### Overlay primitives (ACTION-825, after revision 2)
+
+A host overlay needs more than ids and bounds before a user can type into a
+PDF. These session methods are specified here and implemented under
+ACTION-825; they are additive, and the types they use (`TextPosition`,
+`TextRange`, `ReadItem`, `ReadResult`) ship with `edit-core` revision 2.
+
+- `getTextLayout(elementId, options?)` → `ReadItem<TextLayout>`: for a
+  `text`, `textBox` or `table` element, its lines in reading order, each with
+  its baseline, glyph boxes (`FPDFText_GetCharBox` mapped to the owning
+  object), advance widths, font family, size and colour, and the `TextRange`
+  of `EditElement.text` the line covers.
+- `positionAt(pageIndex, point, options?)` → `ReadItem<TextPosition>`: the
+  text position nearest to a page-space point (`FPDFText_GetCharIndexAtPos`).
+- `rangeRects(range, options?)` → `ReadResult<PageRect>`: the rectangles a
+  `TextRange` covers, one per line fragment, for drawing a selection.
+- `renderPageWithout(pageIndex, elementIds, options)`: the page rendered by
+  PDFium in the worker with the listed objects inactive
+  (`FPDFPageObj_SetIsActive`), so the host's input surface can stand in for
+  the element on screen without a reopen.
+- `elementsForSelection(selection)` → `ReadResult<TextRange>`: maps the
+  viewer's PDF.js selection to elements and ranges through an overlap ladder —
+  rectangle overlap of at least 50 %, else the single containing object, else
+  a text match with NFKC folding.
+- `replaceText` gains an optional `range`; the engine splits the text object
+  around the range only when it has to, keeping font, size, colour and
+  baseline.
+- Re-selection after a commit: stable ids and offsets let the host restore a
+  `TextRange` after `documentchange`; `mapRange(range, fromRevision)` answers
+  where a range went when a batch of this session moved its text.
+- A main-thread per-page geometry cache: the last `getElements` result per
+  page, refreshed on `documentchange`, read synchronously through
+  `elementsAtSync(pageIndex, point)` so hover never waits behind an `apply()`.
+
 ### Viewer refresh
 
 - After each change the viewer reopens the edited bytes with PDF.js. Each
@@ -294,12 +333,9 @@ Which operations an element accepts is listed in its `operations` field:
 
 ## Out of scope
 
-- **R2** Overlay text-input primitives — `getTextLayout(elementId)` (lines
-  and glyph boxes from PDFium's char boxes mapped to objects), `positionAt`,
-  `rangeRects`, a page rendered without one element (`FPDFPageObj_SetIsActive`,
-  rendered by PDFium in the worker) and the PDF.js-selection-to-element
-  mapping — are a separate ticket after ACTION-821. The `TextRange` types they
-  need ship with `edit-core` revision 2, and `findText()` returns ranges.
+- **R2** The overlay text-input primitives are specified below under
+  [Overlay primitives](#overlay-primitives-action-825-after-revision-2) and
+  implemented under Linear ACTION-825, after this module's revision 2.
 - Annotations: highlights, comments, ink, stamps; form filling.
 - Redaction and OCR.
 - Treating several text objects as one editable paragraph, or reflowing

@@ -873,7 +873,8 @@ warnings; `findText` ranges; subset-font and font-dedupe tests.
 - [ ] A full save drops deleted content and is identical with and without
       prior queries; a moved marked group degrades to plain objects; the three
       warnings fire on their fixtures; ranges round-trip through
-      `EditElement.text` offsets.
+      `EditElement.text` offsets; a subset font whose `cmap` maps to an
+      emptied glyph is not used in place.
 
 **Verification:**
 
@@ -933,3 +934,12 @@ ACTION-821 proofs attached.
 - [ ] Every R2 item of both definitions of done is checked
 - [ ] Linear: ACTION-821 Done with proofs; PR opened and ACTION-808/811 moved
       to Code Review with the human
+
+## Phase 6 — PDF overlay primitives (Linear ACTION-825)
+
+Blocked by ACTION-821; blocks ACTION-815 (Operators PDF UI). The API is
+specified in `02-pdf-edit.md` under "Overlay primitives"; tasks are written
+when Phase 5 lands and carry `[linear:ACTION-825]`: `getTextLayout`,
+`positionAt` / `rangeRects`, `renderPageWithout`, `elementsForSelection`,
+range-scoped `replaceText`, `mapRange`, the main-thread geometry cache and
+`elementsAtSync`.

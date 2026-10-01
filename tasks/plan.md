@@ -99,6 +99,7 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 | 3. PDF method set          | T14–T20 | Checkpoints C and D: all 15 operations                                                    |
 | 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review |
 | 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821) |
+| 6. PDF overlay primitives  | later   | Tasks written after Phase 5; spec in `02-pdf-edit.md` (Linear ACTION-825)                 |
 
 ## Revision 2 decisions (ACTION-821)
 
