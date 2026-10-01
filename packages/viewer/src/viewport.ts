@@ -47,12 +47,18 @@ export interface ViewportHost {
   onTextSelection(range: TextSelectionRange): void;
   onCellSelection(selection: CellRange | CellSelection | null): void;
   getSelectionText(): string | undefined;
+  /** Pages whose paint for content revision `revision` just finished. */
+  onPainted(pages: readonly number[], revision: number): void;
 }
 
 interface ViewportStrategy {
   setDocument(info: DocumentInfo | undefined): void;
   /** New content of the same document: keeps zoom and scroll, re-renders. */
-  replaceDocument(info: DocumentInfo): void;
+  replaceDocument(
+    info: DocumentInfo,
+    changedPages?: readonly number[],
+    revision?: number,
+  ): void;
   pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined;
   clientToPage(clientX: number, clientY: number): PageHit | undefined;
   update(): void;
@@ -101,10 +107,14 @@ export class AdaptiveViewport implements ViewportStrategy {
     this.#strategy.setDocument(info);
   }
 
-  replaceDocument(info: DocumentInfo): void {
+  replaceDocument(
+    info: DocumentInfo,
+    changedPages?: readonly number[],
+    revision?: number,
+  ): void {
     const nextKind = info.unit === "sheet" ? "sheet" : "page";
     if (nextKind !== this.#kind) this.setDocument(info);
-    else this.#strategy.replaceDocument(info);
+    else this.#strategy.replaceDocument(info, changedPages, revision);
   }
 
   pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined {
@@ -189,8 +199,13 @@ export class ViewerViewport {
   readonly #onSelectionChange = (): void => this.#handleSelectionChange();
   readonly #pointers = new Map<number, PointerPosition>();
   #info: DocumentInfo | undefined;
-  /** Grows with every content replacement, so unchanged view state still re-renders. */
-  #revision = 0;
+  /** Per page: grows when that page's content changed, so only it re-renders. */
+  #pageRevisions: number[] = [];
+  /** The session revision the shown content belongs to; 0 before any edit. */
+  #contentRevision = 0;
+  /** Pages painted since the last `onPainted`, keyed by content revision. */
+  #painted = new Map<number, Set<number>>();
+  #paintedFlush = 0;
   #frame = 0;
   #resizeObserver: ResizeObserver | undefined;
   #destroyed = false;
@@ -271,15 +286,43 @@ export class ViewerViewport {
 
   setDocument(info: DocumentInfo | undefined): void {
     this.#info = info;
+    this.#pageRevisions = [];
+    this.#contentRevision = 0;
+    this.#painted.clear();
     this.#appliedZoom = this.#host.state.zoom;
     this.#root.scrollTo({ left: 0, top: 0 });
     this.#clearSlots();
     this.schedule();
   }
 
-  replaceDocument(info: DocumentInfo): void {
+  replaceDocument(
+    info: DocumentInfo,
+    changedPages?: readonly number[],
+    revision?: number,
+  ): void {
+    const previous = this.#info;
     this.#info = info;
-    this.#revision += 1;
+    this.#contentRevision = revision ?? this.#contentRevision + 1;
+    // Only pages whose content or size changed get a new render key; the
+    // others keep their bitmaps. A changed page count shifts everything
+    // from the first changed page on.
+    const countChanged = previous?.pageCount !== info.pageCount;
+    const from =
+      changedPages === undefined
+        ? 0
+        : countChanged
+          ? Math.min(...changedPages, info.pageCount)
+          : Number.POSITIVE_INFINITY;
+    const changed = new Set(changedPages ?? []);
+    for (let pageIndex = 0; pageIndex < info.pageCount; pageIndex += 1) {
+      const size = info.pageSizes?.[pageIndex];
+      const before = previous?.pageSizes?.[pageIndex];
+      const resized =
+        size?.width !== before?.width || size?.height !== before?.height;
+      if (pageIndex >= from || changed.has(pageIndex) || resized)
+        this.#pageRevisions[pageIndex] =
+          (this.#pageRevisions[pageIndex] ?? 0) + 1;
+    }
     // Slots stay mounted and repaint in place; the browser clamps the scroll
     // position itself once the spacer takes the new document's height.
     this.schedule();
@@ -427,6 +470,29 @@ export class ViewerViewport {
     );
   }
 
+  /** Collects finished paints and reports them once per frame, newest content only. */
+  #markPainted(pageIndex: number, contentRevision: number): void {
+    if (contentRevision !== this.#contentRevision) return;
+    let pages = this.#painted.get(contentRevision);
+    if (!pages) {
+      pages = new Set();
+      this.#painted.clear();
+      this.#painted.set(contentRevision, pages);
+    }
+    pages.add(pageIndex);
+    if (this.#paintedFlush) return;
+    this.#paintedFlush = requestAnimationFrame(() => {
+      this.#paintedFlush = 0;
+      const current = this.#painted.get(this.#contentRevision);
+      this.#painted.clear();
+      if (!current || current.size === 0 || this.#destroyed) return;
+      this.#host.onPainted(
+        [...current].sort((a, b) => a - b),
+        this.#contentRevision,
+      );
+    });
+  }
+
   schedule(): void {
     if (this.#destroyed || this.#frame) return;
     this.#frame = requestAnimationFrame(() => {
@@ -439,6 +505,7 @@ export class ViewerViewport {
     if (this.#destroyed) return;
     this.#destroyed = true;
     if (this.#frame) cancelAnimationFrame(this.#frame);
+    if (this.#paintedFlush) cancelAnimationFrame(this.#paintedFlush);
     if (this.#zoomSettleTimer) clearTimeout(this.#zoomSettleTimer);
     this.#resizeObserver?.disconnect();
     this.#root.removeEventListener("scroll", this.#onScroll);
@@ -503,7 +570,7 @@ export class ViewerViewport {
         .getSearchMatches(pageIndex)
         .map((match) => `${match.start}:${match.end}`)
         .join(",");
-      const renderKey = `${this.#revision}:${state.zoom}:${window.devicePixelRatio || 1}:${highlights}`;
+      const renderKey = `${this.#pageRevisions[pageIndex] ?? 0}:${state.zoom}:${window.devicePixelRatio || 1}:${highlights}`;
       if (
         slot.renderKey === undefined ||
         (!this.#zoomGestureActive && slot.renderKey !== renderKey)
@@ -561,6 +628,7 @@ export class ViewerViewport {
     slot.controller = controller;
     const generation = ++slot.generation;
     const zoom = this.#host.state.zoom;
+    const contentRevision = this.#contentRevision;
     try {
       let renderError: unknown;
       const rendering = this.#host
@@ -592,6 +660,7 @@ export class ViewerViewport {
       const cssHeight = slot.canvas.height / (window.devicePixelRatio || 1);
       slot.root.style.width = `${cssWidth}px`;
       slot.root.style.height = `${cssHeight}px`;
+      this.#markPainted(pageIndex, contentRevision);
     } catch (error) {
       if (!controller.signal.aborted) {
         slot.root.dataset.renderError =

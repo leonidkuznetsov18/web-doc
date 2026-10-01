@@ -211,6 +211,7 @@ errors — is described in the [editing API](./editing.md). The limits
 | `error`           | Serializable `ViewerErrorData`. Promise-returning calls still reject. |
 | `editstatechange` | `EditState` plus `active` and `format`; see the editing API.          |
 | `documentchange`  | `{ revision, reason, changedPages, pageCount }` after an edit.        |
+| `layoutchange`    | `{ sessionId, revision, pages }` once an edited revision is painted.  |
 
 ## Errors and warnings
 

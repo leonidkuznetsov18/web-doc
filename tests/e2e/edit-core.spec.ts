@@ -44,6 +44,10 @@ declare global {
         ): { pageIndex: number; point: { x: number; y: number } } | undefined;
       };
       readonly viewportRoot: HTMLElement;
+      /** Paints per page since setup. */
+      readonly renders: number[];
+      /** Resolves with the next layoutchange event. */
+      nextLayout(): Promise<{ revision: number; pages: number[] }>;
       pixel(pageIndex: number): string | undefined;
       canvasRect(pageIndex: number): DOMRect | undefined;
       highlights(pageIndex: number): number;
@@ -82,6 +86,7 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
       return `hsl(${hash % 360} 70% 60%)`;
     };
 
+    const renders: number[] = [];
     const adapter = {
       id: "edit-fixture",
       formats: ["pdf"],
@@ -102,6 +107,7 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
         viewport: { pageIndex: number; zoom: number; devicePixelRatio: number },
       ) {
         const text = handle.pages[viewport.pageIndex]!;
+        renders[viewport.pageIndex] = (renders[viewport.pageIndex] ?? 0) + 1;
         const dpr = viewport.devicePixelRatio;
         target.width = Math.ceil(300 * viewport.zoom * dpr);
         target.height = Math.ceil(400 * viewport.zoom * dpr);
@@ -258,6 +264,18 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
     window.__editTest = {
       viewer,
       viewportRoot,
+      renders,
+      nextLayout: () =>
+        new Promise((resolve) => {
+          const off = (
+            viewer as unknown as {
+              on(type: string, listener: (event: unknown) => void): () => void;
+            }
+          ).on("layoutchange", (event) => {
+            off();
+            resolve(event as { revision: number; pages: number[] });
+          });
+        }),
       pixel(pageIndex) {
         const canvas = slot(pageIndex)?.querySelector("canvas");
         if (!canvas || canvas.width === 0) return undefined;
@@ -321,12 +339,39 @@ test("re-renders changed pages and keeps zoom, fit and scroll", async ({
   });
   expect(before.scrollTop).toBe(150);
 
-  await page.evaluate(async () => {
-    const session = await window.__editTest!.viewer.edit();
-    await session.apply([
+  const layout = await page.evaluate(async () => {
+    const t = window.__editTest!;
+    const rendersBefore = [...t.renders];
+    const session = await t.viewer.edit();
+    const next = t.nextLayout();
+    const receipt = await session.apply([
       { op: "setText", pageIndex: 0, text: "ALPHA edited" },
     ]);
+    const event = await next;
+    const canvas = t.canvasRect(0)!;
+    const client = t.viewer.pageToClient(0, {
+      x: 0,
+      y: 0,
+      width: 300,
+      height: 400,
+    })!;
+    return {
+      event,
+      receipt,
+      rendersBefore,
+      rendersAfter: [...t.renders],
+      geometryExact:
+        Math.abs(client.left - canvas.left) < 1 &&
+        Math.abs(client.top - canvas.top) < 1 &&
+        Math.abs(client.width - canvas.width) < 1,
+    };
   });
+  // layoutchange names the applied revision and only the changed page repainted.
+  expect(layout.event.revision).toBe(layout.receipt.revision);
+  expect(layout.event.pages).toContain(0);
+  expect(layout.geometryExact).toBe(true);
+  expect(layout.rendersAfter[0]).toBe((layout.rendersBefore[0] ?? 0) + 1);
+  expect(layout.rendersAfter[1] ?? 0).toBe(layout.rendersBefore[1] ?? 0);
   await expect
     .poll(() => page.evaluate(() => window.__editTest!.pixel(0)))
     .not.toBe(before.pixel);

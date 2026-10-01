@@ -120,10 +120,19 @@ batches on the host before sending them.
 
 A batch is applied completely or not at all. When `apply()` resolves, every
 read API — `getDocumentInfo()`, `renderPage()`, `getPageText()`, `search()`,
-`selectText()` — already reflects the new content, and the viewport has
-re-rendered the changed pages while keeping zoom, fit and scroll position.
-Search results and the selection are cleared, with `searchchange` and
-`selectionchange` set to `null`.
+`selectText()` — already reflects the new content, and the viewport repaints
+the pages in `changedPages` while keeping zoom, fit and scroll position;
+untouched pages keep their bitmaps. The painted geometry follows at the next
+frame: `layoutchange` says when the view-geometry helpers describe the new
+revision. Search results and the selection are cleared, with `searchchange`
+and `selectionchange` set to `null`.
+
+The reopen has two phases. Opening the edited bytes next to the current
+document may fail or be aborted, and then nothing changes; the swap itself is
+synchronous and cannot fail, so once it ran the call completes even if its
+signal was aborted meanwhile — the screen and `save()` never disagree.
+`pageCount` comes from the reopened document; an engine that reports a
+different count adds a `fidelity-degraded` warning instead of being trusted.
 
 Each call reopens the document once, so prefer one batch of several operations
 over several calls.
@@ -248,10 +257,11 @@ outside any page, and for spreadsheets. A result stays valid until the next
 
 ## Events
 
-| Event             | Payload                                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `editstatechange` | `EditState` plus `active` and `format`; emitted on start, on every change, when `dirty` flips on save, and on end. |
-| `documentchange`  | `{ revision, reason: "apply" \| "undo" \| "redo" \| "reset", changedPages, pageCount }`, after `editstatechange`.  |
+| Event             | Payload                                                                                                                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `editstatechange` | `EditState` plus `active` and `format`; emitted on start, on every change, when `dirty` flips through `markSaved()`, and on end.                                                                                             |
+| `documentchange`  | `{ sessionId, revision, reason: "apply" \| "undo" \| "redo" \| "reset", changedPages, pageCount }`, after `editstatechange`.                                                                                                 |
+| `layoutchange`    | `{ sessionId, revision, pages }` once the viewport has painted pages of that revision; `pageToClient()` and `clientToPage()` describe the new content from then on. A headless viewer emits it right after `documentchange`. |
 
 ## Errors
 

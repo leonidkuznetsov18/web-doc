@@ -36,7 +36,11 @@ import type {
 } from "./edit/types.js";
 import type { EditEngineProvider } from "./edit/engine.js";
 import type { EditSession } from "./edit/sessions.js";
-import { EditSessionController, type EditSessionHost } from "./edit/session.js";
+import {
+  EditSessionController,
+  type EditSessionHost,
+  type PreparedDocument,
+} from "./edit/session.js";
 import { linkedAbortController } from "./abort.js";
 import { detectFormat } from "./detect.js";
 import { abortError, normalizeError, ViewerError } from "./errors.js";
@@ -166,6 +170,7 @@ export class DocumentViewer implements ViewerApi {
           onCellSelection: (selection) =>
             this.#applyInteractiveCellSelection(selection),
           getSelectionText: () => this.#getCachedSelectionText(),
+          onPainted: (pages, revision) => this.#onPainted(pages, revision),
         },
         options,
       );
@@ -988,8 +993,15 @@ export class DocumentViewer implements ViewerApi {
       const host: EditSessionHost = {
         format,
         limits: this.#limits,
-        replaceDocument: (bytes, signal) =>
-          this.#replaceDocument(bytes, signal),
+        prepareDocument: (bytes, signal) =>
+          this.#prepareDocument(bytes, signal),
+        commitDocument: (prepared, changedPages) =>
+          this.#commitDocument(
+            prepared as PreparedViewerDocument,
+            changedPages,
+          ),
+        discardDocument: (prepared) =>
+          this.#discardDocument(prepared as PreparedViewerDocument),
         emit: (type, event) => this.#emit(type, event),
       };
       const core = new EditSessionController(
@@ -1024,10 +1036,14 @@ export class DocumentViewer implements ViewerApi {
    * adapter, swaps the handle, drops every cache derived from the old content
    * and keeps the view where it was. Returns the new page count.
    */
-  async #replaceDocument(
+  /**
+   * Phase one of showing edited bytes: opens them next to the current
+   * document. Everything that can fail or be aborted happens here.
+   */
+  async #prepareDocument(
     bytes: Uint8Array,
     signal: AbortSignal,
-  ): Promise<number> {
+  ): Promise<PreparedViewerDocument> {
     const { adapter, handle, info } = this.#assertReady();
     const generation = this.#generation;
     enforceContainerLimits(bytes, info.format, this.#limits);
@@ -1063,18 +1079,78 @@ export class DocumentViewer implements ViewerApi {
       await adapter.close(next);
       throw error;
     }
-    this.#handle = next;
-    this.#info = nextInfo;
+    return {
+      pageCount: nextInfo.pageCount,
+      handle: next,
+      info: nextInfo,
+      generation,
+    };
+  }
+
+  /**
+   * Phase two: swaps the prepared document in. Synchronous and never throws
+   * for a preparation of the current document, so a session that reached
+   * this point always completes; the old handle is closed in the background.
+   */
+  #commitDocument(
+    prepared: PreparedViewerDocument,
+    changedPages: readonly number[],
+  ): number {
+    if (prepared.generation !== this.#generation || !this.#handle) {
+      this.#discardDocument(prepared);
+      throw new ViewerError(
+        "lifecycle-error",
+        "The document was replaced while an edit was being shown",
+      );
+    }
+    const { adapter, handle: previous } = this.#assertReady();
+    this.#handle = prepared.handle;
+    this.#info = prepared.info;
     this.#invalidateContentCaches();
     this.#update({
-      pageCount: nextInfo.pageCount,
-      pageIndex: Math.min(this.#state.pageIndex, nextInfo.pageCount - 1),
+      pageCount: prepared.info.pageCount,
+      pageIndex: Math.min(this.#state.pageIndex, prepared.info.pageCount - 1),
     });
-    for (const warning of nextInfo.warnings ?? [])
+    for (const warning of prepared.info.warnings ?? [])
       this.#emit("warning", warning);
-    this.#viewport?.replaceDocument(nextInfo);
-    await adapter.close(handle);
-    return nextInfo.pageCount;
+    const revision = (this.#session?.core.state.revision ?? 0) + 1;
+    if (this.#viewport)
+      this.#viewport.replaceDocument(prepared.info, changedPages, revision);
+    else
+      // Headless: nothing paints, so geometry is "current" as soon as the
+      // session has emitted documentchange, which happens before the next
+      // macrotask.
+      setTimeout(() => this.#onPainted([...changedPages], revision), 0);
+    void Promise.resolve(adapter.close(previous)).catch((error: unknown) =>
+      this.#reportError(error),
+    );
+    return prepared.info.pageCount;
+  }
+
+  #discardDocument(prepared: PreparedViewerDocument): void {
+    void Promise.resolve(this.#adapter?.close(prepared.handle)).catch(
+      (error: unknown) => this.#reportError(error),
+    );
+  }
+
+  /** Painted pages of a content revision become a `layoutchange` while a session is active. */
+  #onPainted(pages: readonly number[], revision: number): void {
+    const session = this.#session;
+    // The viewport reports only paints of its current content, so a revision
+    // the session has not committed yet is the only thing to drop.
+    if (!session || revision > session.core.state.revision) return;
+    this.#emit("layoutchange", {
+      sessionId: session.core.sessionId,
+      revision,
+      pages: Object.freeze([...pages]),
+    });
+  }
+
+  #reportError(error: unknown): void {
+    const report = (globalThis as { reportError?: (error: unknown) => void })
+      .reportError;
+    if (report) report(error);
+    else console.error(error);
   }
 
   /** Forgets everything derived from the document's content, not from its view. */
@@ -1295,13 +1371,16 @@ export class DocumentViewer implements ViewerApi {
         listener(event as never);
       } catch (error) {
         // A listener's bug is its own; it never fails the call that emitted.
-        const report = (
-          globalThis as { reportError?: (error: unknown) => void }
-        ).reportError;
-        if (report) report(error);
-        else console.error(error);
+        this.#reportError(error);
       }
   }
+}
+
+/** A document opened next to the current one, waiting to be shown. */
+interface PreparedViewerDocument extends PreparedDocument {
+  readonly handle: unknown;
+  readonly info: DocumentInfo;
+  readonly generation: number;
 }
 
 /** The edit format of `format` when `adapter` can edit it. */

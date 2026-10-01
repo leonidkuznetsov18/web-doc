@@ -12,7 +12,10 @@ import type {
   EngineChange,
 } from "../../src/edit/engine.js";
 import type { EditSession } from "../../src/edit/sessions.js";
-import type { EditSessionHost } from "../../src/edit/session.js";
+import type {
+  EditSessionHost,
+  PreparedDocument,
+} from "../../src/edit/session.js";
 import type {
   EditableFormat,
   EditElement,
@@ -284,10 +287,16 @@ export function fakeProvider(
 
 export interface FakeHostOptions {
   readonly limits?: Partial<ResourceLimits>;
-  /** Throw from `replaceDocument` while true. */
+  /** Throw from `prepareDocument` while true. */
   failReplace?: boolean;
   /** Throw from `emit` while true, like a host listener with a bug. */
   failEmit?: boolean;
+  /** Runs inside `prepareDocument`, before it resolves. */
+  onPrepare?: () => void;
+  /** Runs inside `commitDocument`, before it returns. */
+  onCommit?: () => void;
+  /** Page count the host reports instead of the real one. */
+  reportPageCount?: number;
 }
 
 export class FakeHost implements EditSessionHost {
@@ -297,17 +306,34 @@ export class FakeHost implements EditSessionHost {
   readonly events: { readonly type: string; readonly event: unknown }[] = [];
   /** Every document the viewer was asked to show, decoded. */
   readonly shown: string[][] = [];
+  /** Preparations that were opened but never shown. */
+  readonly discarded: string[][] = [];
 
   constructor(options: FakeHostOptions = {}) {
     this.options = options;
     this.limits = resolveLimits(defaultResourceLimits, options.limits);
   }
 
-  async replaceDocument(bytes: Uint8Array): Promise<number> {
+  async prepareDocument(
+    bytes: Uint8Array,
+  ): Promise<PreparedDocument & { readonly pages: string[] }> {
     if (this.options.failReplace) throw new Error("renderer rejected the file");
     const pages = decodePages(bytes);
+    this.options.onPrepare?.();
+    return { pageCount: this.options.reportPageCount ?? pages.length, pages };
+  }
+
+  commitDocument(prepared: PreparedDocument): number {
+    const { pages } = prepared as PreparedDocument & { pages: string[] };
     this.shown.push(pages);
-    return pages.length;
+    this.options.onCommit?.();
+    return prepared.pageCount;
+  }
+
+  discardDocument(prepared: PreparedDocument): void {
+    this.discarded.push(
+      (prepared as PreparedDocument & { pages: string[] }).pages,
+    );
   }
 
   emit<K extends "editstatechange" | "documentchange">(

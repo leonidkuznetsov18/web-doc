@@ -799,14 +799,14 @@ viewport paints; render keys change only for `changedPages`.
 
 **Acceptance criteria:**
 
-- [ ] An abort or a throwing listener after the commit point leaves viewer and
+- [x] An abort or a throwing listener after the commit point leaves viewer and
       engine on the same state; `layoutchange` follows `documentchange` and
       the geometry helpers are exact once it fired; untouched pages keep their
       bitmaps.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
+- [x] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
 
 **Dependencies:** Task 24
 

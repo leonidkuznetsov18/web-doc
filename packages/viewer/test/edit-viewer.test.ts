@@ -10,6 +10,7 @@ import type {
 } from "../src/index.js";
 import { ViewerClient, ViewerError } from "../src/index.js";
 import {
+  decodePages,
   encodePages,
   fakeEditableAdapter,
   fakeProvider,
@@ -37,6 +38,7 @@ function viewerWith(
   for (const type of [
     "editstatechange",
     "documentchange",
+    "layoutchange",
     "searchchange",
     "selectionchange",
     "statechange",
@@ -157,8 +159,60 @@ describe("viewer editing integration", () => {
     await session.apply(ops({ op: "setText", pageIndex: 0, text: "x" }));
     await session.undo();
     assert.deepEqual(adapter.reopened, [1, 2]);
+    // Old handles close in the background, after the swap.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(adapter.closed, [1, 2]);
     assert.equal(await viewer.getPageText(0), "one two");
+  });
+
+  it("emits layoutchange after documentchange for a headless viewer", async () => {
+    const { viewer, events } = viewerWith();
+    await viewer.load(original, { fileName: "doc.pdf" });
+    const session = await editFake(viewer);
+    events.length = 0;
+    const receipt = await session.apply(
+      ops({ op: "setText", pageIndex: 1, text: "x" }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const types = events.map((entry) => entry.type);
+    assert.ok(
+      types.indexOf("documentchange") < types.indexOf("layoutchange"),
+      types.join(","),
+    );
+    const layout = events.find((entry) => entry.type === "layoutchange")
+      ?.event as { sessionId: string; revision: number; pages: number[] };
+    assert.deepEqual(layout, {
+      sessionId: session.sessionId,
+      revision: receipt.revision,
+      pages: [1],
+    });
+  });
+
+  it("keeps the shown document when a listener throws after the swap", async () => {
+    const { viewer, adapter } = viewerWith();
+    await viewer.load(original, { fileName: "doc.pdf" });
+    const session = await editFake(viewer);
+    const { error } = console;
+    console.error = () => {};
+    try {
+      viewer.on("documentchange", () => {
+        throw new Error("host listener bug");
+      });
+      const receipt = await session.apply(
+        ops({ op: "setText", pageIndex: 0, text: "x" }),
+      );
+      assert.equal(receipt.revision, 1);
+    } finally {
+      console.error = error;
+    }
+    assert.equal(await viewer.getPageText(0), "x");
+    assert.deepEqual(decodePages((await session.save()).bytes), [
+      "x",
+      "three",
+      "four",
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(adapter.closed, [1]);
   });
 
   it("leaves the document untouched when the reopen fails", async () => {

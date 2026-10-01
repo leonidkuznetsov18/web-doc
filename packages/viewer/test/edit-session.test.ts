@@ -625,3 +625,59 @@ describe("session fixes (revision 2)", () => {
     await assert.rejects(edit.getElements(), rejectsWith("edit-failed"));
   });
 });
+
+describe("two-phase reopen (revision 2)", () => {
+  it("completes a call that is aborted after the commit point", async () => {
+    const controller = new AbortController();
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { onCommit: () => controller.abort() });
+    const receipt = await apply(
+      [{ op: "setText", pageIndex: 0, text: "committed" }],
+      { signal: controller.signal },
+    );
+    assert.equal(receipt.revision, 1);
+    assert.deepEqual(host.current, ["committed", "two", "three"]);
+    assert.deepEqual(engine.pages, ["committed", "two", "three"]);
+    assert.deepEqual(host.discarded, []);
+    assert.deepEqual(decodePages((await edit.save()).bytes), host.current);
+  });
+
+  it("discards a preparation when the call is aborted before the commit", async () => {
+    const controller = new AbortController();
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { onPrepare: () => controller.abort() });
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "never shown" }], {
+        signal: controller.signal,
+      }),
+      rejectsWith("aborted"),
+    );
+    assert.equal(host.shown.length, 0);
+    assert.deepEqual(host.discarded, [["never shown", "two", "three"]]);
+    assert.deepEqual(engine.pages, ["one", "two", "three"], "rolled back");
+    assert.equal(edit.state.revision, 0);
+  });
+
+  it("takes the page count from the renderer and reports an engine that disagrees", async () => {
+    const { session: edit, host, apply } = session({}, { reportPageCount: 9 });
+    const receipt = await apply([{ op: "insertPage", index: 1, text: "x" }]);
+    assert.equal(receipt.pageCount, 9);
+    assert.equal(edit.state.pageCount, 9);
+    assert.equal(receipt.warnings.at(-1)?.code, "fidelity-degraded");
+    assert.deepEqual(receipt.warnings.at(-1)?.details, {
+      engine: 4,
+      renderer: 9,
+    });
+    const change = host.events.find((entry) => entry.type === "documentchange")
+      ?.event as { pageCount: number };
+    assert.equal(change.pageCount, 9);
+  });
+});

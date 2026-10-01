@@ -264,7 +264,11 @@ export class SpreadsheetViewport {
   }
 
   /** Sheets are not editable yet, so new content is treated as a new document. */
-  replaceDocument(info: DocumentInfo): void {
+  replaceDocument(
+    info: DocumentInfo,
+    _changedPages?: readonly number[],
+    _revision?: number,
+  ): void {
     this.setDocument(info);
   }
 

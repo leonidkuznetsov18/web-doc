@@ -1,5 +1,9 @@
 import { linkedAbortController } from "../abort.js";
-import type { ResourceLimits, ViewerEventMap } from "../contracts.js";
+import type {
+  ResourceLimits,
+  ViewerEventMap,
+  ViewerWarning,
+} from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
 import type { EditEngine, EngineChange } from "./engine.js";
 import { EditHistory, type HistoryEntry } from "./history.js";
@@ -32,12 +36,37 @@ import type {
 export interface EditSessionHost {
   readonly format: EditableFormat;
   readonly limits: ResourceLimits;
-  /** Shows `bytes` as the current document and returns its page count. */
-  replaceDocument(bytes: Uint8Array, signal: AbortSignal): Promise<number>;
+  /** Opens `bytes` next to the current document; may fail or be aborted. */
+  prepareDocument(
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<PreparedDocument>;
+  /**
+   * Shows a prepared document: synchronous, cannot fail, and returns the page
+   * count the renderer reports. `changedPages` lets the viewer repaint only
+   * what changed.
+   */
+  commitDocument(
+    prepared: PreparedDocument,
+    changedPages: readonly number[],
+  ): number;
+  /** Releases a preparation that will not be shown. */
+  discardDocument(prepared: PreparedDocument): void;
   emit<K extends "editstatechange" | "documentchange">(
     type: K,
     event: ViewerEventMap[K],
   ): void;
+}
+
+/** What `prepareDocument` hands back; hosts attach their own handle to it. */
+export interface PreparedDocument {
+  readonly pageCount: number;
+}
+
+/** What a transaction showed: the bytes and the renderer's page count. */
+interface Shown {
+  readonly bytes: Uint8Array;
+  readonly pageCount: number;
 }
 
 type FailureStage = "apply" | "materialize" | "reopen";
@@ -126,7 +155,10 @@ export class EditSessionController implements EditSessionBase<
           await this.#engine.restore(this.#history.applied(), signal);
           return result;
         });
-        return this.#receipt(true, batch.length, change.createdIds, change);
+        return this.#receipt(true, batch.length, change.createdIds, {
+          ...change,
+          pageCount: change.pageCount ?? this.#history.pageCount,
+        });
       }
 
       const before = this.#history.pageCount;
@@ -135,7 +167,10 @@ export class EditSessionController implements EditSessionBase<
         "apply",
         async () => {
           const result = await this.#engine.apply(batch, signal);
-          return { change: result, shown: await this.#show(signal) };
+          return {
+            change: result,
+            shown: await this.#show(signal, result.changedPages),
+          };
         },
       );
       this.#history.push({
@@ -143,10 +178,14 @@ export class EditSessionController implements EditSessionBase<
         ...(options.label === undefined ? {} : { label: options.label }),
         changedPages: change.changedPages,
         pageCountBefore: before,
-        pageCountAfter: change.pageCount,
+        pageCountAfter: shown.pageCount,
       });
-      this.#commit("apply", change.changedPages, change.pageCount, shown);
-      return this.#receipt(false, batch.length, change.createdIds, change);
+      this.#commit("apply", change.changedPages, shown);
+      return this.#receipt(false, batch.length, change.createdIds, {
+        ...change,
+        pageCount: shown.pageCount,
+        warnings: [...change.warnings, ...pageCountWarning(change, shown)],
+      });
     });
   }
 
@@ -155,14 +194,17 @@ export class EditSessionController implements EditSessionBase<
       this.#assertRevision(options);
       const entry = this.#history.undoEntry;
       if (!entry) return this.#noop();
-      const shown = await this.#moveTo(this.#history.position - 1, signal);
+      const changedPages = pagesTouched(entry, entry.pageCountBefore);
+      const shown = await this.#moveTo(
+        this.#history.position - 1,
+        changedPages,
+        signal,
+      );
       this.#history.undo();
-      const pageCount = entry.pageCountBefore;
-      const changedPages = pagesTouched(entry, pageCount);
-      this.#commit("undo", changedPages, pageCount, shown);
+      this.#commit("undo", changedPages, shown);
       return this.#receipt(false, entry.operations.length, [], {
         changedPages,
-        pageCount,
+        pageCount: shown.pageCount,
         warnings: [],
       });
     });
@@ -173,14 +215,17 @@ export class EditSessionController implements EditSessionBase<
       this.#assertRevision(options);
       const entry = this.#history.redoEntry;
       if (!entry) return this.#noop();
-      const shown = await this.#moveTo(this.#history.position + 1, signal);
+      const changedPages = pagesTouched(entry, entry.pageCountAfter);
+      const shown = await this.#moveTo(
+        this.#history.position + 1,
+        changedPages,
+        signal,
+      );
       this.#history.redo();
-      const pageCount = entry.pageCountAfter;
-      const changedPages = pagesTouched(entry, pageCount);
-      this.#commit("redo", changedPages, pageCount, shown);
+      this.#commit("redo", changedPages, shown);
       return this.#receipt(false, entry.operations.length, [], {
         changedPages,
-        pageCount,
+        pageCount: shown.pageCount,
         warnings: [],
       });
     });
@@ -192,19 +237,20 @@ export class EditSessionController implements EditSessionBase<
       const applied = this.#history.applied();
       if (this.#history.stateId === 0 && this.#history.isPristine)
         return this.#noop();
+      const changedPages = allPages(
+        Math.max(this.#originalPageCount, this.#history.pageCount),
+      );
       const shown = await this.#transaction(signal, "apply", async () => {
         await this.#engine.restore([], signal);
-        return this.#show(signal);
+        return this.#show(signal, changedPages);
       });
       this.#history.clear();
-      const pageCount = this.#originalPageCount;
-      const changedPages = allPages(pageCount);
-      this.#commit("reset", changedPages, pageCount, shown);
+      this.#commit("reset", changedPages, shown);
       return this.#receipt(
         false,
         applied.reduce((count, batch) => count + batch.length, 0),
         [],
-        { changedPages, pageCount, warnings: [] },
+        { changedPages, pageCount: shown.pageCount, warnings: [] },
       );
     });
   }
@@ -382,8 +428,16 @@ export class EditSessionController implements EditSessionBase<
     }
   }
 
-  /** Materializes the working copy and shows it in the viewer; returns the bytes shown. */
-  async #show(signal: AbortSignal): Promise<Uint8Array> {
+  /**
+   * Materializes the working copy and shows it in the viewer in two phases:
+   * the preparation may fail or be aborted and is then discarded; the commit
+   * is synchronous and cannot fail, so once it ran the call completes
+   * whatever its signal says.
+   */
+  async #show(
+    signal: AbortSignal,
+    changedPages: readonly number[],
+  ): Promise<Shown> {
     let bytes: Uint8Array;
     try {
       bytes = await this.#engine.materialize(signal);
@@ -391,19 +445,30 @@ export class EditSessionController implements EditSessionBase<
       throw stageError("materialize", error);
     }
     throwIfAborted(signal);
+    let prepared: PreparedDocument;
     try {
-      await this.#host.replaceDocument(bytes, signal);
+      prepared = await this.#host.prepareDocument(bytes, signal);
     } catch (error) {
       throw stageError("reopen", error);
     }
-    throwIfAborted(signal);
-    return bytes;
+    if (signal.aborted) {
+      this.#host.discardDocument(prepared);
+      throw abortError();
+    }
+    return {
+      bytes,
+      pageCount: this.#host.commitDocument(prepared, changedPages),
+    };
   }
 
-  async #moveTo(position: number, signal: AbortSignal): Promise<Uint8Array> {
+  async #moveTo(
+    position: number,
+    changedPages: readonly number[],
+    signal: AbortSignal,
+  ): Promise<Shown> {
     return this.#transaction(signal, "apply", async () => {
       await this.#engine.restore(this.#history.batchesAt(position), signal);
-      return this.#show(signal);
+      return this.#show(signal, changedPages);
     });
   }
 
@@ -427,10 +492,9 @@ export class EditSessionController implements EditSessionBase<
   #commit(
     reason: DocumentChangeReason,
     changedPages: readonly number[],
-    pageCount: number,
-    shown: Uint8Array,
+    shown: Shown,
   ): void {
-    this.#committedBytes = shown;
+    this.#committedBytes = shown.bytes;
     this.#revision += 1;
     this.#state = this.#snapshot();
     this.#emitState();
@@ -439,7 +503,7 @@ export class EditSessionController implements EditSessionBase<
       revision: this.#revision,
       reason,
       changedPages: Object.freeze([...changedPages]),
-      pageCount,
+      pageCount: shown.pageCount,
     });
   }
 
@@ -489,8 +553,10 @@ export class EditSessionController implements EditSessionBase<
     dryRun: boolean,
     operationCount: number,
     createdIds: readonly string[],
-    change: Pick<EngineChange, "changedPages" | "pageCount" | "warnings"> &
-      Partial<Pick<EngineChange, "removedIds" | "remappedIds">>,
+    change: Pick<EngineChange, "changedPages" | "warnings"> &
+      Partial<Pick<EngineChange, "removedIds" | "remappedIds">> & {
+        readonly pageCount: number;
+      },
   ): EditReceipt {
     return Object.freeze({
       sessionId: this.sessionId,
@@ -589,6 +655,22 @@ function pagesTouched(entry: HistoryEntry, pageCount: number): number[] {
 
 function allPages(pageCount: number): number[] {
   return Array.from({ length: pageCount }, (_, index) => index);
+}
+
+/** The renderer owns the page count; an engine that disagrees is reported, not trusted. */
+function pageCountWarning(
+  change: EngineChange,
+  shown: Shown,
+): readonly ViewerWarning[] {
+  if (change.pageCount === undefined || change.pageCount === shown.pageCount)
+    return [];
+  return [
+    {
+      code: "fidelity-degraded",
+      message: `The engine reports ${change.pageCount} pages but the renderer shows ${shown.pageCount}`,
+      details: { engine: change.pageCount, renderer: shown.pageCount },
+    },
+  ];
 }
 
 /** 128 random bits as URL-safe base64; unique across sessions and reloads. */

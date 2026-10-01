@@ -57,7 +57,9 @@ async function pdfSession(
   const host: EditSessionHost = {
     format: "pdf",
     limits: defaultResourceLimits,
-    replaceDocument: (bytes) => pageCountOf(bytes),
+    prepareDocument: async (bytes) => ({ pageCount: await pageCountOf(bytes) }),
+    commitDocument: (prepared) => prepared.pageCount,
+    discardDocument: () => {},
     emit: () => {},
   };
   const core = new EditSessionController(

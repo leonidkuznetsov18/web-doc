@@ -52,7 +52,8 @@ export interface EngineChange {
   readonly remappedIds?: Readonly<Record<string, string>>;
   /** A superset of the pages whose content changed. */
   readonly changedPages: readonly number[];
-  readonly pageCount: number;
+  /** Optional: the core takes the count from the renderer and only cross-checks this. */
+  readonly pageCount?: number;
   readonly warnings: readonly ViewerWarning[];
 }
 
