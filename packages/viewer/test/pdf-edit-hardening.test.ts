@@ -148,7 +148,7 @@ describe("PDF sessions", () => {
         (await session.getElements({ kinds: ["textBox"] })).length,
         0,
       );
-      assert.deepEqual(await session.save(), original);
+      assert.deepEqual((await session.save()).bytes, original);
 
       const real = await session.insertTextBox(fields);
       assert.deepEqual(real, { ...dry, revision: 1, dryRun: false });
@@ -184,8 +184,8 @@ describe("PDF sessions", () => {
         await session.rotatePage({ pageIndex: 1, rotation: 90 });
         await session.undo();
       }
-      const bytesA = await a.session.save();
-      const bytesB = await b.session.save();
+      const bytesA = (await a.session.save()).bytes;
+      const bytesB = (await b.session.save()).bytes;
       assert.deepEqual(bytesA, bytesB);
       assert.ok(bytesA.length > original.length);
     } finally {

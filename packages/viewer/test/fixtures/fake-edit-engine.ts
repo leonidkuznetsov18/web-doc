@@ -286,6 +286,8 @@ export interface FakeHostOptions {
   readonly limits?: Partial<ResourceLimits>;
   /** Throw from `replaceDocument` while true. */
   failReplace?: boolean;
+  /** Throw from `emit` while true, like a host listener with a bug. */
+  failEmit?: boolean;
 }
 
 export class FakeHost implements EditSessionHost {
@@ -313,6 +315,7 @@ export class FakeHost implements EditSessionHost {
     event: ViewerEventMap[K],
   ): void {
     this.events.push({ type, event });
+    if (this.options.failEmit) throw new Error("listener exploded");
   }
 
   get eventTypes(): string[] {

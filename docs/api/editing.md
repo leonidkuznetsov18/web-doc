@@ -150,12 +150,13 @@ element gets its id in the same session.
 
 ## History and saving
 
-| Method    | Effect                                                                                                                                                         |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `undo()`  | Reverts the latest batch. With nothing to undo it resolves with a no-op receipt (`operationCount: 0`, same revision).                                          |
-| `redo()`  | Re-applies the batch undone last. A new `apply()` after an undo drops the redo tail.                                                                           |
-| `reset()` | Returns to the original bytes and clears the history. It cannot be undone; `save()` first if that matters.                                                     |
-| `save()`  | Returns the bytes of the current state and marks it as saved; without changes the bytes equal the original file. Neither the revision nor the document change. |
+| Method                  | Effect                                                                                                                                                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `undo()`                | Reverts the latest batch. With nothing to undo it resolves with a no-op receipt (`operationCount: 0`, same revision).                                                                                                                                      |
+| `redo()`                | Re-applies the batch undone last. A new `apply()` after an undo drops the redo tail.                                                                                                                                                                       |
+| `reset()`               | Returns to the original bytes and clears the history. It cannot be undone; `save()` first if that matters.                                                                                                                                                 |
+| `save()`                | Returns `{ bytes, stateToken, sessionId, revision }` for the current state; without changes the bytes equal the original file. Pure: neither the revision, the document nor `dirty` change.                                                                |
+| `markSaved(stateToken)` | Records that the host persisted the state a `save()` token names. `dirty` becomes false when the current content is that state — compared by content, so undoing back to a saved state is clean too. A token from another session is reported and ignored. |
 
 Each of `undo`, `redo` and `reset` accepts `expectedRevision` and a `signal`.
 The history keeps `maxEditHistory` batches (default 200); older ones are folded
@@ -168,9 +169,17 @@ and undoing back to revision 0 produces the original bytes.
 for the whole session; saving is the host's job:
 
 ```ts
-const bytes = await session.save();
+const { bytes, stateToken } = await session.save();
 await upload(new Blob([bytes], { type: "application/pdf" }));
+session.markSaved(stateToken); // only once the upload succeeded
 ```
+
+A session whose recovery failed (`edit-failed` with `details.recovered: false`)
+still answers `save()` with the bytes of its last committed state, so nothing
+the user saw is lost. Listeners are isolated: an exception thrown by an event
+listener is reported through `reportError` and never rejects the call that
+emitted the event. When a session ends, calls still queued reject with
+`aborted`; calls made afterwards reject with `lifecycle-error`.
 
 ## Inspecting the document
 

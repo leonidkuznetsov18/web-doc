@@ -305,7 +305,7 @@ test("pdf editing walk-through", async ({ page }) => {
 
   const saved = await page.evaluate(async () => {
     const session = await window.__demo.viewer.edit();
-    const bytes: Uint8Array = await session.save();
+    const { bytes }: { bytes: Uint8Array } = await session.save();
     return { bytes: Array.from(bytes), revision: session.state.revision };
   });
   await mount(page, Uint8Array.from(saved.bytes));

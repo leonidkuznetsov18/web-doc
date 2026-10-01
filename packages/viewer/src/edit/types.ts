@@ -177,7 +177,7 @@ export interface EditState {
   readonly sessionId: string;
   /** Starts at 0 and grows by one with every applied change (apply, undo, redo, reset). */
   readonly revision: number;
-  /** True when the content differs from the last `save()` result, or from the original. */
+  /** True while the content differs from the state last given to `markSaved()`, or from the original. */
   readonly dirty: boolean;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
@@ -275,8 +275,10 @@ export interface EditSessionBase<
   redo(options?: HistoryOptions): Promise<EditReceipt>;
   /** Drops every change and returns to the original bytes. Cannot be undone. */
   reset(options?: HistoryOptions): Promise<EditReceipt>;
-  /** Bytes of the current state; marks this state as saved. */
-  save(options?: SaveOptions): Promise<Uint8Array>;
+  /** Bytes of the current state. Pure: changes neither the state nor `dirty`. */
+  save(options?: SaveOptions): Promise<SavedDocument>;
+  /** Tells the session the host has persisted the state named by `stateToken`. */
+  markSaved(stateToken: string): void;
 
   getElements(query?: ElementQuery): Promise<readonly TElement[]>;
   getElement(id: string): Promise<TElement | undefined>;

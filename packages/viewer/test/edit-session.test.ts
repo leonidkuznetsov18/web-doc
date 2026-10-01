@@ -398,15 +398,20 @@ describe("EditSessionController", () => {
     assert.deepEqual(host.current, ["one", "two", "three"]);
   });
 
-  it("tracks dirty across save, undo and reset", async () => {
+  it("tracks dirty across save, markSaved, undo and reset", async () => {
     const { session: edit, host, apply } = session();
-    assert.deepEqual(await edit.save(), original);
+    const clean = await edit.save();
+    assert.deepEqual(clean.bytes, original);
+    assert.equal(clean.sessionId, edit.sessionId);
+    assert.equal(clean.revision, 0);
     assert.equal(edit.state.dirty, false);
 
     await apply([{ op: "setText", pageIndex: 0, text: "a" }]);
     assert.equal(edit.state.dirty, true);
     const saved = await edit.save();
-    assert.deepEqual(decodePages(saved), ["a", "two", "three"]);
+    assert.deepEqual(decodePages(saved.bytes), ["a", "two", "three"]);
+    assert.equal(edit.state.dirty, true, "save() is pure");
+    edit.markSaved(saved.stateToken);
     assert.equal(edit.state.dirty, false);
     assert.equal(edit.state.revision, 1);
     const stateEvents = host.events.filter(
@@ -421,9 +426,9 @@ describe("EditSessionController", () => {
     assert.equal(edit.state.dirty, false);
     await edit.reset();
     assert.equal(edit.state.dirty, true);
-    await edit.save();
+    edit.markSaved((await edit.save()).stateToken);
     assert.equal(edit.state.dirty, false);
-    // apply, save, undo, redo, reset, save; the first save changed nothing.
+    // apply, markSaved, undo, redo, reset, markSaved; saves change nothing.
     assert.equal(
       host.events.filter((entry) => entry.type === "editstatechange").length,
       6,
@@ -437,10 +442,13 @@ describe("EditSessionController", () => {
       await edit.apply([{ op: "setText", pageIndex: 1, text: "same" }]);
       await edit.apply([{ op: "insertPage", index: 0, text: "front" }]);
     }
-    assert.deepEqual(await first.session.save(), await second.session.save());
+    assert.deepEqual(
+      (await first.session.save()).bytes,
+      (await second.session.save()).bytes,
+    );
     await first.session.undo();
     await first.session.undo();
-    assert.deepEqual(await first.session.save(), original);
+    assert.deepEqual((await first.session.save()).bytes, original);
   });
 
   it("answers element and text queries through the engine", async () => {
@@ -529,5 +537,91 @@ describe("session identity (revision 2)", () => {
       edit.undo({ expectedSessionId: other }),
       rejectsWith("edit-conflict"),
     );
+  });
+});
+
+describe("session fixes (revision 2)", () => {
+  const quiet = async (work: () => Promise<void>) => {
+    const { error } = console;
+    console.error = () => {};
+    try {
+      await work();
+    } finally {
+      console.error = error;
+    }
+  };
+
+  it("applies the batch as it was when apply() was called", async () => {
+    const { host, apply } = session();
+    const operations = [{ op: "setText", pageIndex: 0, text: "as called" }];
+    const earlier = apply([{ op: "setText", pageIndex: 1, text: "first" }]);
+    const later = apply(operations);
+    operations[0]!.text = "mutated while queued";
+    operations.push({ op: "setText", pageIndex: 2, text: "extra" });
+    await Promise.all([earlier, later]);
+    assert.deepEqual(host.current, ["as called", "first", "three"]);
+  });
+
+  it("isolates throwing listeners from the call that emitted", async () => {
+    const { session: edit, host, apply } = session({}, { failEmit: true });
+    await quiet(async () => {
+      const receipt = await apply([{ op: "setText", pageIndex: 0, text: "x" }]);
+      assert.equal(receipt.revision, 1);
+      assert.equal(edit.state.revision, 1);
+      assert.deepEqual(host.current, ["x", "two", "three"]);
+      assert.deepEqual(host.eventTypes, ["editstatechange", "documentchange"]);
+      // A second apply works too: the first one was committed exactly once.
+      await apply([{ op: "setText", pageIndex: 0, text: "y" }]);
+      assert.equal(edit.state.revision, 2);
+    });
+  });
+
+  it("cancels queued calls with aborted when the session ends", async () => {
+    const { session: edit, apply } = session();
+    const pending = apply([{ op: "hang" }]);
+    const queued = apply([{ op: "setText", pageIndex: 0, text: "x" }]);
+    const read = edit.getElements();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await edit.end();
+    await assert.rejects(pending, rejectsWith("aborted"));
+    await assert.rejects(queued, rejectsWith("aborted"));
+    await assert.rejects(read, rejectsWith("aborted"));
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }]),
+      rejectsWith("lifecycle-error"),
+    );
+  });
+
+  it("compares markSaved tokens by content state and ignores foreign ones", async () => {
+    const { session: edit, apply } = session();
+    await apply([{ op: "setText", pageIndex: 0, text: "a" }]);
+    const saved = await edit.save();
+    await apply([{ op: "setText", pageIndex: 0, text: "b" }]);
+    edit.markSaved(saved.stateToken);
+    assert.equal(edit.state.dirty, true, "a stale token keeps dirty");
+    await edit.undo();
+    assert.equal(edit.state.dirty, false, "back at the saved state");
+    await quiet(async () => {
+      edit.markSaved("otherSession:1");
+      edit.markSaved("garbage");
+    });
+    assert.equal(edit.state.dirty, false);
+    await edit.redo();
+    assert.equal(edit.state.dirty, true);
+  });
+
+  it("still saves the last committed bytes after a failed recovery", async () => {
+    const { session: edit, engine, host, apply } = session();
+    await apply([{ op: "setText", pageIndex: 0, text: "kept" }]);
+    engine.options.failRestore = true;
+    await assert.rejects(apply([{ op: "fail" }]), rejectsWith("edit-failed"));
+    assert.equal(edit.usable, false);
+    const saved = await edit.save();
+    assert.deepEqual(decodePages(saved.bytes), ["kept", "two", "three"]);
+    assert.deepEqual(decodePages(saved.bytes), host.current);
+    assert.equal(saved.revision, 1);
+    edit.markSaved(saved.stateToken);
+    assert.equal(edit.state.dirty, false);
+    await assert.rejects(edit.getElements(), rejectsWith("edit-failed"));
   });
 });

@@ -138,7 +138,7 @@ describe("PDF edit engine over the worker protocol", () => {
       const pdf: PdfEditSession = narrowed;
       assert.equal(pdf.schemas.format, "pdf");
     }
-    assert.deepEqual(await session.save(), original);
+    assert.deepEqual((await session.save()).bytes, original);
     assert.equal(session.state.dirty, false);
     await assert.rejects(
       session.apply([{ op: "nope" } as never]),
@@ -155,7 +155,7 @@ describe("PDF edit engine over the worker protocol", () => {
     const replacement = await viewer.edit();
     assert.notEqual(replacement, session);
     assert.equal(pairs.length, 2);
-    assert.deepEqual(await replacement.save(), original);
+    assert.deepEqual((await replacement.save()).bytes, original);
 
     await viewer.close();
     assert.equal(pairs[1]!.terminated(), true);

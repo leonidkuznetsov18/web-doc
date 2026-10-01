@@ -775,14 +775,14 @@ isolation; queued calls reject with `aborted` on `end()`; pure `save()` and
 
 **Acceptance criteria:**
 
-- [ ] A batch mutated after `apply()` is applied as it was; a throwing listener
+- [x] A batch mutated after `apply()` is applied as it was; a throwing listener
       never rejects a committed call; `end()` rejects queued calls with
       `aborted`; `markSaved` with a stale token keeps `dirty`; a broken session
       returns the last committed bytes.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`edit-session.test.ts`)
+- [x] `npm run test --workspace web-doc` (`edit-session.test.ts`)
 
 **Dependencies:** Task 23
 

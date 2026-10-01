@@ -1291,7 +1291,16 @@ export class DocumentViewer implements ViewerApi {
     event: ViewerEventMap[K],
   ): void {
     for (const listener of this.#listeners.get(type) ?? [])
-      listener(event as never);
+      try {
+        listener(event as never);
+      } catch (error) {
+        // A listener's bug is its own; it never fails the call that emitted.
+        const report = (
+          globalThis as { reportError?: (error: unknown) => void }
+        ).reportError;
+        if (report) report(error);
+        else console.error(error);
+      }
   }
 }
 

@@ -9,6 +9,7 @@ import type {
   HistoryOptions,
   OperationSchemaSet,
   PagePoint,
+  SavedDocument,
   SaveOptions,
   TextTarget,
 } from "../types.js";
@@ -85,8 +86,12 @@ export class PdfSession implements PdfEditSession {
     return this.#core.reset(options);
   }
 
-  save(options?: SaveOptions): Promise<Uint8Array> {
+  save(options?: SaveOptions): Promise<SavedDocument> {
     return this.#core.save(options);
+  }
+
+  markSaved(stateToken: string): void {
+    this.#core.markSaved(stateToken);
   }
 
   getElements(query?: ElementQuery): Promise<readonly PdfElement[]> {

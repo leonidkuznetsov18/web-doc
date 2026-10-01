@@ -59,7 +59,7 @@ test("starts the PDFium worker only on edit() and saves the untouched original",
     );
     const session = await viewer.edit();
     const again = await viewer.edit();
-    const saved: Uint8Array = await session.save();
+    const { bytes: saved }: { bytes: Uint8Array } = await session.save();
     const identical =
       saved.length === expected.length &&
       saved.every((byte: number, index: number) => byte === expected[index]);
@@ -120,7 +120,7 @@ test("inserts and edits a text box, re-renders, saves and reloads it", async ({
     await session.undo();
     const textAfterUndo: string = await viewer.getPageText(0);
     await session.redo();
-    const saved: Uint8Array = await session.save();
+    const { bytes: saved }: { bytes: Uint8Array } = await session.save();
 
     const { ViewerClient } = (await import("/main.js")) as any;
     const fresh = ViewerClient.create({
@@ -450,7 +450,7 @@ test("warns once when a signed PDF is edited and keeps its bytes", async ({
       target: first.createdIds[0],
       text: "Changed",
     });
-    const saved: Uint8Array = await session.save();
+    const { bytes: saved }: { bytes: Uint8Array } = await session.save();
     return {
       firstCodes: first.warnings.map(
         (warning: { code: string }) => warning.code,

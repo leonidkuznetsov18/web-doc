@@ -23,6 +23,7 @@ import type {
   HistoryOptions,
   OperationSchemaSet,
   PagePoint,
+  SavedDocument,
   SaveOptions,
   TextTarget,
 } from "./types.js";
@@ -59,6 +60,8 @@ export class EditSessionController implements EditSessionBase<
   readonly #originalPageCount: number;
   readonly #ending = new AbortController();
   readonly sessionId = newSessionId();
+  /** Bytes of the last committed state; what the viewer shows and what a broken session saves. */
+  #committedBytes: Uint8Array;
   #state: EditState;
   #queue: Promise<unknown> = Promise.resolve();
   #revision = 0;
@@ -78,6 +81,7 @@ export class EditSessionController implements EditSessionBase<
     this.#engine = engine;
     this.#host = host;
     this.#original = original;
+    this.#committedBytes = original;
     this.#originalPageCount = originalPageCount;
     this.#history = new EditHistory(
       host.limits.maxEditHistory,
@@ -101,12 +105,16 @@ export class EditSessionController implements EditSessionBase<
     operations: readonly EditOperation[],
     options: ApplyOptions = {},
   ): Promise<EditReceipt> {
+    // Copied before the call is queued, so what the engine sees is what the
+    // caller passed, whatever it does to its objects while waiting.
+    const batch = Array.isArray(operations)
+      ? freezeOperations(operations)
+      : operations;
     return this.#enqueue(options.signal, async (signal) => {
       this.#assertRevision(options);
-      assertBatchSize(operations, this.#host.limits.maxEditOperations);
-      const shapeIssues = checkOperations(operations, this.schemas);
+      assertBatchSize(batch, this.#host.limits.maxEditOperations);
+      const shapeIssues = checkOperations(batch, this.schemas);
       if (shapeIssues.length > 0) throw invalidOperationError(shapeIssues);
-      const batch = freezeOperations(operations);
       const engineIssues = await this.#engine.validate(batch, signal);
       throwIfAborted(signal);
       if (engineIssues.length > 0) throw invalidOperationError(engineIssues);
@@ -122,11 +130,14 @@ export class EditSessionController implements EditSessionBase<
       }
 
       const before = this.#history.pageCount;
-      const change = await this.#transaction(signal, "apply", async () => {
-        const result = await this.#engine.apply(batch, signal);
-        await this.#show(signal);
-        return result;
-      });
+      const { change, shown } = await this.#transaction(
+        signal,
+        "apply",
+        async () => {
+          const result = await this.#engine.apply(batch, signal);
+          return { change: result, shown: await this.#show(signal) };
+        },
+      );
       this.#history.push({
         operations: batch,
         ...(options.label === undefined ? {} : { label: options.label }),
@@ -134,7 +145,7 @@ export class EditSessionController implements EditSessionBase<
         pageCountBefore: before,
         pageCountAfter: change.pageCount,
       });
-      this.#commit("apply", change.changedPages, change.pageCount);
+      this.#commit("apply", change.changedPages, change.pageCount, shown);
       return this.#receipt(false, batch.length, change.createdIds, change);
     });
   }
@@ -144,11 +155,11 @@ export class EditSessionController implements EditSessionBase<
       this.#assertRevision(options);
       const entry = this.#history.undoEntry;
       if (!entry) return this.#noop();
-      await this.#moveTo(this.#history.position - 1, signal);
+      const shown = await this.#moveTo(this.#history.position - 1, signal);
       this.#history.undo();
       const pageCount = entry.pageCountBefore;
       const changedPages = pagesTouched(entry, pageCount);
-      this.#commit("undo", changedPages, pageCount);
+      this.#commit("undo", changedPages, pageCount, shown);
       return this.#receipt(false, entry.operations.length, [], {
         changedPages,
         pageCount,
@@ -162,11 +173,11 @@ export class EditSessionController implements EditSessionBase<
       this.#assertRevision(options);
       const entry = this.#history.redoEntry;
       if (!entry) return this.#noop();
-      await this.#moveTo(this.#history.position + 1, signal);
+      const shown = await this.#moveTo(this.#history.position + 1, signal);
       this.#history.redo();
       const pageCount = entry.pageCountAfter;
       const changedPages = pagesTouched(entry, pageCount);
-      this.#commit("redo", changedPages, pageCount);
+      this.#commit("redo", changedPages, pageCount, shown);
       return this.#receipt(false, entry.operations.length, [], {
         changedPages,
         pageCount,
@@ -181,14 +192,14 @@ export class EditSessionController implements EditSessionBase<
       const applied = this.#history.applied();
       if (this.#history.stateId === 0 && this.#history.isPristine)
         return this.#noop();
-      await this.#transaction(signal, "apply", async () => {
+      const shown = await this.#transaction(signal, "apply", async () => {
         await this.#engine.restore([], signal);
-        await this.#show(signal);
+        return this.#show(signal);
       });
       this.#history.clear();
       const pageCount = this.#originalPageCount;
       const changedPages = allPages(pageCount);
-      this.#commit("reset", changedPages, pageCount);
+      this.#commit("reset", changedPages, pageCount, shown);
       return this.#receipt(
         false,
         applied.reduce((count, batch) => count + batch.length, 0),
@@ -198,19 +209,46 @@ export class EditSessionController implements EditSessionBase<
     });
   }
 
-  save(options: SaveOptions = {}): Promise<Uint8Array> {
-    return this.#enqueue(options.signal, async (signal) => {
-      const bytes =
-        this.#history.stateId === 0
-          ? this.#original.slice()
-          : await this.#engine.materialize(signal);
-      throwIfAborted(signal);
-      const wasDirty = this.#state.dirty;
-      this.#savedStateId = this.#history.stateId;
-      this.#state = this.#snapshot();
-      if (wasDirty !== this.#state.dirty) this.#emitState();
-      return bytes;
-    });
+  save(options: SaveOptions = {}): Promise<SavedDocument> {
+    return this.#enqueue(
+      options.signal,
+      async (signal) => {
+        // A session whose recovery failed still hands out what it last
+        // showed; the history state matches those bytes.
+        const bytes = this.#broken
+          ? this.#committedBytes.slice()
+          : this.#history.stateId === 0
+            ? this.#original.slice()
+            : await this.#engine.materialize(signal);
+        throwIfAborted(signal);
+        return Object.freeze({
+          bytes,
+          stateToken: this.#stateToken(this.#history.stateId),
+          sessionId: this.sessionId,
+          revision: this.#revision,
+        });
+      },
+      { allowBroken: true },
+    );
+  }
+
+  /** Records that the host persisted the state a `save()` token names. */
+  markSaved(stateToken: string): void {
+    const stateId = this.#parseStateToken(stateToken);
+    if (stateId === undefined) {
+      reportError(
+        new ViewerError(
+          "edit-conflict",
+          "The save token belongs to another session",
+          { details: { stateToken, sessionId: this.sessionId } },
+        ),
+      );
+      return;
+    }
+    const wasDirty = this.#state.dirty;
+    this.#savedStateId = stateId;
+    this.#state = this.#snapshot();
+    if (wasDirty !== this.#state.dirty) this.#emitState();
   }
 
   getElements(query: ElementQuery = {}): Promise<readonly EditElement[]> {
@@ -276,9 +314,17 @@ export class EditSessionController implements EditSessionBase<
   #enqueue<T>(
     signal: AbortSignal | undefined,
     task: (signal: AbortSignal) => Promise<T>,
+    options: { readonly allowBroken?: boolean } = {},
   ): Promise<T> {
+    // Calls made after the session ended fail at once; calls still queued
+    // when it ends are cancelled, like any other pending work.
+    if (this.#ended)
+      return Promise.reject(
+        new ViewerError("lifecycle-error", "The edit session has ended"),
+      );
     const run = async (): Promise<T> => {
-      this.#assertAlive();
+      if (this.#ending.signal.aborted) throw abortError();
+      if (!options.allowBroken) this.#assertAlive();
       if (signal?.aborted) throw abortError();
       const controller = linkedAbortController(signal, this.#ending.signal);
       let timedOut = false;
@@ -336,8 +382,8 @@ export class EditSessionController implements EditSessionBase<
     }
   }
 
-  /** Materializes the working copy and shows it in the viewer. */
-  async #show(signal: AbortSignal): Promise<void> {
+  /** Materializes the working copy and shows it in the viewer; returns the bytes shown. */
+  async #show(signal: AbortSignal): Promise<Uint8Array> {
     let bytes: Uint8Array;
     try {
       bytes = await this.#engine.materialize(signal);
@@ -351,12 +397,13 @@ export class EditSessionController implements EditSessionBase<
       throw stageError("reopen", error);
     }
     throwIfAborted(signal);
+    return bytes;
   }
 
-  async #moveTo(position: number, signal: AbortSignal): Promise<void> {
-    await this.#transaction(signal, "apply", async () => {
+  async #moveTo(position: number, signal: AbortSignal): Promise<Uint8Array> {
+    return this.#transaction(signal, "apply", async () => {
       await this.#engine.restore(this.#history.batchesAt(position), signal);
-      await this.#show(signal);
+      return this.#show(signal);
     });
   }
 
@@ -381,17 +428,42 @@ export class EditSessionController implements EditSessionBase<
     reason: DocumentChangeReason,
     changedPages: readonly number[],
     pageCount: number,
+    shown: Uint8Array,
   ): void {
+    this.#committedBytes = shown;
     this.#revision += 1;
     this.#state = this.#snapshot();
     this.#emitState();
-    this.#host.emit("documentchange", {
+    this.#emit("documentchange", {
       sessionId: this.sessionId,
       revision: this.#revision,
       reason,
       changedPages: Object.freeze([...changedPages]),
       pageCount,
     });
+  }
+
+  /** Hands an event to the host; a throwing listener is reported, never propagated. */
+  #emit<K extends "editstatechange" | "documentchange">(
+    type: K,
+    event: ViewerEventMap[K],
+  ): void {
+    try {
+      this.#host.emit(type, event);
+    } catch (error) {
+      reportError(error);
+    }
+  }
+
+  #stateToken(stateId: number): string {
+    return `${this.sessionId}:${stateId}`;
+  }
+
+  #parseStateToken(token: string): number | undefined {
+    const prefix = `${this.sessionId}:`;
+    if (!token.startsWith(prefix)) return undefined;
+    const stateId = Number(token.slice(prefix.length));
+    return Number.isSafeInteger(stateId) && stateId >= 0 ? stateId : undefined;
   }
 
   #snapshot(): EditState {
@@ -406,7 +478,7 @@ export class EditSessionController implements EditSessionBase<
   }
 
   #emitState(active = true): void {
-    this.#host.emit("editstatechange", {
+    this.#emit("editstatechange", {
       ...this.#state,
       active,
       format: this.format,
@@ -528,4 +600,12 @@ function newSessionId(): string {
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
+}
+
+/** Surfaces a listener's exception without failing the call that emitted the event. */
+function reportError(error: unknown): void {
+  const report = (globalThis as { reportError?: (error: unknown) => void })
+    .reportError;
+  if (report) report(error);
+  else console.error(error);
 }
