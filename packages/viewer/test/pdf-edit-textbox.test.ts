@@ -432,12 +432,8 @@ describe("text box edits", () => {
           },
         ])
         .map((issue) => `${issue.operationIndex}${issue.path}:${issue.code}`);
-      assert.deepEqual(issues, [
-        "0/target:unsupported-target",
-        "1/target:unknown-target",
-        "2/target:unsupported-target",
-        "3/rect:range",
-      ]);
+      // Plain text objects accept text and style edits since task 17.
+      assert.deepEqual(issues, ["1/target:unknown-target", "3/rect:range"]);
     } finally {
       reopened.dispose();
     }

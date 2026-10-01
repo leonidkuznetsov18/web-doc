@@ -23,7 +23,8 @@ import {
   type OperationContext,
   type OperationHandler,
 } from "./operations.js";
-import { insertTextBox, replaceText, setTextStyle } from "./text-box.js";
+import { insertTextBox } from "./text-box.js";
+import { replaceText, setTextStyle } from "./existing-text.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import {
@@ -101,7 +102,11 @@ export class PdfEditDocument {
   fontRequests(
     operations: readonly PdfOrUnknownOperation[],
   ): { readonly family: string; readonly text: string }[] {
-    return fontRequestsOf(operations, (id) => this.#locate(id)?.record.mark);
+    return fontRequestsOf(
+      operations,
+      (id) => this.#locate(id)?.record.mark,
+      (id) => this.getElement(id),
+    );
   }
 
   get pageCount(): number {

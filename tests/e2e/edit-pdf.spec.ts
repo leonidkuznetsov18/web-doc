@@ -262,3 +262,36 @@ test("embeds the fallback font for Cyrillic text and fetches it only then", asyn
   expect(result.text).toContain("Привіт, світе!");
   expect(requests).toContain("/fonts/noto-sans-latin-cyrillic.ttf");
 });
+
+test("edits text that already exists in the file", async ({ page }) => {
+  const original = await buildPdf(["Existing"]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    const inPlace = await session.replaceText({
+      target: "p0:o0",
+      text: "Rewritten",
+    });
+    const afterReplace: string = await viewer.getPageText(0);
+    await session.setTextStyle({
+      target: "p0:o0",
+      style: { color: "#ff0000", fontSize: 30 },
+    });
+    const styled = await session.getElement("p0:o0");
+    return {
+      warnings: inPlace.warnings.length,
+      afterReplace,
+      style: styled.textStyle,
+    };
+  });
+  expect(result.warnings).toBe(0);
+  expect(result.afterReplace).toContain("Rewritten");
+  expect(result.style).toEqual({
+    fontFamily: "Helvetica",
+    fontSize: 30,
+    bold: false,
+    italic: false,
+    color: "#ff0000",
+  });
+});

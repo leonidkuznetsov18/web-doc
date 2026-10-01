@@ -547,16 +547,16 @@ fallback replacement with a `font-substitution` warning, and the
 
 **Acceptance criteria:**
 
-- [ ] With a non-subset font the text changes in place; with a subset font
+- [x] With a non-subset font the text changes in place; with a subset font
       lacking a character the object is replaced in the fallback font at the
       same position, size and colour, with a warning.
-- [ ] Unsupported style fields and right-to-left text fail validation with the
+- [x] Unsupported style fields and right-to-left text fail validation with the
       spec's issue codes.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-existing-text.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-existing-text.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 16
 
@@ -571,8 +571,8 @@ fallback replacement with a `font-substitution` warning, and the
 
 ### Checkpoint C: text complete
 
-- [ ] Unit and `edit-pdf.spec.ts` pass; the size report and license gate pass
-- [ ] Undo/redo byte identity holds across every text operation
+- [x] Unit and `edit-pdf.spec.ts` pass; the size report and license gate pass
+- [x] Undo/redo byte identity holds across every text operation
 
 ### Task 18: Shapes
 

@@ -217,6 +217,13 @@ export interface PdfiumFunctions {
     cid: boolean,
   ): number;
   FPDFFont_Close(font: number): void;
+  /** Copies the embedded font program; reports the size needed through `outBytes`. */
+  FPDFFont_GetFontData(
+    font: number,
+    buffer: number,
+    bytes: number,
+    outBytes: number,
+  ): boolean;
   FPDFText_SetText(textObject: number, text: number): boolean;
   FPDFText_LoadPage(page: number): number;
   FPDFText_ClosePage(textPage: number): void;

@@ -1,6 +1,7 @@
 import type { EditOperation, PageRect } from "../../types.js";
 import type {
   InsertTextBoxOperation,
+  PdfElement,
   PdfOperation,
   PdfTextAlign,
   PdfTextBoxStyle,
@@ -74,7 +75,8 @@ export const insertTextBox: OperationHandler<InsertTextBoxOperation> = {
   },
 };
 
-export const replaceText: OperationHandler<ReplaceTextOperation> = {
+/** `replaceText` for a text box: a rebuild from its inputs with new text. */
+export const textBoxReplaceText: OperationHandler<ReplaceTextOperation> = {
   validate(operation, context, issue) {
     const target = textBoxTarget(operation.target, context, issue);
     if (!target) return;
@@ -93,7 +95,8 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
   },
 };
 
-export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
+/** `setTextStyle` for a text box: a rebuild with the merged style. */
+export const textBoxSetTextStyle: OperationHandler<SetTextStyleOperation> = {
   validate(operation, context, issue) {
     const target = textBoxTarget(operation.target, context, issue);
     if (!target) return;
@@ -274,21 +277,23 @@ function warningsFor(
 
 /**
  * The fonts a batch will need: what each operation draws, read from the
- * operation itself or from the text box it rebuilds.
+ * operation itself, from the text box it rebuilds, or from the text object
+ * it may have to replace.
  */
 export function fontRequestsOf(
   operations: readonly EditOperation[],
   markOf: (id: string) => MarkParams | undefined,
+  elementOf: (id: string) => PdfElement | undefined,
 ): { readonly family: string; readonly text: string }[] {
   const requests: { family: string; text: string }[] = [];
+  const spec = (id: string): TextBoxSpec | undefined => {
+    const mark = markOf(id);
+    return mark?.kind === "textBox"
+      ? (mark as unknown as TextBoxSpec)
+      : undefined;
+  };
   for (const raw of operations) {
     const operation = raw as PdfOperation;
-    const spec = (id: string): TextBoxSpec | undefined => {
-      const mark = markOf(id);
-      return mark?.kind === "textBox"
-        ? (mark as unknown as TextBoxSpec)
-        : undefined;
-    };
     switch (operation.op) {
       case "insertTextBox":
         requests.push({
@@ -298,8 +303,16 @@ export function fontRequestsOf(
         break;
       case "replaceText": {
         const box = spec(operation.target);
-        if (box)
+        if (box) {
           requests.push({ family: box.style.fontFamily, text: operation.text });
+          break;
+        }
+        const element = elementOf(operation.target);
+        if (element?.kind === "text")
+          requests.push({
+            family: element.textStyle?.fontFamily ?? "Helvetica",
+            text: operation.text,
+          });
         break;
       }
       case "setTextStyle": {
@@ -325,7 +338,10 @@ export function fontRequestsOf(
   return requests;
 }
 
-function fontRequest(style: TextBoxSpec["style"], text: string): FontRequest {
+export function fontRequest(
+  style: TextBoxSpec["style"],
+  text: string,
+): FontRequest {
   return {
     family: style.fontFamily,
     bold: style.bold,
@@ -334,7 +350,7 @@ function fontRequest(style: TextBoxSpec["style"], text: string): FontRequest {
   };
 }
 
-function validateFont(
+export function validateFont(
   request: FontRequest,
   context: OperationContext,
   issue: Issue,
