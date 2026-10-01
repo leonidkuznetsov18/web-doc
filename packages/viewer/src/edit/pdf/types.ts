@@ -82,6 +82,13 @@ export interface ReplaceTextOperation {
   /** A `textBox` or `text` element. */
   readonly target: string;
   readonly text: string;
+  /**
+   * The part of the target's text to replace, both ends on the target;
+   * absent, the whole text. A text object is split around the range only
+   * when its font cannot draw the new text; the parts keep their font, size,
+   * colour and baseline and the first part keeps the id.
+   */
+  readonly range?: TextRange;
 }
 
 export interface SetTextStyleOperation {

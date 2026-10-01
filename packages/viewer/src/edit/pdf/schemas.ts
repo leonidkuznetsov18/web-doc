@@ -20,6 +20,24 @@ const definitions: Readonly<Record<string, JsonSchema>> = {
   },
   color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
   target: { type: "string", minLength: 1, maxLength: 200 },
+  textPosition: {
+    type: "object",
+    required: ["elementId", "offset"],
+    additionalProperties: false,
+    properties: {
+      elementId: { $ref: "#/$defs/target" },
+      offset: { type: "integer", minimum: 0 },
+    },
+  },
+  textRange: {
+    type: "object",
+    required: ["start", "end"],
+    additionalProperties: false,
+    properties: {
+      start: { $ref: "#/$defs/textPosition" },
+      end: { $ref: "#/$defs/textPosition" },
+    },
+  },
   point: {
     type: "object",
     required: ["x", "y"],
@@ -134,6 +152,7 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       {
         target: { $ref: "#/$defs/target" },
         text: { type: "string", minLength: 1, maxLength: 20000 },
+        range: { $ref: "#/$defs/textRange" },
       },
       ["target", "text"],
     ),

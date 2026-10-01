@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { createPdfEditHandler } from "../../src/edit/pdf/engine/handler.js";
 import { loadPdfEditEngine } from "../../src/edit/pdf/provider.js";
 import { PdfSession } from "../../src/edit/pdf/session.js";
@@ -19,16 +21,33 @@ async function pageCountOf(bytes: Uint8Array): Promise<number> {
   }
 }
 
-/** A PDF session over the loopback worker, with a host that only counts pages. */
+const FALLBACK_URL = "https://fonts.test/noto.ttf";
+let fallbackFont: Uint8Array | undefined;
+
+/**
+ * A PDF session over the loopback worker, with a host that only counts
+ * pages. With `fallbackFont`, the packaged Noto Sans subset answers the
+ * engine's fallback-font fetch; without it no font can be fetched.
+ */
 export async function pdfSession(
   original: Uint8Array,
+  options: { readonly fallbackFont?: boolean } = {},
 ): Promise<{ session: PdfEditSession; end(): Promise<void> }> {
   const signal = new AbortController().signal;
   const pair = loopbackWorker(
     createPdfEditHandler({
       loadPdfium: () => fixturePdfium(),
-      fetchBytes: async () => {
-        throw new Error("no fonts");
+      fetchBytes: async (url) => {
+        if (options.fallbackFont && url === FALLBACK_URL)
+          return (fallbackFont ??= new Uint8Array(
+            readFileSync(
+              new URL(
+                "../../../fonts/noto-sans-latin-cyrillic.ttf",
+                import.meta.url,
+              ),
+            ),
+          ));
+        throw new Error(`No font at ${url}`);
       },
       decodeImage: async () => {
         throw new Error("no images");
@@ -38,7 +57,10 @@ export async function pdfSession(
   const engine = await loadPdfEditEngine(
     original,
     { format: "pdf", limits: defaultResourceLimits, signal },
-    { createWorker: () => pair.worker },
+    {
+      createWorker: () => pair.worker,
+      ...(options.fallbackFont ? { fallbackFontUrl: FALLBACK_URL } : {}),
+    },
   );
   const host: EditSessionHost = {
     format: "pdf",

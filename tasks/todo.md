@@ -1100,18 +1100,17 @@ and tables stay unsupported.
 
 **Acceptance criteria:**
 
-- [ ] Replacing a word in the middle of a Helvetica text object keeps one
+- [x] Replacing a word in the middle of a Helvetica text object keeps one
       object and the other words' glyph boxes; replacing it with Cyrillic
       produces three objects on one baseline whose texts concatenate to the
       expected string, with the tail moved by the advance difference.
-- [ ] A text box with a range reflows; a range outside the text or on a
+- [x] A text box with a range reflows; a range outside the text or on a
       table is refused with the stated codes; the operation's JSON schema
       accepts `range`.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-hardening.test.ts`
-      additions), `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (`test/pdf-edit-replace-range.test.ts`), `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 32
 

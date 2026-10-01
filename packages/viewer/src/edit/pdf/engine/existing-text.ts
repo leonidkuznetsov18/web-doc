@@ -1,3 +1,4 @@
+import type { TextRange } from "../../types.js";
 import type {
   PdfElement,
   ReplaceTextOperation,
@@ -36,12 +37,22 @@ import {
 
 export const replaceText: OperationHandler<ReplaceTextOperation> = {
   validate(operation, context, issue) {
-    if (textBoxTarget(operation.target, context))
-      return textBoxReplaceText.validate(operation, context, issue);
+    const box = textBoxTarget(operation.target, context);
+    if (box) {
+      const spliced = splice(box.spec.text, operation, issue);
+      if (spliced === undefined) return;
+      return textBoxReplaceText.validate(
+        wholeTextOperation(operation, spliced),
+        context,
+        issue,
+      );
+    }
     const target = textTarget(operation.target, context, issue);
     if (!target) return;
+    const whole = splice(target.element.text ?? "", operation, issue);
+    if (whole === undefined) return;
     if (!validateScript(operation.text, issue)) return;
-    if (canKeepFont(context, target, operation.text)) return;
+    if (canKeepFont(context, target, whole)) return;
     const request = {
       family: target.element.textStyle?.fontFamily ?? "Helvetica",
       bold: target.element.textStyle?.bold ?? false,
@@ -56,16 +67,79 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
     if (problem) issue(problem.path, problem.code, problem.message);
   },
   apply(operation, context) {
-    if (textBoxTarget(operation.target, context))
-      return textBoxReplaceText.apply(operation, context);
+    const box = textBoxTarget(operation.target, context);
+    if (box)
+      return textBoxReplaceText.apply(
+        wholeTextOperation(operation, splice(box.spec.text, operation)!),
+        context,
+      );
     const target = textTarget(operation.target, context)!;
-    if (canKeepFont(context, target, operation.text)) {
-      const kept = replaceInPlace(context, target, operation.text);
+    const previous = target.element.text ?? "";
+    const whole = splice(previous, operation)!;
+    if (canKeepFont(context, target, whole)) {
+      const kept = replaceInPlace(context, target, whole);
       if (kept) return result(target.location);
     }
-    return replaceWithFallback(context, target, operation.text);
+    const span = spanOf(operation, previous);
+    const before = previous.slice(0, span.start);
+    const after = previous.slice(span.end);
+    if (!before && !after)
+      return replaceWithFallback(context, target, operation.text);
+    return (
+      splitAround(context, target, before, operation.text, after) ??
+      replaceWithFallback(context, target, whole)
+    );
   },
 };
+
+/** The same operation as a whole-text replacement with `text`. */
+function wholeTextOperation(
+  operation: ReplaceTextOperation,
+  text: string,
+): ReplaceTextOperation {
+  const { range: _range, ...rest } = operation;
+  return { ...rest, text };
+}
+
+/** The target's text with the operation's range replaced; the whole text without one. */
+function splice(
+  previous: string,
+  operation: ReplaceTextOperation,
+  issue: Issue = () => {},
+): string | undefined {
+  const { range } = operation;
+  if (!range) return operation.text;
+  const onTarget = (position: TextRange["start"]): boolean =>
+    position.elementId === operation.target &&
+    Number.isInteger(position.offset) &&
+    position.offset >= 0 &&
+    position.offset <= previous.length;
+  if (
+    !onTarget(range.start) ||
+    !onTarget(range.end) ||
+    range.start.offset > range.end.offset
+  ) {
+    issue(
+      "/range",
+      "invalid-range",
+      `The range must lie inside the target's text (0–${previous.length})`,
+    );
+    return undefined;
+  }
+  const { start, end } = spanOf(operation, previous);
+  return previous.slice(0, start) + operation.text + previous.slice(end);
+}
+
+function spanOf(
+  operation: ReplaceTextOperation,
+  previous: string,
+): { readonly start: number; readonly end: number } {
+  if (!operation.range) return { start: 0, end: previous.length };
+  return {
+    start: operation.range.start.offset,
+    end: operation.range.end.offset,
+  };
+}
 
 export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
   validate(operation, context, issue) {
@@ -252,6 +326,138 @@ function replaceInPlace(
     setText(pdfium, lib.FPDFPage_GetObject(page, index), previous);
   });
   return false;
+}
+
+/**
+ * Splits the object around a replaced span: the parts before and after keep
+ * the object's font, size, colour and baseline, the middle part is drawn in
+ * a font that covers it, and the parts follow each other by their advances.
+ * The first part keeps the element's id. Returns nothing when a part cannot
+ * be written back in the original font, leaving the page as it was.
+ */
+function splitAround(
+  context: OperationContext,
+  target: TextTarget,
+  before: string,
+  middle: string,
+  after: string,
+): OperationResult | undefined {
+  const { pdfium, measurer } = context;
+  const { lib } = pdfium;
+  const { location, element } = target;
+  const style = element.textStyle!;
+  const index = location.indexes[0]!;
+  const fallback = context.fonts.resolve(pdfium, context.document, {
+    family: style.fontFamily,
+    bold: style.bold,
+    italic: style.italic,
+    text: middle,
+  });
+  const createdIds: string[] = [];
+  const written = context.withPage(location.pageIndex, (page) => {
+    const old = lib.FPDFPage_GetObject(page, index);
+    const oldFont = lib.FPDFTextObj_GetFont(old);
+    const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
+      lib.FPDFPageObj_GetMatrix(old, pointer!),
+    ) ?? [1, 0, 0, 1, 0, 0];
+    const size =
+      pdfium.readNumbers(1, "float", ([pointer]) =>
+        lib.FPDFTextObj_GetFontSize(old, pointer!),
+      )?.[0] ?? style.fontSize;
+    const [a, b, c, d, e, f] = matrix as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    const [r, g, bl] = parseColor(style.color);
+    const parts = [
+      { text: before, font: oldFont },
+      { text: middle, font: fallback.handle },
+      { text: after, font: oldFont },
+    ].filter((part) => part.text.length > 0);
+    const objects: number[] = [];
+    let cursor = 0;
+    for (const part of parts) {
+      const object = lib.FPDFPageObj_CreateTextObj(
+        context.document,
+        part.font,
+        size,
+      );
+      if (object) {
+        setText(pdfium, object, part.text);
+        lib.FPDFPageObj_SetFillColor(object, r, g, bl, 255);
+        lib.FPDFPageObj_Transform(
+          object,
+          a,
+          b,
+          c,
+          d,
+          e + cursor * a,
+          f + cursor * b,
+        );
+      }
+      objects.push(object);
+      cursor += measurer.advance(part.font, size, part.text);
+    }
+    // Every part must read back as written, or the original font cannot
+    // encode its share and the whole object goes to the fallback instead.
+    if (objects.some((object) => object === 0)) {
+      for (const object of objects) if (object) lib.FPDFPageObj_Destroy(object);
+      return false;
+    }
+    lib.FPDFPage_RemoveObject(page, old);
+    objects.forEach((object, at) =>
+      lib.FPDFPage_InsertObjectAtIndex(page, object, index + at),
+    );
+    const textPage = lib.FPDFText_LoadPage(page);
+    let faithful = true;
+    try {
+      objects.forEach((object, at) => {
+        const read = pdfium.readWideString((buffer, bytes) =>
+          lib.FPDFTextObj_GetText(object, textPage, buffer, bytes),
+        );
+        // PDFium appends a generated space to an object a gap follows.
+        if (read.trimEnd() !== parts[at]!.text.trimEnd()) faithful = false;
+      });
+    } finally {
+      lib.FPDFText_ClosePage(textPage);
+    }
+    if (!faithful) {
+      for (const object of objects) {
+        lib.FPDFPage_RemoveObject(page, object);
+        lib.FPDFPageObj_Destroy(object);
+      }
+      lib.FPDFPage_InsertObjectAtIndex(page, old, index);
+      return false;
+    }
+    lib.FPDFPageObj_Destroy(old);
+    return true;
+  });
+  if (!written) return undefined;
+  const partCount = [before, middle, after].filter(Boolean).length;
+  const records = Array.from({ length: partCount }, (_, at) => {
+    if (at === 0) return { id: location.record.id, type: OBJECT_TEXT };
+    const id = context.newId(location.pageIndex);
+    createdIds.push(id);
+    return { id, type: OBJECT_TEXT };
+  });
+  context.spliceObjects(location.pageIndex, index, 1, records);
+  return {
+    createdIds,
+    changedPages: [location.pageIndex],
+    warnings: [
+      {
+        code: "font-substitution",
+        message:
+          fallback.substitution ??
+          `${style.fontFamily} cannot draw the new text; ${fallback.family} is used for it`,
+        details: { elementId: location.record.id },
+      },
+    ],
+  };
 }
 
 /** Replaces the object with one in a covering font at the same place, size and colour. */
