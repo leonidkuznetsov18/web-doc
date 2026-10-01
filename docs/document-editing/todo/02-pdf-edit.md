@@ -244,8 +244,11 @@ Which operations an element accepts is listed in its `operations` field:
 - `save()` writes an incremental update: the original bytes followed by the
   appended changes, so earlier signed revisions stay intact. Without changes
   it returns the original bytes without calling PDFium.
-- Output is deterministic. If PDFium writes a random or time-based file
-  identifier, the engine replaces it with one derived from the content.
+- PDFium's incremental section also repeats every object it has parsed, not
+  only the changed ones (see [Spike results](#spike-results)). The engine
+  therefore loads only the pages an operation or a query needs.
+- Output is deterministic; a test guards it (see
+  [Spike results](#spike-results)).
 - A document with digital signatures can be edited; the first change emits a
   `fidelity-degraded` warning saying the signatures do not cover the new
   revision.
@@ -329,6 +332,36 @@ Which operations an element accepts is listed in its `operations` field:
   and stays within the 20 MiB Brotli target; the license gate passes.
 - The PDF editing browser suite passes on Chromium, Firefox and WebKit.
 - `npm run check` passes.
+
+## Spike results
+
+Task 1 of the plan, 2026-10-01, `@embedpdf/pdfium` 2.15.1 in Node 22
+(`packages/viewer/test/pdfium-bridge.test.ts`):
+
+- **WASM in Node.** The package's ESM build runs in Node when the WASM bytes
+  are supplied; instantiation takes about 12 ms. Unit tests can therefore drive
+  the real engine without a browser. The bytes must always be supplied: the
+  package default would fetch the module from a public CDN.
+- **Incremental save works.** `FPDF_SaveAsCopy(document, writer,
+FPDF_INCREMENTAL)` with the wrapper's `PDFiumExt_OpenFileWriter` returns the
+  original bytes followed by an update; the added text reads back after
+  reopening. The update repeats every object PDFium parsed (catalog, page tree,
+  touched page dictionaries and their resources), not only the changed ones.
+- **Deterministic output.** The same edit produced byte-identical files across
+  two WASM instances, across saves a second and a half apart, and within one
+  instance after unrelated allocations. PDFium derives the second `/ID` element
+  without time or heap addresses, and it copies the original `/Info` dictionary
+  instead of stamping a new date. No post-processing of the file id is needed;
+  the determinism test stays as a guard.
+- **Marked content.** A `WebDoc` mark with a JSON string parameter, including
+  non-ASCII text, survives save and reopen and reads back unchanged.
+- **Pages.** Insert, move, rotate and delete all survive an incremental save;
+  a quarter-turned page reports its displayed (swapped) width and height.
+- **Inline JPEG.** `FPDFImageObj_LoadJpegFileInline` works with an
+  `FPDF_FILEACCESS` whose block reader is a WASM table callback created with
+  `addFunction`; the JPEG is embedded without re-encoding.
+- **Not covered yet:** TrueType loading (`FPDFText_LoadFont`) is probed with
+  the fallback font in task 16, and the module worker in Chromium in task 9.
 
 ## Decisions
 

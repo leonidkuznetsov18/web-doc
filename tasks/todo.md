@@ -21,22 +21,22 @@ updates the spec before T9.
 
 **Acceptance criteria:**
 
-- [ ] Opening a PDF and saving it with `FPDF_INCREMENTAL` after adding a
+- [x] Opening a PDF and saving it with `FPDF_INCREMENTAL` after adding a
       standard-font text object yields the original bytes followed by an
       appended update; reopening shows the text. Two runs of the same edit give
       identical bytes, or the cause of any difference is recorded.
-- [ ] A marked-content `WebDoc` tag with a string parameter survives save and
+- [x] A marked-content `WebDoc` tag with a string parameter survives save and
       reopen; page insert, delete, move and rotate survive save and reopen;
       inline JPEG loading through `addFunction` works, or the fallback is
       recorded.
-- [ ] `npm run licenses` passes and `THIRD_PARTY_NOTICES.md` lists PDFium
+- [x] `npm run licenses` passes and `THIRD_PARTY_NOTICES.md` lists PDFium
       (BSD-3-Clause) and the EmbedPDF wrapper (MIT).
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdfium-bridge.test.ts`)
-- [ ] `npm run typecheck --workspace web-doc` and `npm run licenses`
-- [ ] Spec `02-pdf-edit.md` has a "Spike results" section
+- [x] `npm run test --workspace web-doc` (new `pdfium-bridge.test.ts`)
+- [x] `npm run typecheck --workspace web-doc` and `npm run licenses`
+- [x] Spec `02-pdf-edit.md` has a "Spike results" section
 
 **Dependencies:** None
 

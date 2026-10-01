@@ -9,6 +9,15 @@ The release artifact contains or depends on the following principal components. 
   font/CMap handling, canvas rendering, and text extraction. The packaged
   standard-font, ICC, CMap, OpenJPEG, JBIG2, and QCMS assets retain the license
   files distributed with PDF.js under `dist/assets/pdfjs/`.
+- [`@embedpdf/pdfium`](https://github.com/embedpdf/embed-pdf-viewer/tree/main/packages/pdfium) — MIT
+  per the license file and `package.json` of the pinned 2.15.1 tarball (the
+  upstream repository moved to Apache-2.0 on 2026-07-20); loaded only by the
+  PDF edit worker. It bundles [PDFium](https://pdfium.googlesource.com/pdfium/)
+  compiled to WebAssembly — BSD-3-Clause, see `LICENSE.pdfium` in that package —
+  together with the third-party libraries PDFium builds in, such as FreeType
+  (FreeType License), OpenJPEG (BSD-2-Clause), libpng (libpng License), zlib
+  (Zlib License) and Anti-Grain Geometry 2.3, whose notices ship with the
+  PDFium source tree.
 - [`core-js`](https://github.com/zloirock/core-js) compatibility modules embedded in the PDF.js legacy browser build —
   MIT; polyfills required by the supported browser matrix, including the PDF
   worker realm.
