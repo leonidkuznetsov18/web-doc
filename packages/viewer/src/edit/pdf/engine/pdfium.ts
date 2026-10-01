@@ -130,6 +130,10 @@ export interface PdfiumFunctions {
   FPDFFont_GetBaseFontName(font: number, buffer: number, bytes: number): number;
   FPDFFont_GetFlags(font: number): number;
   FPDFFont_GetIsEmbedded(font: number): number;
+  FPDFFont_GetAscent(font: number, fontSize: number, ascent: number): boolean;
+  FPDFFont_GetDescent(font: number, fontSize: number, descent: number): boolean;
+  FPDFPageObj_Destroy(object: number): void;
+  FPDFPage_RemoveObject(page: number, object: number): boolean;
   FPDFFont_GetWeight(font: number): number;
   FPDFText_GetCharBox(
     textPage: number,

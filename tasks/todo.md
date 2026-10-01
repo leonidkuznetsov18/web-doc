@@ -384,15 +384,15 @@ colour, the `WebDoc` mark, the operation's JSON Schema and the typed
 
 **Acceptance criteria:**
 
-- [ ] After `insertTextBox`, save and reopen, PDFium extracts the text, the line
+- [x] After `insertTextBox`, save and reopen, PDFium extracts the text, the line
       positions follow the requested alignment and wrapping, and the element is
       listed as one `textBox` with its style.
-- [ ] Invalid input (empty rect, bad colour, out-of-range size, unknown font)
+- [x] Invalid input (empty rect, bad colour, out-of-range size, unknown font)
       fails with `invalid-operation` issues and changes nothing.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-textbox.test.ts`)
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-textbox.test.ts`)
 
 **Dependencies:** Task 11
 

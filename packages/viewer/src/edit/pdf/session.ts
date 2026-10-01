@@ -11,7 +11,13 @@ import type {
   SaveOptions,
   TextTarget,
 } from "../types.js";
-import type { PdfEditSession, PdfElement, PdfOperation } from "./types.js";
+import type {
+  Fields,
+  InsertTextBoxOperation,
+  PdfEditSession,
+  PdfElement,
+  PdfOperation,
+} from "./types.js";
 
 /**
  * The PDF session: the core session narrowed to PDF operations and elements.
@@ -79,5 +85,12 @@ export class PdfSession implements PdfEditSession {
     options?: EditFindOptions,
   ): Promise<readonly TextTarget[]> {
     return this.#core.findText(query, options);
+  }
+
+  insertTextBox(
+    fields: Fields<InsertTextBoxOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "insertTextBox", ...fields }], options);
   }
 }

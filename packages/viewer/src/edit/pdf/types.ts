@@ -1,4 +1,10 @@
-import type { EditElement, EditSessionBase } from "../types.js";
+import type {
+  ApplyOptions,
+  EditElement,
+  EditReceipt,
+  EditSessionBase,
+  PageRect,
+} from "../types.js";
 
 export type PdfElementKind =
   | "text" // one text object as stored in the file (often a word or a line)
@@ -39,15 +45,42 @@ export interface PdfElement extends EditElement {
   readonly table?: { readonly rows: readonly (readonly string[])[] };
 }
 
-/**
- * The PDF operation union. Operations are added as they ship; a session with
- * no operations accepts only the empty batch.
- */
-export type PdfOperation = never;
+export interface PdfTextBoxStyle {
+  /** "Helvetica" (default), "Times" or "Courier"; registered families follow. */
+  readonly fontFamily?: string;
+  /** 1–500 points, default 12. */
+  readonly fontSize?: number;
+  readonly bold?: boolean;
+  readonly italic?: boolean;
+  /** `#RRGGBB`, default "#000000". */
+  readonly color?: string;
+  readonly align?: PdfTextAlign;
+  /** Multiple of the font size, 0.5–5, default 1.2. */
+  readonly lineHeight?: number;
+}
+
+export interface InsertTextBoxOperation {
+  readonly op: "insertTextBox";
+  readonly pageIndex: number;
+  readonly rect: PageRect;
+  readonly text: string;
+  readonly style?: PdfTextBoxStyle;
+}
+
+/** The PDF operation union; operations are added as they ship. */
+export type PdfOperation = InsertTextBoxOperation;
+
+/** An operation's fields without its `op`, as the typed methods take them. */
+export type Fields<T extends PdfOperation> = Omit<T, "op">;
 
 export interface PdfEditSession extends EditSessionBase<
   PdfOperation,
   PdfElement
 > {
   readonly format: "pdf";
+  /** Lays `text` out inside `rect` as new text objects; the box's id is in `createdIds`. */
+  insertTextBox(
+    fields: Fields<InsertTextBoxOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
 }

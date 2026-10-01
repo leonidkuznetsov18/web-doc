@@ -8,13 +8,20 @@ import type {
   PagePoint,
   TextTarget,
 } from "../../types.js";
-import type { PdfElement } from "../types.js";
+import type { PdfElement, PdfOperation } from "../types.js";
 import {
   readMark,
   scanPage,
   type MarkParams,
   type ObjectRecord,
 } from "./elements.js";
+import { TextMeasurer } from "./fonts.js";
+import {
+  issueCollector,
+  type OperationContext,
+  type OperationHandler,
+} from "./operations.js";
+import { insertTextBox } from "./text-box.js";
 import {
   rectContains,
   rectsIntersect,
@@ -42,10 +49,15 @@ interface PageRecord {
  * Everything a query answers comes from PDFium; the model only remembers
  * identities and caches.
  */
+const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
+  insertTextBox: insertTextBox as OperationHandler,
+};
+
 export class PdfEditDocument {
   readonly #pdfium: Pdfium;
   readonly #original: Uint8Array;
   #document: PdfiumDocument;
+  #measurer: TextMeasurer;
   #pages: PageRecord[];
   #batches = 0;
 
@@ -53,6 +65,7 @@ export class PdfEditDocument {
     this.#pdfium = pdfium;
     this.#original = original;
     this.#document = pdfium.openDocument(original);
+    this.#measurer = new TextMeasurer(pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
   }
 
@@ -64,26 +77,60 @@ export class PdfEditDocument {
     return this.#pdfium;
   }
 
+  /**
+   * Checks a batch against the current document. Operations are checked one
+   * after another against the state before the batch, which is exact for
+   * everything but a page count another operation of the batch changes.
+   */
   validate(operations: readonly EditOperation[]): OperationIssue[] {
-    return operations.map((operation, operationIndex) => ({
-      operationIndex,
-      path: "/op",
-      code: "unknown-operation",
-      message: `Unknown pdf operation ${operation.op}`,
-    }));
+    const issues: OperationIssue[] = [];
+    const context = this.#context(this.#batches + 1, 0);
+    operations.forEach((operation, operationIndex) => {
+      const handler = handlers[operation.op as PdfOperation["op"]];
+      if (!handler) {
+        issues.push({
+          operationIndex,
+          path: "/op",
+          code: "unknown-operation",
+          message: `Unknown pdf operation ${operation.op}`,
+        });
+        return;
+      }
+      handler.validate(
+        operation as PdfOperation,
+        context,
+        issueCollector(operationIndex, issues),
+      );
+    });
+    return issues;
   }
 
   apply(operations: readonly EditOperation[]): EngineChange {
-    if (operations.length > 0)
-      throw new ViewerError("internal", "No PDF operation is implemented yet", {
-        details: { op: operations[0]!.op },
-      });
-    this.#batches += 1;
+    const batch = this.#batches + 1;
+    const createdIds: string[] = [];
+    const changedPages = new Set<number>();
+    const warnings: EngineChange["warnings"][number][] = [];
+    operations.forEach((operation, operationIndex) => {
+      const handler = handlers[operation.op as PdfOperation["op"]];
+      if (!handler)
+        throw new ViewerError(
+          "internal",
+          `Unknown pdf operation ${operation.op}`,
+        );
+      const result = handler.apply(
+        operation as PdfOperation,
+        this.#context(batch, operationIndex),
+      );
+      createdIds.push(...result.createdIds);
+      for (const pageIndex of result.changedPages) changedPages.add(pageIndex);
+      warnings.push(...result.warnings);
+    });
+    this.#batches = batch;
     return {
-      createdIds: [],
-      changedPages: [],
+      createdIds,
+      changedPages: [...changedPages].sort((a, b) => a - b),
       pageCount: this.pageCount,
-      warnings: [],
+      warnings,
     };
   }
 
@@ -97,6 +144,7 @@ export class PdfEditDocument {
   restore(batches: readonly (readonly EditOperation[])[]): void {
     this.#document.close();
     this.#document = this.#pdfium.openDocument(this.#original);
+    this.#measurer = new TextMeasurer(this.#pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
     this.#batches = 0;
     for (const batch of batches) this.apply(batch);
@@ -170,6 +218,61 @@ export class PdfEditDocument {
 
   dispose(): void {
     this.#document.close();
+  }
+
+  #context(batch: number, operationIndex: number): OperationContext {
+    let created = 0;
+    return {
+      pdfium: this.#pdfium,
+      document: this.#document.handle,
+      measurer: this.#measurer,
+      pageCount: this.pageCount,
+      geometry: (pageIndex) => {
+        const record = this.#pages[pageIndex];
+        if (!record) throw new ViewerError("internal", `No page ${pageIndex}`);
+        return (
+          record.geometry ??
+          this.#withPage(pageIndex, (page) => this.#geometryOf(pageIndex, page))
+        );
+      },
+      // Ids name the batch, the operation and the item, so replaying the
+      // history reproduces them.
+      newId: (pageIndex, suffix = "") =>
+        `${this.#pages[pageIndex]!.key}:n${batch}.${operationIndex}.${created++}${suffix}`,
+      withPage: (pageIndex, use) => this.#writePage(pageIndex, use),
+      appendObjects: (pageIndex, records) => {
+        const page = this.#pages[pageIndex]!;
+        page.objects = [...(page.objects ?? []), ...records];
+        delete page.elements;
+      },
+    };
+  }
+
+  /** Loads a page, lets `use` change it, regenerates its content stream. */
+  #writePage<T>(pageIndex: number, use: (page: number) => T): T {
+    const { lib } = this.#pdfium;
+    const page = lib.FPDF_LoadPage(this.#document.handle, pageIndex);
+    if (!page)
+      throw new ViewerError("render-failed", "PDFium could not load the page", {
+        details: { pageIndex },
+      });
+    try {
+      // Objects are assigned before the change so appended ones follow them.
+      this.#objectsOf(pageIndex, page);
+      const result = use(page);
+      if (!lib.FPDFPage_GenerateContent(page))
+        throw new ViewerError(
+          "edit-failed",
+          "PDFium could not rewrite the page",
+          {
+            details: { stage: "apply", pageIndex },
+          },
+        );
+      delete this.#pages[pageIndex]!.elements;
+      return result;
+    } finally {
+      lib.FPDF_ClosePage(page);
+    }
   }
 
   #originalPages(): PageRecord[] {
