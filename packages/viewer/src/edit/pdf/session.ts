@@ -12,8 +12,10 @@ import type {
   TextTarget,
 } from "../types.js";
 import type {
+  DeleteElementOperation,
   Fields,
   InsertTextBoxOperation,
+  MoveElementOperation,
   PdfEditSession,
   PdfElement,
   PdfOperation,
@@ -116,5 +118,19 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.apply([{ op: "resizeElement", ...fields }], options);
+  }
+
+  moveElement(
+    fields: Fields<MoveElementOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "moveElement", ...fields }], options);
+  }
+
+  deleteElement(
+    fields: Fields<DeleteElementOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "deleteElement", ...fields }], options);
   }
 }

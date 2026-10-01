@@ -4,7 +4,6 @@ import type {
   PdfTextAlign,
   PdfTextBoxStyle,
   ReplaceTextOperation,
-  ResizeElementOperation,
   SetTextStyleOperation,
 } from "../types.js";
 import { MARK_NAME, MARK_PARAM, OBJECT_TEXT } from "./elements.js";
@@ -103,25 +102,6 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
   },
 };
 
-export const resizeElement: OperationHandler<ResizeElementOperation> = {
-  validate(operation, context, issue) {
-    const target = textBoxTarget(operation.target, context, issue);
-    if (!target) return;
-    validateRect(
-      operation.rect,
-      context.geometry(target.location.pageIndex),
-      issue,
-    );
-  },
-  apply(operation, context) {
-    const { location, spec } = textBoxTarget(operation.target, context)!;
-    return changed(
-      location,
-      rebuildTextBox(context, location, { ...spec, rect: operation.rect }),
-    );
-  },
-};
-
 /**
  * Lays the box out and inserts one text object per line, appended to the
  * page or at `insertAt` in drawing order. Returns whether it overflowed.
@@ -214,7 +194,7 @@ export function rebuildTextBox(
 }
 
 /** The location and stored inputs of a text box, or the issue that stops the edit. */
-function textBoxTarget(
+export function textBoxTarget(
   target: string,
   context: OperationContext,
   issue: Issue = () => {},
@@ -237,7 +217,7 @@ function textBoxTarget(
   return { location, spec: location.record.mark as unknown as TextBoxSpec };
 }
 
-function changed(
+export function changed(
   location: ElementLocation,
   overflow: boolean,
 ): OperationResult {

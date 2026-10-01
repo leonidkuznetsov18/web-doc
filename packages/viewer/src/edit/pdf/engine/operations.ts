@@ -1,6 +1,6 @@
 import type { ViewerWarning } from "../../../contracts.js";
 import type { OperationIssue } from "../../types.js";
-import type { PdfOperation } from "../types.js";
+import type { PdfElement, PdfOperation } from "../types.js";
 import type { PageGeometry } from "./geometry.js";
 import type { ObjectRecord } from "./elements.js";
 import type { Pdfium } from "./pdfium.js";
@@ -22,6 +22,8 @@ export interface OperationContext {
   appendObjects(pageIndex: number, records: readonly ObjectRecord[]): void;
   /** Where an element's objects sit: their page and their indexes in drawing order. */
   locate(id: string): ElementLocation | undefined;
+  /** The element as a query would return it. */
+  element(id: string): PdfElement | undefined;
   /** Replaces `count` object records from `start` with `records`. */
   spliceObjects(
     pageIndex: number,

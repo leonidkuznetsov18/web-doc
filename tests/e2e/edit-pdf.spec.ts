@@ -159,3 +159,36 @@ test("inserts and edits a text box, re-renders, saves and reloads it", async ({
     ["textBox", "p0:n1.0.0", "Edited text box"],
   ]);
 });
+
+test("moves and deletes elements through the session", async ({ page }) => {
+  const original = await buildPdf([
+    {
+      texts: [{ text: "Anchor", x: 72, y: 700 }],
+      image: { x: 300, y: 500, width: 160, height: 80 },
+    },
+  ]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    const before = await session.getElement("p0:o1");
+    await session.moveElement({ target: "p0:o1", by: { dx: 20, dy: 30 } });
+    const moved = await session.getElement("p0:o1");
+    const hits = await session.findText("Anchor");
+    await session.deleteElement({ target: "p0:o0" });
+    const remaining = await session.getElements({ pageIndex: 0 });
+    const text: string = await viewer.getPageText(0);
+    return {
+      before: before.bounds,
+      moved: moved.bounds,
+      hitPage: hits[0]?.pageIndex,
+      remaining: remaining.map((element: { id: string }) => element.id),
+      text,
+    };
+  });
+  expect(result.moved.x).toBeCloseTo(result.before.x + 20, 0);
+  expect(result.moved.y).toBeCloseTo(result.before.y + 30, 0);
+  expect(result.hitPage).toBe(0);
+  expect(result.remaining).toEqual(["p0:o1"]);
+  expect(result.text).not.toContain("Anchor");
+});

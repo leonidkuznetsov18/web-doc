@@ -22,12 +22,8 @@ import {
   type OperationContext,
   type OperationHandler,
 } from "./operations.js";
-import {
-  insertTextBox,
-  replaceText,
-  resizeElement,
-  setTextStyle,
-} from "./text-box.js";
+import { insertTextBox, replaceText, setTextStyle } from "./text-box.js";
+import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import {
   rectContains,
   rectsIntersect,
@@ -63,6 +59,8 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   replaceText: replaceText as OperationHandler,
   setTextStyle: setTextStyle as OperationHandler,
   resizeElement: resizeElement as OperationHandler,
+  moveElement: moveElement as OperationHandler,
+  deleteElement: deleteElement as OperationHandler,
 };
 
 export class PdfEditDocument {
@@ -258,6 +256,7 @@ export class PdfEditDocument {
         delete page.elements;
       },
       locate: (id) => this.#locate(id),
+      element: (id) => this.getElement(id),
       spliceObjects: (pageIndex, start, count, records) => {
         const page = this.#pages[pageIndex]!;
         const objects = [...(page.objects ?? [])];

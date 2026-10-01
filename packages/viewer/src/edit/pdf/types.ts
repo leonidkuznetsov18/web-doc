@@ -3,6 +3,7 @@ import type {
   EditElement,
   EditReceipt,
   EditSessionBase,
+  PagePoint,
   PageRect,
 } from "../types.js";
 
@@ -88,12 +89,28 @@ export interface ResizeElementOperation {
   readonly rect: PageRect;
 }
 
+export interface MoveElementOperation {
+  readonly op: "moveElement";
+  readonly target: string;
+  /** New top-left corner of the element's bounds, in page space. */
+  readonly to?: PagePoint;
+  /** Offset in page space. Exactly one of `to` and `by` is given. */
+  readonly by?: { readonly dx: number; readonly dy: number };
+}
+
+export interface DeleteElementOperation {
+  readonly op: "deleteElement";
+  readonly target: string;
+}
+
 /** The PDF operation union; operations are added as they ship. */
 export type PdfOperation =
   | InsertTextBoxOperation
   | ReplaceTextOperation
   | SetTextStyleOperation
-  | ResizeElementOperation;
+  | ResizeElementOperation
+  | MoveElementOperation
+  | DeleteElementOperation;
 
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type Fields<T extends PdfOperation> = Omit<T, "op">;
@@ -121,6 +138,16 @@ export interface PdfEditSession extends EditSessionBase<
   /** Gives an element new bounds; text boxes reflow, other elements stretch. */
   resizeElement(
     fields: Fields<ResizeElementOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Moves an element to a point or by an offset, in page space. */
+  moveElement(
+    fields: Fields<MoveElementOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Removes an element and, for a group, every object in it. */
+  deleteElement(
+    fields: Fields<DeleteElementOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
 }

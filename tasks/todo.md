@@ -453,15 +453,15 @@ element kind, including groups.
 
 **Acceptance criteria:**
 
-- [ ] After save and reopen, moved and resized elements have the expected
+- [x] After save and reopen, moved and resized elements have the expected
       bounds (±0.5 pt) on all four rotations; deleted elements are gone and
       untouched pages keep their content streams byte for byte.
-- [ ] `moveElement` with both or neither of `to` and `by` fails validation.
+- [x] `moveElement` with both or neither of `to` and `by` fails validation.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-transform.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-transform.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 13
 
