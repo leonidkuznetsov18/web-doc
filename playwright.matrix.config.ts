@@ -14,6 +14,7 @@ export default defineConfig({
     "doc.spec.ts",
     "edit-core.spec.ts",
     "edit-pdf.spec.ts",
+    "edit-pdf-overlay.spec.ts",
   ],
   fullyParallel: true,
   projects: [

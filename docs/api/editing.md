@@ -591,6 +591,49 @@ outside the page, a bad row or column, ragged rows, too few or too many rows),
 `invalid-data`, `required` (a shape without stroke and fill, a line without
 `from`/`to`), `last-page` and `unknown-operation`.
 
+### Overlay primitives
+
+A host that lets a user edit text in place shows its own input over the
+element, commits the change with one `apply()` on blur or idle, and puts the
+selection back. These reads serve that flow; each returns the usual envelope
+(`sessionId`, `revision`) and queues behind earlier calls like any read.
+
+| Method                                          | Returns                  | What it gives                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds`, `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells. |
+| `getPageLayout(pageIndex)`                      | `ReadItem<PageLayout>`   | Every text element's layout of a page plus the page's displayed `width` and `height`, in one read.                                                                                                                                                                                                                              |
+| `positionAt(pageIndex, point)`                  | `ReadItem<TextPosition>` | The caret position nearest to a page-space point; past a glyph's middle in reading direction the caret goes after it. `undefined` on a page without text.                                                                                                                                                                       |
+| `rangeRects(range)`                             | `ReadResult<PageRect>`   | The rectangles a range covers, one per line fragment, for drawing a selection; empty for a range across pages.                                                                                                                                                                                                                  |
+| `renderPageWithout(pageIndex, ids, { scale? })` | `ReadItem<PageBitmap>`   | The page as PDFium draws it with those elements left out: RGBA pixels over white at `scale` device pixels per point (default 1, bounded by `maxDecodedPixels`). Nothing is reopened and the bytes do not change; unknown ids are ignored.                                                                                       |
+| `elementsForSelection(selection)`               | `ReadResult<TextRange>`  | The viewer's `TextSelection` as element ranges: a layout line whose box the selected run covers by half, else the one line that contains the run, else a line whose NFKC-folded text contains the run's; the run's text decides the offsets. Merged per element, in reading order.                                              |
+| `mapRange(range, fromRevision)`                 | `ReadItem<TextRange>`    | Where a range taken at `fromRevision` is now: ranged `replaceText` calls shift it, a deleted element makes it `undefined`, an undo brings it back, renamed ids are followed, and the element's current text bounds it. `undefined` when the session no longer remembers that revision.                                          |
+| `elementsAtSync(pageIndex, point)`              | `ReadResult<PdfElement>` | `elementsAt` from a main-thread cache of the last `getElements({ pageIndex })` result, without waiting behind a queued `apply()`; the revision is the cached one. `cachedPages` lists the pages it holds; changed pages are refreshed after every commit.                                                                       |
+
+`replaceText` takes an optional `range` (see the operations table), so the
+committed change touches only what the user typed over.
+
+The flow, end to end:
+
+1. On hover, `elementsAtSync` (after one `getElements({ pageIndex })`) tells
+   which element is under the pointer; `getTextLayout` gives its lines and
+   glyph boxes to place the input.
+2. When the user selects text in the viewer, `elementsForSelection` turns
+   `viewer.getSelection()` into a range; `rangeRects` draws it.
+3. While the input is open, `renderPageWithout` gives a bitmap of the page
+   without the element, which the host lays over the page so the old text does
+   not show through; `viewer.pageToClient` places it.
+4. On blur or idle, one `replaceText` with the range commits the text. The
+   receipt's `revision` and `documentchange` say when the page is current.
+5. `mapRange` with the revision the range was taken at says where it is now;
+   `viewer.selectText` restores the selection.
+
+Glyph geometry comes from PDFium's text page mapped through the page's
+rotation and crop box, never from PDF.js; where a line starts and ends agrees
+with the PDF.js text layer within one CSS pixel, which a browser test keeps
+true on rotated and cropped pages. Run boxes from the viewer are proportional
+cuts of a run, so `elementsForSelection` trusts the selected text for the
+offsets and uses the boxes to pick between repeated words.
+
 ### Performance
 
 Each `apply()` saves the working copy and reopens it in PDF.js. Measured in

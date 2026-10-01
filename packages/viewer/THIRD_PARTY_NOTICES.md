@@ -26,5 +26,11 @@ The release artifact contains or depends on the following principal components. 
 - [`wasm-bindgen`](https://github.com/wasm-bindgen/wasm-bindgen) — MIT OR Apache-2.0; browser bindings for project-owned Rust/WASM modules.
 - [`zip`](https://github.com/zip-rs/zip2) — MIT; bounded in-memory ZIP/OOXML package manipulation.
 - [Serde](https://github.com/serde-rs/serde), [`serde_json`](https://github.com/serde-rs/json) and [`thiserror`](https://github.com/dtolnay/thiserror) — MIT OR Apache-2.0; serialization and structured Rust errors.
+- [GenOffice](https://github.com/genspark-ai/genoffice) — Apache-2.0; the
+  selection-to-object matching ladder of the PDF overlay primitives (rectangle
+  overlap, then a single containing object, then a text match after NFKC
+  folding) follows the technique of its `apps/pdf/src/main/text-edit.ts`. The
+  implementation in `packages/viewer/src/edit/pdf/selection.ts` is web-doc's
+  own; no GenOffice code is included.
 - [Noto Sans](https://github.com/notofonts/noto-fonts) and [Noto Sans CJK](https://github.com/notofonts/noto-cjk) subset fonts — SIL Open Font License 1.1. The font manifest, complete OFL text, pinned source commits and SHA-256 hashes are included in `dist/fonts/`.
   No Microsoft proprietary font or copyleft runtime component is bundled. Transitive notices and license expressions are verified by `npm run licenses`.

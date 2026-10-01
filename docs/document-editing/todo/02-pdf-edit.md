@@ -419,6 +419,15 @@ ACTION-825; they are additive, and the types they use (`TextPosition`,
   and stays within the 20 MiB Brotli target; the license gate passes.
 - The PDF editing browser suite passes on Chromium, Firefox and WebKit.
 - `npm run check` passes.
+- **Overlay primitives (ACTION-825):** `getTextLayout`, `getPageLayout`,
+  `positionAt`, `rangeRects`, `renderPageWithout`, `elementsForSelection`,
+  `mapRange` and `elementsAtSync` exist with unit tests; where a line starts
+  and ends agrees with the PDF.js text layer within 1 CSS px on rotated and
+  cropped pages; `positionAt` and `rangeRects` round-trip; a suppressed
+  render leaves the element out and the next normal render shows it; a
+  browser test selects text, resolves it, replaces it with a ranged
+  `replaceText` and restores the selection; `docs/api/editing.md` describes
+  the primitives and the interaction model.
 - **R2** The module passes on `edit-core` revision 2: envelopes, `stateId`
   ids, save modes, removed ids, ranges in `findText`, the staleness check and
   the extra warnings, with the latency numbers recorded.
@@ -632,3 +641,60 @@ Resolved on 2026-10-01 together with the approval of this spec:
   pays for PDF.js parsing it again from scratch; the steady state is well
   inside the 1 s target and the 3 s ceiling the browser suite asserts.
   (`tests/e2e/edit-pdf.spec.ts`, "measures apply() latency on a …-page PDF".)
+
+### Overlay primitives (ACTION-825)
+
+Implemented 2026-10-01 to 2026-10-02 (tasks 32–37 of `tasks/todo.md`), all
+additive to the revision-2 session:
+
+- `getTextLayout(elementId)` and `getPageLayout(pageIndex)` read PDFium's
+  text page once and map every character to its object and element (the
+  `findText` mapping): a line is one text object, so a text box's drawn lines
+  and a table's cells come out in drawing order, each with its `range` into
+  the element's text, tight glyph boxes (`FPDFText_GetCharBox`), advances
+  (`FPDFText_GetLooseCharBox`), baseline (`FPDFText_GetCharOrigin`), font
+  family, size and colour, all through `PageGeometry` so rotation and crop
+  boxes hold. `positionAt` uses `FPDFText_GetCharIndexAtPos` with a 2 pt
+  tolerance, then the nearest glyph box, and puts the caret after a glyph
+  past its middle in reading direction. `rangeRects` unions glyph boxes per
+  line across the elements a range spans in reading order.
+- `renderPageWithout` marks the elements' objects inactive
+  (`FPDFPageObj_SetIsActive`), draws the page with `FPDF_RenderPageBitmap`
+  into a BGRA bitmap, converts it to RGBA, restores the flags, and transfers
+  the pixels; bitmaps over `maxDecodedPixels` are refused with
+  `resource-limit`. The session's bytes do not change.
+- `elementsForSelection` resolves the viewer's PDF.js runs through the
+  ladder (box overlap ≥ 50 % of the line, else the single containing line,
+  else an NFKC-folded text match); the run's text decides the offsets, since
+  the viewer cuts runs proportionally, and the covered glyphs pick between
+  repeated words. GenOffice's technique, attributed in
+  `THIRD_PARTY_NOTICES.md`.
+- `replaceText` with `range`: a text box splices and reflows; a text object
+  is rewritten in place when its font covers the spliced text, else split
+  into up to three objects on the same baseline (before and after in the
+  original font, the middle in the fallback), each starting where the
+  previous one's advance ends; the first part keeps the id. Every part is
+  read back before the old object goes; a part the original font cannot
+  encode sends the whole object to the fallback as before.
+- `mapRange` walks a log of the session's committed calls (operations and
+  receipts, 512 entries) forwards for batches and redos and backwards for
+  undos and resets, then clamps against the live element.
+- `elementsAtSync` answers from a per-page cache of the last
+  `getElements({ pageIndex })` result, refreshed for changed pages after
+  every commit.
+- Core plumbing: `EditSessionCore.readItem` / `readItems` queue a typed
+  session's engine reads behind earlier calls and stamp the envelope; five
+  worker requests (`edit-text-layout`, `edit-position-at`,
+  `edit-range-rects`, `edit-render-without`, `edit-page-layout`).
+- Found on the way: PDFium's text extraction appends a generated space to a
+  text object that a gap follows, so `EditElement.text` of such an object
+  ends with a space the file does not contain; the split path tolerates it
+  when reading parts back.
+- Tests: 28 unit tests across `pdf-edit-layout`, `pdf-edit-render`,
+  `pdf-edit-selection`, `pdf-edit-replace-range` and `pdf-edit-session`
+  (selections built from real PDF.js runs under Node); browser spec
+  `tests/e2e/edit-pdf-overlay.spec.ts` (7 tests): line start and end within
+  1 CSS px of the PDF.js text-layer span on pages rotated 0/90/180/270 and
+  on a cropped page, the mouse-selection → `elementsForSelection` →
+  `replaceText` → `mapRange` → `selectText` flow, and a suppressed render
+  laid over the page with the normal render unchanged.

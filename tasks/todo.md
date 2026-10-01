@@ -1162,13 +1162,13 @@ pass; proofs attached and ACTION-825 Done.
 
 **Acceptance criteria:**
 
-- [ ] The browser test passes on the matrix; the docs describe every
+- [x] The browser test passes on the matrix; the docs describe every
       primitive with its envelope and the interaction model; the spec's
       overlay definition of done is ticked.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf-overlay.spec.ts`,
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf-overlay.spec.ts`,
       `npm run test:e2e:matrix`, `npm run check`
 
 **Dependencies:** Tasks 33–36
@@ -1179,6 +1179,6 @@ pass; proofs attached and ACTION-825 Done.
 
 ### Checkpoint G: overlay primitives done
 
-- [ ] ACTION-825 acceptance criteria met; Linear Done with proofs
+- [x] ACTION-825 acceptance criteria met; Linear Done with proofs
 - [ ] ACTION-815 (Operators) unblocked; parent ACTION-723 reviewed with
       Leonid for the PR / Code Review step
