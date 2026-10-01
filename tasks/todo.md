@@ -1182,3 +1182,177 @@ pass; proofs attached and ACTION-825 Done.
 - [x] ACTION-825 acceptance criteria met; Linear Done with proofs
 - [ ] ACTION-815 (Operators) unblocked; parent ACTION-723 reviewed with
       Leonid for the PR / Code Review step
+
+## Phase 7 — OOXML package layer (Linear ACTION-810)
+
+Blocked by ACTION-808 (Done); blocks ACTION-812 (pptx-edit) and ACTION-813
+(docx-engine-upgrade). The API, error codes and decisions are fixed by
+`03-ooxml-package.md` (approved 2026-10-02: `store`, `warn`); every commit
+carries `[linear:ACTION-810]`. Code lives in `packages/viewer/src/edit/ooxml/`.
+
+### Task 38: ZIP reader
+
+**Description:** `parseZip(bytes, limits)` reads the end-of-central-directory
+record, the central directory and, on first use, each entry's local header;
+`inflateEntry` streams an entry through `DecompressionStream("deflate-raw")`
+with metering and a CRC-32 check; `OoxmlPackage.open` wraps it with OPC name
+normalization, case-insensitive lookup and a part cache. ZIP64, encryption,
+other methods and multi-disk archives are refused with `unsupported-package`;
+lying directories, bad CRCs and missing records are `invalid-file`; the
+existing limits apply. The four new error codes join `ViewerErrorCode`. Spike
+recorded: compression streams in Node 22 and the matrix; corpus facts.
+
+**Acceptance criteria:**
+
+- [ ] Hand-built archives (stored, deflated, data descriptors with and
+      without signature, extra fields, archive comment) read back exactly;
+      every refusal and every error code has a test.
+- [ ] Every corpus and fixture PPTX/DOCX opens, every entry inflates with a
+      matching CRC, `[Content_Types].xml` is found; open time of the corpus
+      deck is recorded.
+- [ ] `parseZip` is a fuzz target.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/ooxml-zip.test.ts`),
+      `npm run fuzz:js`
+
+**Dependencies:** none
+
+**Files likely touched:** `src/edit/ooxml/zip.ts`, `names.ts`, `package.ts`
+(new), `src/contracts.ts`, `test/fixtures/zip-builder.ts`, `scripts/fuzz-js.mjs`
+
+**Estimated scope:** Medium
+
+### Task 39: ZIP writer
+
+**Description:** `writeZip` copies untouched entries verbatim (local record
+bytes through the data descriptor, central record with the offset
+rewritten), writes changed entries stored (or deflated on request) with fresh
+headers, appends new entries with the fixed 1980 time, drops removed ones,
+keeps the comment, refuses ZIP64 output. `OoxmlPackage.save` returns the
+original bytes without changes.
+
+**Acceptance criteria:**
+
+- [ ] No-change save and rebuild-with-no-changes are byte-identical to the
+      original for every corpus and fixture package; after one changed part
+      only that entry's bytes differ, entry by entry.
+- [ ] Stored and deflated outputs reopen through the reader with matching
+      CRCs; an output that would need ZIP64 is refused before writing.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/ooxml-zip.test.ts` additions)
+
+**Dependencies:** Task 38
+
+**Files likely touched:** `src/edit/ooxml/zip.ts`, `package.ts`
+
+**Estimated scope:** Medium
+
+### Task 40: OPC model
+
+**Description:** `[Content_Types].xml` (`Default`, `Override`) and `.rels`
+parts as small models written back as patches; `contentTypeOf`,
+`relationships`, `resolve`, `rId` allocation, content-type rules on add and
+remove, indexed lookups by id and type.
+
+**Acceptance criteria:**
+
+- [ ] Target resolution covers relative, `..`, absolute, external and
+      case-different targets; `rId` allocation fills the smallest gap; adding
+      a part adds an Override only when no Default covers it; an untouched
+      `[Content_Types].xml` keeps its bytes.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/ooxml-opc.test.ts`)
+
+**Dependencies:** Task 41 (patches are written through the scanner)
+
+**Files likely touched:** `src/edit/ooxml/opc.ts` (new), `package.ts`
+
+**Estimated scope:** Medium
+
+### Task 41: XML scanner
+
+**Description:** The offset-preserving tokenizer: declaration, opaque
+regions, start and end tags, attributes, self-closing tags, character data;
+element tree with exact ranges, namespaces in scope, `find`/`findAll`/`at`/
+`textOf`/`attribute`; the UTF-8 round-trip guard; `malformed-xml`; fuzz
+target.
+
+**Acceptance criteria:**
+
+- [ ] Every construct in the spec scans with correct ranges on hand-written
+      parts and on every XML part of the corpus; `text.slice(start, end)` of
+      every element reproduces its source; a part that fails the UTF-8 guard
+      is `unsupported-part`; malformed input is `malformed-xml`.
+- [ ] The largest corpus part scans in the time recorded under Actual result.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/ooxml-xml.test.ts`),
+      `npm run fuzz:js`
+
+**Dependencies:** Task 38
+
+**Files likely touched:** `src/edit/ooxml/xml.ts` (new), `package.ts`
+
+**Estimated scope:** Medium
+
+### Task 42: Patches and transactions
+
+**Description:** Patch builders with expectations, apply-from-the-end,
+re-scan and read-back verification, atomic `PackageTransaction` across parts
+(patch, setPart, removePart, relationships, addMedia with hash
+deduplication, uniquePartName, dangling-target warnings), O(1) snapshots and
+restore.
+
+**Acceptance criteria:**
+
+- [ ] Every builder produces a patch whose read-back passes; overlapping,
+      stale, malformed and mismatching patches are `invalid-patch` and leave
+      the package unchanged, also when they are the last part of a
+      multi-part transaction; snapshots restore exactly; media is stored once
+      per content; removing a part leaves a warning per dangling relationship.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/ooxml-patch.test.ts`)
+
+**Dependencies:** Tasks 39, 40, 41
+
+**Files likely touched:** `src/edit/ooxml/patch.ts`, `transaction.ts` (new),
+`package.ts`
+
+**Estimated scope:** Medium
+
+### Task 43: Corpus, browser reopen, docs, gate
+
+**Description:** Every corpus and fixture package through the full cycle
+(open → no-change save identical → one-part patch → only that entry differs
+→ every part well-formed → reopened by `@silurus/ooxml` in the browser);
+`vbaProject.bin` survival on a macro-enabled fixture; adversarial manifest;
+performance table; spec Actual result and Spike results; architecture doc
+paragraph; `npm run check` and the matrix; Linear proofs; ACTION-810 Done.
+
+**Acceptance criteria:**
+
+- [ ] The definition of done of `03-ooxml-package.md` is met in full.
+
+**Verification:**
+
+- [ ] `npm run test:e2e -- tests/e2e/ooxml-package.spec.ts`,
+      `npm run test:e2e:matrix`, `npm run check`
+
+**Dependencies:** Task 42
+
+**Files likely touched:** `tests/e2e/ooxml-package.spec.ts` (new), docs
+
+**Estimated scope:** Medium
+
+### Checkpoint H: package layer done
+
+- [ ] ACTION-810 Done with proofs; ACTION-812 and ACTION-813 unblocked

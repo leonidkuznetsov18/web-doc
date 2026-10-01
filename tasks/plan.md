@@ -100,6 +100,7 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 | 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review                                                          |
 | 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821)                                                          |
 | 6. PDF overlay primitives  | T32–T37 | Checkpoint G: layout, suppressed render, selection and range mapping, range-scoped `replaceText`, geometry cache, browser test (Linear ACTION-825) |
+| 7. OOXML package layer     | T38–T43 | Checkpoint H: ZIP reader and writer, OPC model, XML scanner, patches and transactions, corpus and browser reopen (Linear ACTION-810)               |
 
 ## Revision 2 decisions (ACTION-821)
 
@@ -141,6 +142,17 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 20. **Range mapping walks the history.** `mapRange` derives the moved range
     from the entries after `fromRevision` (text length deltas, deletions,
     `remappedIds`), so it needs no extra bookkeeping in the engine.
+
+## Phase 7 decisions (ACTION-810)
+
+21. **The package layer is spec-bound.** `03-ooxml-package.md` (approved
+    2026-10-02) fixes the API, the error codes and nine decisions; the tasks
+    here only sequence the work: reader, writer, OPC model, scanner, patches
+    and transactions, then the corpus and browser gate.
+22. **Tests ship a ZIP builder of their own.** Hand-built archives (stored,
+    deflated with Node's zlib, data descriptors, extra fields, ZIP64 markers,
+    encryption flags, bad CRCs) exercise the reader before the writer exists;
+    the writer later proves itself against the same builder and the corpus.
 
 ## Gate and configuration changes needing approval
 

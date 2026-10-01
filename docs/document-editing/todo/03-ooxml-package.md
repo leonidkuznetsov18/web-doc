@@ -1,8 +1,8 @@
 # Module 03. `ooxml-package` — the shared OOXML package layer
 
-**Status:** 📝 Draft for approval, written 2026-10-02 (Linear ACTION-810).
-Implementation starts when Leonid approves this document; the task list is
-written then (`tasks/plan.md` Phase 7).
+**Status:** ✅ Approved by Leonid on 2026-10-02 with `store` as the default
+compression and `warn` for dangling relationship targets (Linear
+ACTION-810). Tasks T38–T43 in `tasks/todo.md` Phase 7.
 
 ## Goal
 
@@ -349,6 +349,8 @@ export interface CommittedChange {
   readonly changedParts: readonly string[];
   readonly addedParts: readonly string[];
   readonly removedParts: readonly string[];
+  /** Relationships whose internal target no longer exists, one per relationship. */
+  readonly warnings: readonly ViewerWarning[];
 }
 
 export interface PackageSnapshot {
@@ -634,7 +636,7 @@ Proposed tasks for `tasks/plan.md` Phase 7, each a commit with tests:
 
 ## Decisions
 
-Proposed with this draft; they become binding with Leonid's approval.
+Approved on 2026-10-02 together with this spec.
 
 1. **Own TypeScript implementation, no new dependency.** The ZIP container
    and the XML scanner are written in this repository: the needs are narrow
@@ -676,16 +678,17 @@ Proposed with this draft; they become binding with Leonid's approval.
 8. **The layer has no worker of its own.** It is thread-agnostic; each format
    module decides where it runs (the PDF engine's worker pattern is the
    expected choice).
+9. **Dangling relationship targets warn, they do not refuse.** A transaction
+   that removes a part reports relationships that still point at it in
+   `CommittedChange.warnings`, so a format module that forgets to remove
+   them gets the signal while one that removes them in the same transaction
+   is not blocked.
 
 ## Open questions
 
-1. Decision 2's default: `store` (deterministic everywhere, larger touched
-   entries) or `deflate` (smaller files, byte-identical only within one
-   engine)? Proposed: `store`.
-2. Should the layer report dangling relationship targets as warnings in
-   `CommittedChange` (proposed) or refuse the commit? Proposed: warn, so a
-   format module that removes a slide can remove its relationships in the
-   same transaction and still get the signal when it forgets.
+None. The two questions of the draft were decided on 2026-10-02: changed
+entries are stored (decision 2 stands), and dangling relationship targets
+are reported as warnings in `CommittedChange`, not refused (decision 9).
 
 ## Spike results
 
