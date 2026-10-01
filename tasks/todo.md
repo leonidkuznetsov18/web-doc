@@ -1029,16 +1029,16 @@ is reopened and the session's bytes do not change.
 
 **Acceptance criteria:**
 
-- [ ] The suppressed render differs from a normal render inside the
+- [x] The suppressed render differs from a normal render inside the
       element's bounds and is identical outside; a normal render taken after
       it equals the one taken before (the objects are active again), and a
       save after it equals a save before it.
-- [ ] Unknown ids are ignored; a scale that exceeds the raster limit is
-      refused with `limit-exceeded`.
+- [x] Unknown ids are ignored; a scale that exceeds the raster limit is
+      refused with `resource-limit`.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-render.test.ts`)
+- [x] `npm run test --workspace web-doc` (`test/pdf-edit-render.test.ts`)
 
 **Dependencies:** Task 32 (plumbing)
 

@@ -252,6 +252,29 @@ export interface PdfiumFunctions {
     stride: number,
   ): number;
   FPDFBitmap_Destroy(bitmap: number): void;
+  FPDFBitmap_FillRect(
+    bitmap: number,
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+    color: number,
+  ): boolean;
+  FPDFBitmap_GetBuffer(bitmap: number): number;
+  /** Draws the page into the bitmap at the given device rectangle; `rotate` adds quarter turns. */
+  FPDF_RenderPageBitmap(
+    bitmap: number,
+    page: number,
+    startX: number,
+    startY: number,
+    sizeX: number,
+    sizeY: number,
+    rotate: number,
+    flags: number,
+  ): void;
+  /** Whether an object takes part in rendering and content generation; out param is an int. */
+  FPDFPageObj_GetIsActive(object: number, active: number): boolean;
+  FPDFPageObj_SetIsActive(object: number, active: boolean): boolean;
   FPDFImageObj_GetImagePixelSize(
     image: number,
     width: number,

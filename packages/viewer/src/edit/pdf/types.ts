@@ -286,6 +286,21 @@ export interface TextLayout {
   readonly lines: readonly TextLayoutLine[];
 }
 
+/** A page rendered by PDFium in the worker: RGBA pixels, row-major, unpremultiplied over white. */
+export interface PageBitmap {
+  readonly pageIndex: number;
+  /** Device pixels per point the page was rendered at. */
+  readonly scale: number;
+  readonly width: number;
+  readonly height: number;
+  readonly data: Uint8Array;
+}
+
+export interface RenderOptions extends ReadOptions {
+  /** Device pixels per point, default 1; bounded by `maxDecodedPixels`. */
+  readonly scale?: number;
+}
+
 /**
  * An operation's fields without its `op`, as the typed methods take them.
  * Distributes over unions so `insertShape` keeps its per-shape fields.
@@ -316,6 +331,16 @@ export interface PdfEditSession extends EditSessionBase<
     range: TextRange,
     options?: ReadOptions,
   ): Promise<ReadResult<PageRect>>;
+  /**
+   * The page rendered by PDFium with the listed elements left out, so a host's
+   * input surface can stand in for them on screen. Nothing is reopened and the
+   * session's bytes stay as they are; unknown ids are ignored.
+   */
+  renderPageWithout(
+    pageIndex: number,
+    elementIds: readonly string[],
+    options?: RenderOptions,
+  ): Promise<ReadItem<PageBitmap>>;
   /** Lays `text` out inside `rect` as new text objects; the box's id is in `createdIds`. */
   insertTextBox(
     fields: Fields<InsertTextBoxOperation>,

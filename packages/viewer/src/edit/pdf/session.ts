@@ -41,6 +41,8 @@ import type {
   RotatePageOperation,
   SetShapeStyleOperation,
   SetTableCellOperation,
+  PageBitmap,
+  RenderOptions,
   SetTextStyleOperation,
   TextLayout,
 } from "./types.js";
@@ -166,6 +168,21 @@ export class PdfSession implements PdfEditSession {
     );
   }
 
+  renderPageWithout(
+    pageIndex: number,
+    elementIds: readonly string[],
+    options: RenderOptions = {},
+  ): Promise<ReadItem<PageBitmap>> {
+    return this.#core.readItem(options, (engine, signal) =>
+      pdfReads(engine).renderWithout(
+        pageIndex,
+        [...elementIds],
+        options.scale ?? 1,
+        signal,
+      ),
+    );
+  }
+
   insertTextBox(
     fields: Fields<InsertTextBoxOperation>,
     options?: ApplyOptions,
@@ -278,7 +295,12 @@ export class PdfSession implements PdfEditSession {
 /** The engine behind a PDF session answers the overlay reads; a stand-in may not. */
 function pdfReads(engine: EditEngine): PdfEngineReads {
   const reads = engine as Partial<PdfEngineReads>;
-  if (!reads.textLayout || !reads.positionAt || !reads.rangeRects)
+  if (
+    !reads.textLayout ||
+    !reads.positionAt ||
+    !reads.rangeRects ||
+    !reads.renderWithout
+  )
     throw new ViewerError(
       "edit-unsupported",
       "This engine does not implement the PDF overlay primitives",

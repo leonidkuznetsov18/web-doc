@@ -157,6 +157,14 @@ export function createPdfEditHandler(
         return engine().rangeRects(
           (payload as { readonly range: TextRange }).range,
         );
+      case "edit-render-without": {
+        const { pageIndex, elementIds, scale } = payload as {
+          readonly pageIndex: number;
+          readonly elementIds: readonly string[];
+          readonly scale: number;
+        };
+        return engine().renderPageWithout(pageIndex, elementIds, scale);
+      }
       case "edit-dispose":
         state?.dispose();
         state = undefined;

@@ -13,6 +13,7 @@ import type {
   TextTarget,
 } from "../../types.js";
 import type { PdfElement, PdfOperation, TextLayout } from "../types.js";
+import type { EditWorkerBitmap } from "../../../worker-protocol.js";
 import { layoutOf, positionIn, rectsOf, type TextPageScan } from "./layout.js";
 import {
   markIsFresh,
@@ -79,6 +80,11 @@ export type DocumentFeature = "docmdp" | "tagged" | "pdfa";
  * Signature dictionaries and XMP metadata are stored uncompressed, so the
  * raw bytes answer for those; tagging also shows as a structure tree.
  */
+/** FPDFBitmap_CreateEx pixel format with alpha. */
+const BITMAP_BGRA = 4;
+/** FPDF_RenderPageBitmap flag: draw annotations, as PDF.js does. */
+const RENDER_ANNOTATIONS = 0x01;
+
 function detectFeatures(
   pdfium: Pdfium,
   document: number,
@@ -502,6 +508,120 @@ export class PdfEditDocument {
     return this.#scanText(pageIndex, (scan) =>
       positionIn(this.#pdfium, scan, point),
     );
+  }
+
+  /**
+   * Renders a page with the listed elements inactive, as RGBA over white at
+   * `scale` device pixels per point. The objects are reactivated before the
+   * call returns, so nothing about the document changes.
+   */
+  renderPageWithout(
+    pageIndex: number,
+    elementIds: readonly string[],
+    scale: number,
+  ): EditWorkerBitmap {
+    if (pageIndex < 0 || pageIndex >= this.#pages.length)
+      throw new ViewerError("invalid-operation", "No such page", {
+        details: { pageIndex },
+      });
+    if (!Number.isFinite(scale) || scale <= 0)
+      throw new ViewerError("invalid-operation", "The scale must be positive", {
+        details: { scale },
+      });
+    const { lib } = this.#pdfium;
+    return this.#withPage(pageIndex, (page, _textPage, geometry) => {
+      const size = displayedSize(geometry);
+      const width = Math.max(1, Math.ceil(size.width * scale));
+      const height = Math.max(1, Math.ceil(size.height * scale));
+      const pixels = width * height;
+      if (
+        !Number.isSafeInteger(pixels) ||
+        pixels > this.#limits.maxDecodedPixels
+      )
+        throw new ViewerError(
+          "resource-limit",
+          "The rendered page exceeds maxDecodedPixels",
+          { details: { actual: pixels, limit: this.#limits.maxDecodedPixels } },
+        );
+      const wanted = new Set(elementIds);
+      const records = this.#objectsOf(pageIndex, page);
+      const suppressed: {
+        readonly object: number;
+        readonly active: boolean;
+      }[] = [];
+      records.forEach((record, index) => {
+        if (!wanted.has(record.id)) return;
+        const object = lib.FPDFPage_GetObject(page, index);
+        const active =
+          this.#pdfium.readNumbers(1, "i32", ([pointer]) =>
+            lib.FPDFPageObj_GetIsActive(object, pointer!),
+          )?.[0] !== 0;
+        suppressed.push({ object, active });
+        lib.FPDFPageObj_SetIsActive(object, false);
+      });
+      try {
+        return {
+          pageIndex,
+          scale,
+          width,
+          height,
+          data: this.#render(page, width, height),
+        };
+      } finally {
+        for (const { object, active } of suppressed)
+          lib.FPDFPageObj_SetIsActive(object, active);
+      }
+    });
+  }
+
+  /** RGBA pixels of a loaded page over white, through a BGRA bitmap in WASM memory. */
+  #render(page: number, width: number, height: number): ArrayBuffer {
+    const { lib } = this.#pdfium;
+    const stride = width * 4;
+    const buffer = this.#pdfium.malloc(stride * height);
+    try {
+      const bitmap = lib.FPDFBitmap_CreateEx(
+        width,
+        height,
+        BITMAP_BGRA,
+        buffer,
+        stride,
+      );
+      if (!bitmap)
+        throw new ViewerError(
+          "render-failed",
+          "PDFium could not create the bitmap",
+          {
+            details: { width, height },
+          },
+        );
+      try {
+        lib.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xffffffff);
+        lib.FPDF_RenderPageBitmap(
+          bitmap,
+          page,
+          0,
+          0,
+          width,
+          height,
+          0,
+          RENDER_ANNOTATIONS,
+        );
+      } finally {
+        lib.FPDFBitmap_Destroy(bitmap);
+      }
+      const bgra = this.#pdfium.readBytes(buffer, stride * height);
+      const rgba = new Uint8Array(bgra.byteLength);
+      for (let offset = 0; offset < bgra.byteLength; offset += 4) {
+        rgba[offset] = bgra[offset + 2]!;
+        rgba[offset + 1] = bgra[offset + 1]!;
+        rgba[offset + 2] = bgra[offset]!;
+        rgba[offset + 3] = bgra[offset + 3]!;
+      }
+      return rgba.buffer;
+    } finally {
+      this.#pdfium.free(buffer);
+    }
   }
 
   /** The rectangles a range covers, one per line fragment, in reading order. */

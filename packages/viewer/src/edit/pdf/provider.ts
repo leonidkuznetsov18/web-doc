@@ -2,6 +2,7 @@ import type { RegisteredFont } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { WorkerRpcClient, type WorkerLike } from "../../worker-client.js";
 import type {
+  EditWorkerBitmap,
   EditWorkerFont,
   EditWorkerInitPayload,
   EditWorkerOpenPayload,
@@ -29,7 +30,7 @@ import type {
   TextTarget,
 } from "../types.js";
 import { pdfOperationSchemas } from "./schemas.js";
-import type { TextLayout } from "./types.js";
+import type { PageBitmap, TextLayout } from "./types.js";
 
 /** The reads behind the overlay primitives, beyond the core engine interface. */
 export interface PdfEngineReads {
@@ -43,6 +44,12 @@ export interface PdfEngineReads {
     range: TextRange,
     signal: AbortSignal,
   ): Promise<readonly PageRect[]>;
+  renderWithout(
+    pageIndex: number,
+    elementIds: readonly string[],
+    scale: number,
+    signal: AbortSignal,
+  ): Promise<PageBitmap>;
 }
 
 /** How long disposal waits for the worker's answer before terminating it. */
@@ -248,6 +255,20 @@ export class PdfEditEngineClient implements EditEngine, PdfEngineReads {
     signal: AbortSignal,
   ): Promise<readonly PageRect[]> {
     return this.#request("edit-range-rects", { range }, signal);
+  }
+
+  async renderWithout(
+    pageIndex: number,
+    elementIds: readonly string[],
+    scale: number,
+    signal: AbortSignal,
+  ): Promise<PageBitmap> {
+    const bitmap = await this.#request<EditWorkerBitmap>(
+      "edit-render-without",
+      { pageIndex, elementIds, scale },
+      signal,
+    );
+    return { ...bitmap, data: new Uint8Array(bitmap.data) };
   }
 
   async dispose(): Promise<void> {

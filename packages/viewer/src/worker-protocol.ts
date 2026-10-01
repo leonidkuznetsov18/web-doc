@@ -33,6 +33,7 @@ export type EditWorkerOperation =
   | "edit-text-layout"
   | "edit-position-at"
   | "edit-range-rects"
+  | "edit-render-without"
   | "edit-dispose";
 
 export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;
@@ -112,6 +113,15 @@ export interface EditWorkerOpenPayload {
   readonly limits: ResourceLimits;
   readonly fileName?: string;
   readonly fonts?: readonly EditWorkerFont[];
+}
+
+/** A rendered page as the worker returns it; `data` is transferred, not copied. */
+export interface EditWorkerBitmap {
+  readonly pageIndex: number;
+  readonly scale: number;
+  readonly width: number;
+  readonly height: number;
+  readonly data: ArrayBuffer;
 }
 
 export interface EditWorkerOpenResult {
