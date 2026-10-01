@@ -1,4 +1,9 @@
-import type { ResourceLimits, ViewerEventMap } from "../../src/contracts.js";
+import type {
+  DocumentAdapter,
+  ResourceLimits,
+  TextRun,
+  ViewerEventMap,
+} from "../../src/contracts.js";
 import type {
   EditEngine,
   EditEngineContext,
@@ -77,12 +82,17 @@ export const fakeSchemas: OperationSchemaSet = {
   },
 };
 
+/** Files start with a PDF signature so format detection routes them to the adapter. */
+const SIGNATURE = "%PDF-1.7\n";
+
 export function encodePages(pages: readonly string[]): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(pages));
+  return new TextEncoder().encode(SIGNATURE + JSON.stringify(pages));
 }
 
 export function decodePages(bytes: Uint8Array): string[] {
-  return JSON.parse(new TextDecoder().decode(bytes)) as string[];
+  const text = new TextDecoder().decode(bytes);
+  if (!text.startsWith(SIGNATURE)) throw new Error("not a fake document");
+  return JSON.parse(text.slice(SIGNATURE.length)) as string[];
 }
 
 export interface FakeEngineOptions {
@@ -307,4 +317,82 @@ export class FakeHost implements EditSessionHost {
   get current(): string[] | undefined {
     return this.shown.at(-1);
   }
+}
+
+/*
+ * A viewer adapter over the same JSON page format, so the viewer integration
+ * can be tested end to end without a real document format.
+ */
+
+export interface FakeHandle {
+  readonly id: number;
+  readonly pages: readonly string[];
+}
+
+export interface FakeAdapterOptions {
+  readonly edit?: EditEngineProvider;
+  /** Implement `reopen` instead of opening from scratch. */
+  readonly reopen?: boolean;
+  /** Throw from `open`/`reopen` while true. */
+  failOpen?: boolean;
+}
+
+export function fakeEditableAdapter(options: FakeAdapterOptions = {}) {
+  let nextId = 1;
+  const closed: number[] = [];
+  const reopened: number[] = [];
+  const adapter: DocumentAdapter<FakeHandle> & {
+    readonly closed: number[];
+    readonly reopened: number[];
+  } = {
+    id: "fake-editable",
+    formats: ["pdf"],
+    closed,
+    reopened,
+    async open(data) {
+      if (options.failOpen) throw new Error("open refused");
+      return { id: nextId++, pages: decodePages(data) };
+    },
+    async getInfo(handle) {
+      return {
+        format: "pdf",
+        unit: "page",
+        pageCount: handle.pages.length,
+        pageSizes: handle.pages.map(() => ({ width: 100, height: 200 })),
+      };
+    },
+    async render() {},
+    async getTextMap(handle, pageIndex) {
+      const words = handle.pages[pageIndex]!.split(" ");
+      let offset = 0;
+      return words.map((word, index) => {
+        const text = index === words.length - 1 ? word : `${word} `;
+        const run: TextRun = {
+          text,
+          x: index * 10,
+          y: 0,
+          width: 10,
+          height: 10,
+          logicalStart: offset,
+          logicalEnd: offset + text.length,
+        };
+        offset += text.length;
+        return run;
+      });
+    },
+    close(handle) {
+      closed.push(handle.id);
+    },
+    ...(options.edit ? { edit: options.edit } : {}),
+    ...(options.reopen
+      ? {
+          async reopen(previous: FakeHandle, data: Uint8Array) {
+            if (options.failOpen) throw new Error("reopen refused");
+            reopened.push(previous.id);
+            return { id: nextId++, pages: decodePages(data) };
+          },
+        }
+      : {}),
+  };
+  return adapter;
 }

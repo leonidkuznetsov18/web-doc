@@ -164,17 +164,17 @@ search and selection, events, and ending the session on `load`, `close` and
 
 **Acceptance criteria:**
 
-- [ ] With a fake adapter and engine, `getDocumentInfo`, `getPageText`,
+- [x] With a fake adapter and engine, `getDocumentInfo`, `getPageText`,
       `search` and `selectText` reflect the new content as soon as `apply()`
       resolves, including a changed page count.
-- [ ] `load`, `close` and `destroy` end the session: pending calls reject with
+- [x] `load`, `close` and `destroy` end the session: pending calls reject with
       `aborted`, later calls with `lifecycle-error`, and `editstatechange`
       reports `active: false`.
-- [ ] The provider is not touched before the first `edit()`.
+- [x] The provider is not touched before the first `edit()`.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `edit-viewer.test.ts`; existing
+- [x] `npm run test --workspace web-doc` (new `edit-viewer.test.ts`; existing
       suites unchanged)
 
 **Dependencies:** Task 4

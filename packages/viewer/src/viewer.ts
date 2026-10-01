@@ -1,7 +1,9 @@
 import type {
+  AdapterOpenContext,
   CellRange,
   CellSelection,
   DocumentAdapter,
+  DocumentFormat,
   DocumentInfo,
   DocumentSource,
   FitMode,
@@ -26,12 +28,15 @@ import type {
   ViewerState,
 } from "./contracts.js";
 import type {
+  EditableFormat,
   EditOptions,
   EditSession,
   PageHit,
   PageRect,
   ViewportRect,
 } from "./edit/types.js";
+import type { EditEngineProvider } from "./edit/engine.js";
+import { EditSessionController, type EditSessionHost } from "./edit/session.js";
 import { linkedAbortController } from "./abort.js";
 import { detectFormat } from "./detect.js";
 import { abortError, normalizeError, ViewerError } from "./errors.js";
@@ -92,6 +97,12 @@ export class DocumentViewer implements ViewerApi {
   #info: DocumentInfo | undefined;
   #original: Uint8Array | undefined;
   #originalFileName: string | undefined;
+  #originalContentType: string | undefined;
+  /** Limits the current document was opened with; reused when it is reopened. */
+  #limits: ResourceLimits;
+  #session: EditSessionController | undefined;
+  /** Shared by concurrent `edit()` calls while the engine starts. */
+  #sessionStart: Promise<EditSession> | undefined;
   #activeLoad: AbortController | undefined;
   #activeSearch: AbortController | undefined;
   #selection: TextSelection | CellRange | CellSelection | null = null;
@@ -110,6 +121,7 @@ export class DocumentViewer implements ViewerApi {
   constructor(options: ViewerOptions, runtime: ViewerRuntime) {
     this.#options = options;
     this.#runtime = runtime;
+    this.#limits = runtime.limits;
     this.#state = freezeState({
       status: "idle",
       pageIndex: 0,
@@ -232,38 +244,20 @@ export class DocumentViewer implements ViewerApi {
         await adapter.close(handle);
         throw abortError();
       }
-      if (
-        !Number.isInteger(backendInfo.pageCount) ||
-        backendInfo.pageCount < 1 ||
-        backendInfo.pageCount > limits.maxDocumentUnits
-      ) {
+      let info: DocumentInfo;
+      try {
+        info = describeDocument(adapter, backendInfo, detection.format, limits);
+      } catch (error) {
         await adapter.close(handle);
-        throw new ViewerError(
-          "resource-limit",
-          "Document unit count exceeds the configured limit",
-          {
-            details: {
-              pageCount: backendInfo.pageCount,
-              limit: limits.maxDocumentUnits,
-            },
-          },
-        );
+        throw error;
       }
-      const info = immutableInfo({
-        ...backendInfo,
-        capabilities: {
-          textSelection: Boolean(adapter.getTextMap),
-          cellSelection: backendInfo.unit === "sheet",
-          search: Boolean(adapter.getTextMap),
-          thumbnails: backendInfo.unit !== "sheet",
-          editing: false,
-        },
-      });
       this.#adapter = adapter;
       this.#handle = handle;
       this.#info = info;
       this.#original = loaded.bytes;
       this.#originalFileName = fileName;
+      this.#originalContentType = contentType;
+      this.#limits = limits;
       this.#update({
         status: "ready",
         format: detection.format,
@@ -882,18 +876,29 @@ export class DocumentViewer implements ViewerApi {
     return blob;
   }
 
-  async edit(_options: EditOptions = {}): Promise<EditSession> {
-    const { info } = this.#assertReady();
-    throw new ViewerError(
-      "edit-unsupported",
-      "Editing is not available for this document",
-      { details: { format: info.format, reason: "no-engine" } },
-    );
+  async edit(options: EditOptions = {}): Promise<EditSession> {
+    const { adapter, info } = this.#assertReady();
+    if (this.#session) return this.#session;
+    if (this.#sessionStart) return this.#sessionStart;
+    const format = editableFormat(adapter, info.format);
+    if (!format || !adapter.edit)
+      throw new ViewerError(
+        "edit-unsupported",
+        "Editing is not available for this document",
+        { details: { format: info.format, reason: "no-engine" } },
+      );
+    const start = this.#startSession(adapter.edit, format, options);
+    this.#sessionStart = start;
+    try {
+      return await start;
+    } finally {
+      if (this.#sessionStart === start) this.#sessionStart = undefined;
+    }
   }
 
   getEditSession(): EditSession | undefined {
     this.#assertAlive();
-    return undefined;
+    return this.#session;
   }
 
   pageToClient(_pageIndex: number, _rect: PageRect): ViewportRect | undefined {
@@ -938,6 +943,137 @@ export class DocumentViewer implements ViewerApi {
     this.#emit("statechange", this.#state);
     this.#listeners.clear();
     this.#runtime.release(this);
+  }
+
+  async #startSession(
+    provider: EditEngineProvider,
+    format: EditableFormat,
+    options: EditOptions,
+  ): Promise<EditSession> {
+    const generation = this.#generation;
+    const operation = this.#startOperation(options.signal);
+    try {
+      const engine = await provider.load(this.#original!.slice(), {
+        format,
+        limits: this.#limits,
+        signal: operation.signal,
+        ...(this.#originalFileName ? { fileName: this.#originalFileName } : {}),
+        ...(this.#runtime.assetBaseUrl
+          ? { assetBaseUrl: this.#runtime.assetBaseUrl }
+          : {}),
+      });
+      if (generation !== this.#generation || operation.signal.aborted) {
+        await engine.dispose().catch(() => undefined);
+        throw abortError();
+      }
+      const host: EditSessionHost = {
+        format,
+        limits: this.#limits,
+        replaceDocument: (bytes, signal) =>
+          this.#replaceDocument(bytes, signal),
+        emit: (type, event) => this.#emit(type, event),
+      };
+      const session = new EditSessionController(
+        engine,
+        host,
+        this.#original!,
+        this.#info!.pageCount,
+      );
+      this.#session = session;
+      this.#emit("editstatechange", {
+        ...session.state,
+        active: true,
+        format,
+      });
+      return session;
+    } catch (error) {
+      const normalized = normalizeError(error, "edit-failed");
+      throw normalized.code === "edit-failed" && !normalized.details
+        ? new ViewerError("edit-failed", normalized.message, {
+            cause: error,
+            details: { stage: "load" },
+          })
+        : normalized;
+    } finally {
+      this.#finishOperation(operation);
+    }
+  }
+
+  /**
+   * Shows edited bytes as the current document: opens them through the
+   * adapter, swaps the handle, drops every cache derived from the old content
+   * and keeps the view where it was. Returns the new page count.
+   */
+  async #replaceDocument(
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<number> {
+    const { adapter, handle, info } = this.#assertReady();
+    const generation = this.#generation;
+    enforceContainerLimits(bytes, info.format, this.#limits);
+    const context: AdapterOpenContext = {
+      format: info.format,
+      signal,
+      limits: this.#limits,
+      reportProgress: (progress) => this.#emit("progress", progress),
+      reportWarning: (warning) => this.#emit("warning", warning),
+      ...(this.#originalFileName ? { fileName: this.#originalFileName } : {}),
+      ...(this.#originalContentType
+        ? { contentType: this.#originalContentType }
+        : {}),
+      ...(this.#runtime.assetBaseUrl
+        ? { assetBaseUrl: this.#runtime.assetBaseUrl }
+        : {}),
+    };
+    const next = adapter.reopen
+      ? await adapter.reopen(handle, bytes, context)
+      : await adapter.open(bytes, context);
+    let nextInfo: DocumentInfo;
+    try {
+      if (generation !== this.#generation || signal.aborted) throw abortError();
+      const backendInfo = await adapter.getInfo(next);
+      if (generation !== this.#generation || signal.aborted) throw abortError();
+      nextInfo = describeDocument(
+        adapter,
+        backendInfo,
+        info.format,
+        this.#limits,
+      );
+    } catch (error) {
+      await adapter.close(next);
+      throw error;
+    }
+    this.#handle = next;
+    this.#info = nextInfo;
+    this.#invalidateContentCaches();
+    this.#update({
+      pageCount: nextInfo.pageCount,
+      pageIndex: Math.min(this.#state.pageIndex, nextInfo.pageCount - 1),
+    });
+    for (const warning of nextInfo.warnings ?? [])
+      this.#emit("warning", warning);
+    this.#viewport?.setDocument(nextInfo);
+    await adapter.close(handle);
+    return nextInfo.pageCount;
+  }
+
+  /** Forgets everything derived from the document's content, not from its view. */
+  #invalidateContentCaches(): void {
+    this.#textMaps.clear();
+    this.#textMapBytes = 0;
+    // The worker keeps its index; a stale key makes the next search rebuild it.
+    this.#fuzzyIndexKey = undefined;
+    this.#activeSearch?.abort();
+    this.#activeSearch = undefined;
+    this.#searchGeneration += 1;
+    if (this.#searchResult) {
+      this.#searchResult = null;
+      this.#emit("searchchange", null);
+    }
+    if (this.#selection) {
+      this.#selection = null;
+      this.#emit("selectionchange", null);
+    }
   }
 
   async #getTextRuns(
@@ -1040,6 +1176,10 @@ export class DocumentViewer implements ViewerApi {
   }
 
   async #closeDocument(): Promise<void> {
+    const session = this.#session;
+    this.#session = undefined;
+    this.#sessionStart = undefined;
+    if (session) await session.end();
     const adapter = this.#adapter;
     const handle = this.#handle;
     this.#adapter = undefined;
@@ -1047,6 +1187,7 @@ export class DocumentViewer implements ViewerApi {
     this.#info = undefined;
     this.#original = undefined;
     this.#originalFileName = undefined;
+    this.#originalContentType = undefined;
     this.#activeSearch?.abort();
     this.#activeSearch = undefined;
     this.#searchResult = null;
@@ -1132,6 +1273,49 @@ export class DocumentViewer implements ViewerApi {
     for (const listener of this.#listeners.get(type) ?? [])
       listener(event as never);
   }
+}
+
+/** The edit format of `format` when `adapter` can edit it. */
+function editableFormat(
+  adapter: DocumentAdapter,
+  format: DocumentFormat,
+): EditableFormat | undefined {
+  const formats: readonly string[] = adapter.edit?.formats ?? [];
+  return formats.includes(format) ? (format as EditableFormat) : undefined;
+}
+
+/** Validates backend info and freezes it with the viewer's capability flags. */
+function describeDocument(
+  adapter: DocumentAdapter,
+  backendInfo: DocumentInfo,
+  format: DocumentFormat,
+  limits: ResourceLimits,
+): DocumentInfo {
+  if (
+    !Number.isInteger(backendInfo.pageCount) ||
+    backendInfo.pageCount < 1 ||
+    backendInfo.pageCount > limits.maxDocumentUnits
+  )
+    throw new ViewerError(
+      "resource-limit",
+      "Document unit count exceeds the configured limit",
+      {
+        details: {
+          pageCount: backendInfo.pageCount,
+          limit: limits.maxDocumentUnits,
+        },
+      },
+    );
+  return immutableInfo({
+    ...backendInfo,
+    capabilities: {
+      textSelection: Boolean(adapter.getTextMap),
+      cellSelection: backendInfo.unit === "sheet",
+      search: Boolean(adapter.getTextMap),
+      thumbnails: backendInfo.unit !== "sheet",
+      editing: editableFormat(adapter, format) !== undefined,
+    },
+  });
 }
 
 function clampZoom(value: number): number {
