@@ -4,6 +4,14 @@ import { isDirectoryEntry, partKey, partNameOf } from "./names.js";
 import { writeZip, type WriteOverlay } from "./writer.js";
 import { decodePart, scanXml, type XmlPart } from "./xml.js";
 import {
+  parseContentTypes,
+  parseRelationships,
+  type ContentTypes,
+  type RelationshipSet,
+} from "./opc.js";
+import { PackageTransaction } from "./transaction.js";
+import { relationshipsPartOf, resolveTarget } from "./names.js";
+import {
   inflateEntry,
   parseZip,
   type ZipArchive,
@@ -125,6 +133,41 @@ export class OoxmlPackage {
 
   get revision(): number {
     return this.#overlay.revision;
+  }
+
+  /** From [Content_Types].xml: an Override, else the Default for the extension. */
+  async contentTypeOf(name: string): Promise<string | undefined> {
+    return (await this.contentTypes()).typeOf(name);
+  }
+
+  /** The content-type model of the current state. */
+  async contentTypes(): Promise<ContentTypes> {
+    return parseContentTypes(await this.xml(CONTENT_TYPES_PART));
+  }
+
+  /** The relationships of a part, or of the package for "/". */
+  async relationships(
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<RelationshipSet> {
+    const source = name === "/" || name === "" ? "/" : partNameOf(name);
+    const relsName = relationshipsPartOf(source);
+    if (!this.has(relsName))
+      return parseRelationships(source, undefined, undefined);
+    return parseRelationships(
+      source,
+      relsName,
+      await this.xml(relsName, signal),
+    );
+  }
+
+  /** Resolves a relationship target against its source part to an absolute name. */
+  resolve(sourcePart: string, target: string): string {
+    return resolveTarget(sourcePart, target);
+  }
+
+  transaction(): PackageTransaction {
+    return new PackageTransaction(this);
   }
 
   /** The ZIP entry behind a part. */
