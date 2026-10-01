@@ -14,6 +14,7 @@ import {
   localRecordOf,
   parseZip,
 } from "../packages/viewer/dist/edit/ooxml/zip.js";
+import { scanXml } from "../packages/viewer/dist/edit/ooxml/xml.js";
 
 const root = resolve(import.meta.dirname, "..");
 const iterations = Number(process.env.FUZZ_ITERATIONS ?? 2_000);
@@ -27,6 +28,9 @@ const seeds = [
   tinyZip(),
   Uint8Array.of(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1),
   bytes('<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>'),
+  bytes(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/></p:nvSpPr><p:txBody><a:p><a:r><a:t>Hello &amp; bye</a:t></a:r></a:p></p:txBody></p:sp><!-- c --><![CDATA[x]]></p:spTree></p:cSld></p:sld>',
+  ),
   bytes('a,b\n"quoted\nfield",c'),
   Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a),
 ];
@@ -63,6 +67,7 @@ const report = {
     "CSV/TSV parser",
     "PDF full-save compaction",
     "OOXML ZIP reader",
+    "OOXML XML scanner",
   ],
 };
 await mkdir(resolve(root, "artifacts"), { recursive: true });
@@ -93,6 +98,10 @@ function exercise(sample) {
   // The compaction pass of a full PDF save must refuse or finish, never hang.
   try {
     compactPdf(sample);
+  } catch {}
+  // The OOXML XML scanner must refuse or finish on any text.
+  try {
+    scanXml("fuzz.xml", text);
   } catch {}
   // The OOXML ZIP reader must refuse or finish on any bytes.
   try {

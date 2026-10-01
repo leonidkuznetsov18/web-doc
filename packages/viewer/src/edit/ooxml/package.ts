@@ -2,6 +2,7 @@ import type { ResourceLimits } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { isDirectoryEntry, partKey, partNameOf } from "./names.js";
 import { writeZip, type WriteOverlay } from "./writer.js";
+import { decodePart, scanXml, type XmlPart } from "./xml.js";
 import {
   inflateEntry,
   parseZip,
@@ -53,6 +54,8 @@ export class OoxmlPackage {
     removed: new Set(),
   };
   readonly #snapshots = new Map<number, Overlay>();
+  /** Scanned parts by key, valid for the overlay revision they were scanned at. */
+  readonly #xml = new Map<string, Promise<XmlPart>>();
 
   private constructor(archive: ZipArchive, limits: ResourceLimits) {
     this.original = archive.bytes;
@@ -138,6 +141,40 @@ export class OoxmlPackage {
       this.#overlay.changed.get(key) ?? this.#overlay.added.get(key);
     if (change) return Promise.resolve(change.bytes.slice());
     return this.originalPart(name, signal);
+  }
+
+  /**
+   * A part decoded and scanned, cached until the part changes. A part that
+   * is not UTF-8 is `unsupported-part`; one that does not parse is
+   * `malformed-xml`.
+   */
+  xml(name: string, signal?: AbortSignal): Promise<XmlPart> {
+    const key = partKey(name);
+    const revision = this.#overlay.revision;
+    const cached = this.#xml.get(key);
+    if (cached)
+      return cached.then((part) =>
+        part.revision === revision
+          ? part
+          : this.#rescan(name, key, revision, signal),
+      );
+    return this.#rescan(name, key, revision, signal);
+  }
+
+  #rescan(
+    name: string,
+    key: string,
+    revision: number,
+    signal: AbortSignal | undefined,
+  ): Promise<XmlPart> {
+    const pending = this.part(name, signal).then((bytes) => {
+      const partName = partNameOf(name);
+      const { text } = decodePart(partName, bytes);
+      return scanXml(partName, text, revision);
+    });
+    this.#xml.set(key, pending);
+    pending.catch(() => this.#xml.delete(key));
+    return pending;
   }
 
   /** The original bytes of a part, inflated once and cached; ignores the overlay. */

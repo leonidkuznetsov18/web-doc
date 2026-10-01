@@ -1285,15 +1285,15 @@ target.
 
 **Acceptance criteria:**
 
-- [ ] Every construct in the spec scans with correct ranges on hand-written
+- [x] Every construct in the spec scans with correct ranges on hand-written
       parts and on every XML part of the corpus; `text.slice(start, end)` of
       every element reproduces its source; a part that fails the UTF-8 guard
       is `unsupported-part`; malformed input is `malformed-xml`.
-- [ ] The largest corpus part scans in the time recorded under Actual result.
+- [x] The largest corpus part scans in the time recorded under Actual result.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/ooxml-xml.test.ts`),
+- [x] `npm run test --workspace web-doc` (`test/ooxml-xml.test.ts`),
       `npm run fuzz:js`
 
 **Dependencies:** Task 38
