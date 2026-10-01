@@ -20,6 +20,22 @@ export interface OperationContext {
   withPage<T>(pageIndex: number, use: (page: number) => T): T;
   /** Records objects appended to a page by this operation. */
   appendObjects(pageIndex: number, records: readonly ObjectRecord[]): void;
+  /** Where an element's objects sit: their page and their indexes in drawing order. */
+  locate(id: string): ElementLocation | undefined;
+  /** Replaces `count` object records from `start` with `records`. */
+  spliceObjects(
+    pageIndex: number,
+    start: number,
+    count: number,
+    records: readonly ObjectRecord[],
+  ): void;
+}
+
+export interface ElementLocation {
+  readonly pageIndex: number;
+  /** Indexes of the element's objects in the page's drawing order, ascending. */
+  readonly indexes: readonly number[];
+  readonly record: ObjectRecord;
 }
 
 export interface OperationResult {

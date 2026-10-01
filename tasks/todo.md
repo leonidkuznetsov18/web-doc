@@ -414,16 +414,16 @@ is reopened, and the first browser round trip.
 
 **Acceptance criteria:**
 
-- [ ] Editing a text box rebuilds it; undo and redo restore the exact earlier
+- [x] Editing a text box rebuilds it; undo and redo restore the exact earlier
       bytes.
-- [ ] In the browser, `insertTextBox` shows the text on the canvas;
+- [x] In the browser, `insertTextBox` shows the text on the canvas;
       `getPageText` contains it after save and reload in a fresh viewer; the
       reloaded session lists one `textBox`.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc`
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc`
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 12
 

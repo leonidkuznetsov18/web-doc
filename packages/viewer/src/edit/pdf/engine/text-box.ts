@@ -1,20 +1,27 @@
 import type { PageRect } from "../../types.js";
-import type { InsertTextBoxOperation, PdfTextAlign } from "../types.js";
-import {
-  MARK_NAME,
-  MARK_PARAM,
-  OBJECT_TEXT,
-  type MarkParams,
-} from "./elements.js";
+import type {
+  InsertTextBoxOperation,
+  PdfTextAlign,
+  PdfTextBoxStyle,
+  ReplaceTextOperation,
+  ResizeElementOperation,
+  SetTextStyleOperation,
+} from "../types.js";
+import { MARK_NAME, MARK_PARAM, OBJECT_TEXT } from "./elements.js";
 import {
   firstNonWinAnsi,
   isStandardFamily,
   standardFontName,
-  type TextMeasurer,
 } from "./fonts.js";
 import { displayedSize, pageToUser, type PageGeometry } from "./geometry.js";
 import { layoutText } from "./text-layout.js";
-import type { OperationContext, OperationHandler } from "./operations.js";
+import type {
+  ElementLocation,
+  Issue,
+  OperationContext,
+  OperationHandler,
+  OperationResult,
+} from "./operations.js";
 import type { Pdfium } from "./pdfium.js";
 
 /** A text box's inputs with every default filled in; stored in its mark. */
@@ -43,12 +50,7 @@ export const insertTextBox: OperationHandler<InsertTextBoxOperation> = {
     validateRect(operation.rect, context.geometry(operation.pageIndex), issue);
     validateTextStyle(operation.style ?? {}, issue);
     const bad = firstNonWinAnsi(operation.text);
-    if (bad !== undefined)
-      issue(
-        "/text",
-        "font-unavailable",
-        `No available font can draw "${bad}" (U+${bad.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")})`,
-      );
+    if (bad !== undefined) issue("/text", "font-unavailable", unencodable(bad));
   },
 
   apply(operation, context) {
@@ -64,25 +66,71 @@ export const insertTextBox: OperationHandler<InsertTextBoxOperation> = {
     return {
       createdIds: [id],
       changedPages: [operation.pageIndex],
-      warnings: overflow
-        ? [
-            {
-              code: "fidelity-degraded",
-              message:
-                "The text does not fit the box's height and runs past it",
-              details: { elementId: id },
-            },
-          ]
-        : [],
+      warnings: overflowWarnings(overflow, id),
     };
   },
 };
 
-/** Lays the box out and inserts one text object per line. Returns whether it overflowed. */
+export const replaceText: OperationHandler<ReplaceTextOperation> = {
+  validate(operation, context, issue) {
+    if (!textBoxTarget(operation.target, context, issue)) return;
+    const bad = firstNonWinAnsi(operation.text);
+    if (bad !== undefined) issue("/text", "font-unavailable", unencodable(bad));
+  },
+  apply(operation, context) {
+    const { location, spec } = textBoxTarget(operation.target, context)!;
+    return changed(
+      location,
+      rebuildTextBox(context, location, { ...spec, text: operation.text }),
+    );
+  },
+};
+
+export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
+  validate(operation, context, issue) {
+    if (!textBoxTarget(operation.target, context, issue)) return;
+    validateTextStyle(operation.style, issue);
+  },
+  apply(operation, context) {
+    const { location, spec } = textBoxTarget(operation.target, context)!;
+    return changed(
+      location,
+      rebuildTextBox(context, location, {
+        ...spec,
+        style: { ...spec.style, ...definedFields(operation.style) },
+      }),
+    );
+  },
+};
+
+export const resizeElement: OperationHandler<ResizeElementOperation> = {
+  validate(operation, context, issue) {
+    const target = textBoxTarget(operation.target, context, issue);
+    if (!target) return;
+    validateRect(
+      operation.rect,
+      context.geometry(target.location.pageIndex),
+      issue,
+    );
+  },
+  apply(operation, context) {
+    const { location, spec } = textBoxTarget(operation.target, context)!;
+    return changed(
+      location,
+      rebuildTextBox(context, location, { ...spec, rect: operation.rect }),
+    );
+  },
+};
+
+/**
+ * Lays the box out and inserts one text object per line, appended to the
+ * page or at `insertAt` in drawing order. Returns whether it overflowed.
+ */
 export function drawTextBox(
   context: OperationContext,
   pageIndex: number,
   spec: TextBoxSpec,
+  insertAt?: number,
 ): boolean {
   const { pdfium, measurer } = context;
   const { lib } = pdfium;
@@ -108,6 +156,7 @@ export function drawTextBox(
   const params = JSON.stringify(spec);
   context.withPage(pageIndex, (page) => {
     const records = [];
+    let index = insertAt ?? -1;
     for (const line of layout.lines) {
       const object = lib.FPDFPageObj_CreateTextObj(
         context.document,
@@ -131,16 +180,87 @@ export function drawTextBox(
         MARK_PARAM,
         params,
       );
-      lib.FPDFPage_InsertObject(page, object);
-      records.push({
-        id: spec.id,
-        type: OBJECT_TEXT,
-        mark: spec,
-      });
+      if (insertAt === undefined) lib.FPDFPage_InsertObject(page, object);
+      else lib.FPDFPage_InsertObjectAtIndex(page, object, index++);
+      records.push({ id: spec.id, type: OBJECT_TEXT, mark: spec });
     }
-    context.appendObjects(pageIndex, records);
+    if (insertAt === undefined) context.appendObjects(pageIndex, records);
+    else context.spliceObjects(pageIndex, insertAt, 0, records);
   });
   return layout.overflow;
+}
+
+/**
+ * Replaces a text box's objects with ones drawn from `spec`, at the same
+ * place in the drawing order so nothing else changes its stacking.
+ */
+export function rebuildTextBox(
+  context: OperationContext,
+  location: ElementLocation,
+  spec: TextBoxSpec,
+): boolean {
+  const { lib } = context.pdfium;
+  const first = location.indexes[0]!;
+  context.withPage(location.pageIndex, (page) => {
+    // Highest first, so earlier indexes stay valid while removing.
+    for (const index of [...location.indexes].reverse()) {
+      const object = lib.FPDFPage_GetObject(page, index);
+      lib.FPDFPage_RemoveObject(page, object);
+      lib.FPDFPageObj_Destroy(object);
+    }
+  });
+  context.spliceObjects(location.pageIndex, first, location.indexes.length, []);
+  return drawTextBox(context, location.pageIndex, spec, first);
+}
+
+/** The location and stored inputs of a text box, or the issue that stops the edit. */
+function textBoxTarget(
+  target: string,
+  context: OperationContext,
+  issue: Issue = () => {},
+):
+  | { readonly location: ElementLocation; readonly spec: TextBoxSpec }
+  | undefined {
+  const location = context.locate(target);
+  if (!location) {
+    issue("/target", "unknown-target", `No element ${target}`);
+    return undefined;
+  }
+  if (location.record.mark?.kind !== "textBox") {
+    issue(
+      "/target",
+      "unsupported-target",
+      "Only text boxes created by web-doc can be edited yet",
+    );
+    return undefined;
+  }
+  return { location, spec: location.record.mark as unknown as TextBoxSpec };
+}
+
+function changed(
+  location: ElementLocation,
+  overflow: boolean,
+): OperationResult {
+  return {
+    createdIds: [],
+    changedPages: [location.pageIndex],
+    warnings: overflowWarnings(overflow, location.record.id),
+  };
+}
+
+function overflowWarnings(
+  overflow: boolean,
+  elementId: string,
+): OperationResult["warnings"] {
+  return overflow
+    ? [
+        {
+          code: "fidelity-degraded",
+          message: "The text does not fit the box's height and runs past it",
+          details: { elementId },
+        },
+      ]
+    : [];
 }
 
 /**
@@ -182,9 +302,7 @@ export function parseColor(color: string): [number, number, number] {
   ) as [number, number, number];
 }
 
-export function resolveStyle(
-  style: InsertTextBoxOperation["style"] & {},
-): TextBoxSpec["style"] {
+export function resolveStyle(style: PdfTextBoxStyle): TextBoxSpec["style"] {
   return {
     fontFamily: style.fontFamily ?? "Helvetica",
     fontSize: style.fontSize ?? 12,
@@ -196,10 +314,13 @@ export function resolveStyle(
   };
 }
 
-export function validateTextStyle(
-  style: InsertTextBoxOperation["style"] & {},
-  issue: (path: string, code: string, message: string) => void,
-): void {
+function definedFields(style: PdfTextBoxStyle): Partial<TextBoxSpec["style"]> {
+  return Object.fromEntries(
+    Object.entries(style).filter(([, value]) => value !== undefined),
+  ) as Partial<TextBoxSpec["style"]>;
+}
+
+export function validateTextStyle(style: PdfTextBoxStyle, issue: Issue): void {
   if (style.fontFamily !== undefined && !isStandardFamily(style.fontFamily))
     issue(
       "/style/fontFamily",
@@ -211,7 +332,7 @@ export function validateTextStyle(
 export function validateRect(
   rect: PageRect,
   geometry: PageGeometry,
-  issue: (path: string, code: string, message: string) => void,
+  issue: Issue,
   path = "/rect",
 ): void {
   const size = displayedSize(geometry);
@@ -227,4 +348,9 @@ export function validateRect(
       "range",
       `The rectangle must lie within the ${size.width}×${size.height} pt page`,
     );
+}
+
+function unencodable(character: string): string {
+  const code = character.codePointAt(0)!.toString(16).toUpperCase();
+  return `No available font can draw "${character}" (U+${code.padStart(4, "0")})`;
 }

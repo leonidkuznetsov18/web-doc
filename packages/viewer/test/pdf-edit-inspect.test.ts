@@ -251,7 +251,21 @@ describe("PDF document model", () => {
   });
 
   it("groups marked objects into composite elements and ignores foreign marks", async () => {
-    const mark = { kind: "textBox", id: "p0:n1.0.0", text: "Box\nText" };
+    const mark = {
+      kind: "textBox",
+      id: "p0:n1.0.0",
+      rect: { x: 72, y: 72, width: 200, height: 40 },
+      text: "Box\nText",
+      style: {
+        fontFamily: "Helvetica",
+        fontSize: 12,
+        bold: false,
+        italic: false,
+        color: "#000000",
+        align: "left",
+        lineHeight: 1.2,
+      },
+    };
     const bytes = await buildPdf([
       {
         texts: [
@@ -265,12 +279,13 @@ describe("PDF document model", () => {
     const model = new PdfEditDocument(pdfium, bytes);
     try {
       const elements = model.getElements({ pageIndex: 0 });
+      // The partial "table" mark fails validation, so it stays plain text.
       assert.deepEqual(
         elements.map((element) => [element.kind, element.id]),
         [
           ["textBox", "p0:n1.0.0"],
           ["text", "p0:o2"],
-          ["table", "p0:x1"],
+          ["text", "p0:o3"],
         ],
       );
       const box = elements[0]!;

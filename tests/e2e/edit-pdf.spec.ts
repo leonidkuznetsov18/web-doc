@@ -84,3 +84,78 @@ test("starts the PDFium worker only on edit() and saves the untouched original",
   });
   for (const asset of EDIT_ASSETS) expect(requests).toContain(asset);
 });
+
+test("inserts and edits a text box, re-renders, saves and reloads it", async ({
+  page,
+}) => {
+  const original = await buildPdf(["Existing"]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const darkPixels = async () => {
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const pixels = canvas
+        .getContext("2d")!
+        .getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4)
+        if (pixels[offset]! < 128) count += 1;
+      return count;
+    };
+    const before = await darkPixels();
+    const session = await viewer.edit();
+    const inserted = await session.insertTextBox({
+      pageIndex: 0,
+      rect: { x: 72, y: 200, width: 450, height: 100 },
+      text: "Hello from web-doc editing",
+      style: { fontSize: 24, bold: true },
+    });
+    const afterInsert = await darkPixels();
+    const textAfterInsert: string = await viewer.getPageText(0);
+    const id: string = inserted.createdIds[0];
+    await session.replaceText({ target: id, text: "Edited text box" });
+    const textAfterEdit: string = await viewer.getPageText(0);
+    await session.undo();
+    const textAfterUndo: string = await viewer.getPageText(0);
+    await session.redo();
+    const saved: Uint8Array = await session.save();
+
+    const { ViewerClient } = (await import("/main.js")) as any;
+    const fresh = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href),
+    }).createViewer();
+    await fresh.load(saved, { fileName: "saved.pdf" });
+    const freshText: string = await fresh.getPageText(0);
+    const freshSession = await fresh.edit();
+    const elements = await freshSession.getElements({ pageIndex: 0 });
+    return {
+      revision: session.state.revision,
+      darker: afterInsert > before,
+      textAfterInsert,
+      textAfterEdit,
+      textAfterUndo,
+      freshText,
+      elements: elements.map(
+        (element: { kind: string; id: string; text?: string }) => [
+          element.kind,
+          element.id,
+          element.text,
+        ],
+      ),
+    };
+  });
+  expect(result.darker).toBe(true);
+  expect(result.revision).toBe(4);
+  // PDF.js joins text runs without separators, so check the words.
+  expect(result.textAfterInsert).toContain("Hello from web-doc");
+  expect(result.textAfterInsert).toContain("editing");
+  expect(result.textAfterEdit).toContain("Edited text box");
+  expect(result.textAfterEdit).not.toContain("Hello from");
+  expect(result.textAfterUndo).toContain("Hello from web-doc");
+  expect(result.freshText).toContain("Edited text box");
+  expect(result.elements).toEqual([
+    ["text", "p0:o0", "Existing"],
+    ["textBox", "p0:n1.0.0", "Edited text box"],
+  ]);
+});

@@ -310,3 +310,164 @@ describe("insertTextBox", () => {
     }
   });
 });
+
+describe("text box edits", () => {
+  let pdfium: Awaited<ReturnType<typeof fixturePdfium>>;
+  let original: Uint8Array;
+
+  before(async () => {
+    pdfium = await fixturePdfium();
+    original = await buildPdf(["Existing"]);
+  });
+
+  it("rebuilds a box in place for replaceText, setTextStyle and resizeElement", async () => {
+    const model = new PdfEditDocument(pdfium, original);
+    try {
+      model.apply([
+        textBox({ text: "First box" }),
+        textBox({
+          rect: { x: 72, y: 300, width: 200, height: 50 },
+          text: "Second",
+        }),
+      ]);
+      const ids = () => model.getElements({ pageIndex: 0 }).map((e) => e.id);
+      assert.deepEqual(ids(), ["p0:o0", "p0:n1.0.0", "p0:n1.1.0"]);
+      const before = model.getElement("p0:n1.0.0")!;
+
+      const replaced = model.apply([
+        {
+          op: "replaceText",
+          target: "p0:n1.0.0",
+          text: "Longer replacement text that certainly needs two lines of space",
+        },
+      ]);
+      assert.deepEqual(replaced, {
+        createdIds: [],
+        changedPages: [0],
+        pageCount: 1,
+        warnings: [],
+      });
+      // Same id, same place in the drawing order, same top-left, more lines.
+      assert.deepEqual(ids(), ["p0:o0", "p0:n1.0.0", "p0:n1.1.0"]);
+      const after = model.getElement("p0:n1.0.0")!;
+      assert.equal(
+        after.text,
+        "Longer replacement text that certainly needs two lines of space",
+      );
+      assert.ok(Math.abs(after.bounds.x - before.bounds.x) < 1);
+      assert.ok(Math.abs(after.bounds.y - before.bounds.y) < 1);
+      assert.ok(after.bounds.height > before.bounds.height);
+      assert.equal(await objectCount(model.materialize(), 0), 4);
+
+      model.apply([
+        {
+          op: "setTextStyle",
+          target: "p0:n1.0.0",
+          style: { bold: true, color: "#0000ff", align: "right" },
+        },
+      ]);
+      const styled = model.getElement("p0:n1.0.0")!;
+      assert.deepEqual(styled.textStyle, {
+        fontFamily: "Helvetica",
+        fontSize: 12,
+        bold: true,
+        italic: false,
+        color: "#0000ff",
+      });
+      assert.ok(Math.abs(styled.bounds.x + styled.bounds.width - 272) < 2);
+
+      model.apply([
+        {
+          op: "resizeElement",
+          target: "p0:n1.0.0",
+          rect: { x: 100, y: 100, width: 400, height: 50 },
+        },
+      ]);
+      const resized = model.getElement("p0:n1.0.0")!;
+      assert.ok(
+        Math.abs(resized.bounds.y - 100) < 5,
+        JSON.stringify(resized.bounds),
+      );
+      assert.ok(resized.bounds.height < after.bounds.height, "one line again");
+      assert.equal(await objectCount(model.materialize(), 0), 3);
+      assert.equal(
+        await extractPageText(model.materialize(), 0),
+        "Existing\r\nLonger replacement text that certainly needs two lines of space\r\nSecond",
+      );
+    } finally {
+      model.dispose();
+    }
+  });
+
+  it("edits a box after save and reopen, and refuses other targets", async () => {
+    const first = new PdfEditDocument(pdfium, original);
+    let saved: Uint8Array;
+    try {
+      first.apply([textBox({ text: "Persisted" })]);
+      saved = first.materialize();
+    } finally {
+      first.dispose();
+    }
+    const reopened = new PdfEditDocument(pdfium, saved);
+    try {
+      const box = reopened.getElement("p0:n1.0.0");
+      assert.equal(box?.kind, "textBox");
+      assert.equal(box?.text, "Persisted");
+      reopened.apply([
+        { op: "replaceText", target: "p0:n1.0.0", text: "Changed" },
+      ]);
+      assert.equal(
+        await extractPageText(reopened.materialize(), 0),
+        "Existing\r\nChanged",
+      );
+      const issues = reopened
+        .validate([
+          { op: "replaceText", target: "p0:o0", text: "x" },
+          { op: "replaceText", target: "missing", text: "x" },
+          { op: "setTextStyle", target: "p0:o0", style: {} },
+          {
+            op: "resizeElement",
+            target: "p0:n1.0.0",
+            rect: { x: 600, y: 0, width: 100, height: 10 },
+          },
+        ])
+        .map((issue) => `${issue.operationIndex}${issue.path}:${issue.code}`);
+      assert.deepEqual(issues, [
+        "0/target:unsupported-target",
+        "1/target:unknown-target",
+        "2/target:unsupported-target",
+        "3/rect:range",
+      ]);
+    } finally {
+      reopened.dispose();
+    }
+  });
+
+  it("treats a mark that fails validation as plain objects", async () => {
+    const withForeign = await buildPdf([
+      {
+        texts: [
+          { text: "Plain", x: 72, y: 700 },
+          {
+            text: "Bad",
+            x: 72,
+            y: 650,
+            mark: { kind: "textBox", id: "p0:n9.0.0", text: "Bad", rect: {} },
+          },
+        ],
+      },
+    ]);
+    const model = new PdfEditDocument(pdfium, withForeign);
+    try {
+      assert.deepEqual(
+        model.getElements({ pageIndex: 0 }).map((e) => [e.kind, e.id]),
+        [
+          ["text", "p0:o0"],
+          ["text", "p0:o1"],
+        ],
+      );
+    } finally {
+      model.dispose();
+    }
+  });
+});

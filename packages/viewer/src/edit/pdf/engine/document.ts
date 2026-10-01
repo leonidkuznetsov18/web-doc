@@ -18,10 +18,16 @@ import {
 import { TextMeasurer } from "./fonts.js";
 import {
   issueCollector,
+  type ElementLocation,
   type OperationContext,
   type OperationHandler,
 } from "./operations.js";
-import { insertTextBox } from "./text-box.js";
+import {
+  insertTextBox,
+  replaceText,
+  resizeElement,
+  setTextStyle,
+} from "./text-box.js";
 import {
   rectContains,
   rectsIntersect,
@@ -49,8 +55,14 @@ interface PageRecord {
  * Everything a query answers comes from PDFium; the model only remembers
  * identities and caches.
  */
+/** Batches arrive as plain JSON; unknown operations are reported, not typed away. */
+type PdfOrUnknownOperation = PdfOperation | EditOperation;
+
 const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   insertTextBox: insertTextBox as OperationHandler,
+  replaceText: replaceText as OperationHandler,
+  setTextStyle: setTextStyle as OperationHandler,
+  resizeElement: resizeElement as OperationHandler,
 };
 
 export class PdfEditDocument {
@@ -82,7 +94,7 @@ export class PdfEditDocument {
    * after another against the state before the batch, which is exact for
    * everything but a page count another operation of the batch changes.
    */
-  validate(operations: readonly EditOperation[]): OperationIssue[] {
+  validate(operations: readonly PdfOrUnknownOperation[]): OperationIssue[] {
     const issues: OperationIssue[] = [];
     const context = this.#context(this.#batches + 1, 0);
     operations.forEach((operation, operationIndex) => {
@@ -105,7 +117,7 @@ export class PdfEditDocument {
     return issues;
   }
 
-  apply(operations: readonly EditOperation[]): EngineChange {
+  apply(operations: readonly PdfOrUnknownOperation[]): EngineChange {
     const batch = this.#batches + 1;
     const createdIds: string[] = [];
     const changedPages = new Set<number>();
@@ -141,7 +153,7 @@ export class PdfEditDocument {
       : this.#document.save("incremental");
   }
 
-  restore(batches: readonly (readonly EditOperation[])[]): void {
+  restore(batches: readonly (readonly PdfOrUnknownOperation[])[]): void {
     this.#document.close();
     this.#document = this.#pdfium.openDocument(this.#original);
     this.#measurer = new TextMeasurer(this.#pdfium, this.#document.handle);
@@ -245,7 +257,29 @@ export class PdfEditDocument {
         page.objects = [...(page.objects ?? []), ...records];
         delete page.elements;
       },
+      locate: (id) => this.#locate(id),
+      spliceObjects: (pageIndex, start, count, records) => {
+        const page = this.#pages[pageIndex]!;
+        const objects = [...(page.objects ?? [])];
+        objects.splice(start, count, ...records);
+        page.objects = objects;
+        delete page.elements;
+      },
     };
+  }
+
+  #locate(id: string): ElementLocation | undefined {
+    const pageIndex = this.#pageIndexOf(id);
+    if (pageIndex === undefined) return undefined;
+    const records = this.#withPage(pageIndex, (page) =>
+      this.#objectsOf(pageIndex, page),
+    );
+    const indexes: number[] = [];
+    records.forEach((record, index) => {
+      if (record.id === id) indexes.push(index);
+    });
+    const record = records[indexes[0] ?? -1];
+    return record ? { pageIndex, indexes, record } : undefined;
   }
 
   /** Loads a page, lets `use` change it, regenerates its content stream. */

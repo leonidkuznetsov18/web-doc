@@ -19,6 +19,7 @@ const definitions: Readonly<Record<string, JsonSchema>> = {
     },
   },
   color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" },
+  target: { type: "string", minLength: 1, maxLength: 200 },
   textBoxStyle: {
     type: "object",
     additionalProperties: false,
@@ -62,5 +63,60 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       },
       ["pageIndex", "rect", "text"],
     ),
+    replaceText: operation(
+      "replaceText",
+      {
+        target: { $ref: "#/$defs/target" },
+        text: { type: "string", minLength: 1, maxLength: 20000 },
+      },
+      ["target", "text"],
+    ),
+    setTextStyle: operation(
+      "setTextStyle",
+      {
+        target: { $ref: "#/$defs/target" },
+        style: { $ref: "#/$defs/textBoxStyle" },
+      },
+      ["target", "style"],
+    ),
+    resizeElement: operation(
+      "resizeElement",
+      {
+        target: { $ref: "#/$defs/target" },
+        rect: { $ref: "#/$defs/rect" },
+      },
+      ["target", "rect"],
+    ),
   }),
 });
+
+/**
+ * What a `WebDoc` mark found in a file must look like before its objects are
+ * treated as one of web-doc's own elements. Anything else stays plain objects.
+ */
+export const textBoxMarkSchema: JsonSchema = {
+  type: "object",
+  required: ["kind", "id", "rect", "text", "style"],
+  additionalProperties: false,
+  properties: {
+    kind: { const: "textBox" },
+    id: { $ref: "#/$defs/target" },
+    rect: { $ref: "#/$defs/rect" },
+    text: { type: "string", minLength: 1, maxLength: 20000 },
+    style: {
+      type: "object",
+      required: [
+        "fontFamily",
+        "fontSize",
+        "bold",
+        "italic",
+        "color",
+        "align",
+        "lineHeight",
+      ],
+      additionalProperties: false,
+      properties: definitions.textBoxStyle!.properties as JsonSchema,
+    },
+  },
+  $defs: definitions,
+};

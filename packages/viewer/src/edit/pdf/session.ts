@@ -17,6 +17,9 @@ import type {
   PdfEditSession,
   PdfElement,
   PdfOperation,
+  ReplaceTextOperation,
+  ResizeElementOperation,
+  SetTextStyleOperation,
 } from "./types.js";
 
 /**
@@ -92,5 +95,26 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.apply([{ op: "insertTextBox", ...fields }], options);
+  }
+
+  replaceText(
+    fields: Fields<ReplaceTextOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "replaceText", ...fields }], options);
+  }
+
+  setTextStyle(
+    fields: Fields<SetTextStyleOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "setTextStyle", ...fields }], options);
+  }
+
+  resizeElement(
+    fields: Fields<ResizeElementOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "resizeElement", ...fields }], options);
   }
 }

@@ -64,6 +64,11 @@ export interface PdfiumFunctions {
   FPDFPage_CountObjects(page: number): number;
   FPDFPage_GetObject(page: number, index: number): number;
   FPDFPage_InsertObject(page: number, object: number): void;
+  FPDFPage_InsertObjectAtIndex(
+    page: number,
+    object: number,
+    index: number,
+  ): boolean;
   FPDFPage_GenerateContent(page: number): boolean;
   FPDFPageObj_GetType(object: number): number;
   /** Four floats: left, bottom, right, top in user space. */

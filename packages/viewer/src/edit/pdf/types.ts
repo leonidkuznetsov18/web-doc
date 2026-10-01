@@ -67,8 +67,33 @@ export interface InsertTextBoxOperation {
   readonly style?: PdfTextBoxStyle;
 }
 
+export interface ReplaceTextOperation {
+  readonly op: "replaceText";
+  /** A `textBox` or `text` element. */
+  readonly target: string;
+  readonly text: string;
+}
+
+export interface SetTextStyleOperation {
+  readonly op: "setTextStyle";
+  /** A `textBox` or `text` element. */
+  readonly target: string;
+  readonly style: PdfTextBoxStyle;
+}
+
+export interface ResizeElementOperation {
+  readonly op: "resizeElement";
+  readonly target: string;
+  /** New bounds in page space; a text box is laid out again inside them. */
+  readonly rect: PageRect;
+}
+
 /** The PDF operation union; operations are added as they ship. */
-export type PdfOperation = InsertTextBoxOperation;
+export type PdfOperation =
+  | InsertTextBoxOperation
+  | ReplaceTextOperation
+  | SetTextStyleOperation
+  | ResizeElementOperation;
 
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type Fields<T extends PdfOperation> = Omit<T, "op">;
@@ -81,6 +106,21 @@ export interface PdfEditSession extends EditSessionBase<
   /** Lays `text` out inside `rect` as new text objects; the box's id is in `createdIds`. */
   insertTextBox(
     fields: Fields<InsertTextBoxOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Replaces the text of a text box (laid out again) or of a text object. */
+  replaceText(
+    fields: Fields<ReplaceTextOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Changes style fields; unspecified fields keep their value. */
+  setTextStyle(
+    fields: Fields<SetTextStyleOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Gives an element new bounds; text boxes reflow, other elements stretch. */
+  resizeElement(
+    fields: Fields<ResizeElementOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
 }

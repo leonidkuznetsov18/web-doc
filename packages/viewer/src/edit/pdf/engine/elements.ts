@@ -1,4 +1,6 @@
+import { validateSchema } from "../../schema.js";
 import type { PageRect } from "../../types.js";
+import { textBoxMarkSchema } from "../schemas.js";
 import type { PdfElement, PdfShapeStyle, PdfTextStyle } from "../types.js";
 import {
   round,
@@ -113,13 +115,12 @@ export function readMark(
     );
     try {
       const params: unknown = JSON.parse(raw);
+      // Marks come from files, so they pass the same checks as operations.
       if (
         params &&
         typeof params === "object" &&
-        ((params as MarkParams).kind === "textBox" ||
-          (params as MarkParams).kind === "table") &&
-        typeof (params as MarkParams).id === "string" &&
-        (params as MarkParams).id.length > 0
+        (params as MarkParams).kind === "textBox" &&
+        validateSchema(params, textBoxMarkSchema, 0).length === 0
       )
         return params as MarkParams;
     } catch {
