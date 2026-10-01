@@ -581,14 +581,14 @@ fallback replacement with a `font-substitution` warning, and the
 
 **Acceptance criteria:**
 
-- [ ] Shapes appear with the requested geometry and colours after save and
+- [x] Shapes appear with the requested geometry and colours after save and
       reopen; `setShapeStyle` changes them; a shape with neither stroke nor fill
       fails validation.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-shapes.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-shapes.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 14
 

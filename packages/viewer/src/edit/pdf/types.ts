@@ -123,6 +123,43 @@ export interface MovePageOperation {
   readonly to: number;
 }
 
+export interface PdfStroke {
+  readonly color: string;
+  /** Points; 0 draws the thinnest line the device can. */
+  readonly width: number;
+}
+
+export interface PdfFill {
+  readonly color: string;
+}
+
+export type InsertShapeOperation =
+  | {
+      readonly op: "insertShape";
+      readonly pageIndex: number;
+      readonly shape: "rectangle" | "ellipse";
+      readonly rect: PageRect;
+      readonly stroke?: PdfStroke;
+      readonly fill?: PdfFill;
+    }
+  | {
+      readonly op: "insertShape";
+      readonly pageIndex: number;
+      readonly shape: "line";
+      readonly from: PagePoint;
+      readonly to: PagePoint;
+      readonly stroke?: PdfStroke;
+    };
+
+export interface SetShapeStyleOperation {
+  readonly op: "setShapeStyle";
+  readonly target: string;
+  /** A new stroke, `null` to remove it, or absent to keep it. */
+  readonly stroke?: PdfStroke | null;
+  /** A new fill, `null` to remove it, or absent to keep it. */
+  readonly fill?: PdfFill | null;
+}
+
 export interface RotatePageOperation {
   readonly op: "rotatePage";
   readonly pageIndex: number;
@@ -141,7 +178,9 @@ export type PdfOperation =
   | InsertPageOperation
   | DeletePageOperation
   | MovePageOperation
-  | RotatePageOperation;
+  | RotatePageOperation
+  | InsertShapeOperation
+  | SetShapeStyleOperation;
 
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type Fields<T extends PdfOperation> = Omit<T, "op">;
@@ -199,6 +238,16 @@ export interface PdfEditSession extends EditSessionBase<
   /** Sets a page's rotation. */
   rotatePage(
     fields: Fields<RotatePageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Draws a rectangle, ellipse or line as a path object. */
+  insertShape(
+    fields: Fields<InsertShapeOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Changes or removes a shape's stroke and fill. */
+  setShapeStyle(
+    fields: Fields<SetShapeStyleOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
 }

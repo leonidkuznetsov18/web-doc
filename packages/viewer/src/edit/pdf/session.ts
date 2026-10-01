@@ -16,6 +16,7 @@ import type {
   DeletePageOperation,
   Fields,
   InsertPageOperation,
+  InsertShapeOperation,
   InsertTextBoxOperation,
   MoveElementOperation,
   MovePageOperation,
@@ -25,6 +26,7 @@ import type {
   ReplaceTextOperation,
   ResizeElementOperation,
   RotatePageOperation,
+  SetShapeStyleOperation,
   SetTextStyleOperation,
 } from "./types.js";
 
@@ -164,5 +166,22 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.apply([{ op: "rotatePage", ...fields }], options);
+  }
+
+  insertShape(
+    fields: Fields<InsertShapeOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply(
+      [{ op: "insertShape", ...fields } as InsertShapeOperation],
+      options,
+    );
+  }
+
+  setShapeStyle(
+    fields: Fields<SetShapeStyleOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "setShapeStyle", ...fields }], options);
   }
 }

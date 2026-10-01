@@ -118,6 +118,20 @@ export interface PdfiumFunctions {
     height: number,
   ): number;
   FPDFPath_GetDrawMode(path: number, fillMode: number, stroke: number): boolean;
+  FPDFPageObj_CreateNewPath(x: number, y: number): number;
+  FPDFPath_MoveTo(path: number, x: number, y: number): boolean;
+  FPDFPath_LineTo(path: number, x: number, y: number): boolean;
+  FPDFPath_BezierTo(
+    path: number,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    x3: number,
+    y3: number,
+  ): boolean;
+  FPDFPath_Close(path: number): boolean;
+  FPDFPageObj_SetLineJoin(object: number, join: number): boolean;
   FPDFPath_SetDrawMode(
     path: number,
     fillMode: number,

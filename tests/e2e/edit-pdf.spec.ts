@@ -295,3 +295,37 @@ test("edits text that already exists in the file", async ({ page }) => {
     color: "#ff0000",
   });
 });
+
+test("draws shapes that render on the page", async ({ page }) => {
+  const original = await buildPdf([{ width: 300, height: 300 }]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const darkPixels = async () => {
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const pixels = canvas
+        .getContext("2d")!
+        .getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4)
+        if (pixels[offset]! < 64) count += 1;
+      return count;
+    };
+    const before = await darkPixels();
+    const session = await viewer.edit();
+    const receipt = await session.insertShape({
+      pageIndex: 0,
+      shape: "rectangle",
+      rect: { x: 50, y: 50, width: 100, height: 100 },
+      fill: { color: "#000000" },
+    });
+    const after = await darkPixels();
+    const element = await session.getElement(receipt.createdIds[0]);
+    return { before, after, kind: element.kind, bounds: element.bounds };
+  });
+  expect(result.before).toBe(0);
+  expect(result.after).toBeGreaterThan(9000);
+  expect(result.kind).toBe("shape");
+  expect(result.bounds).toEqual({ x: 50, y: 50, width: 100, height: 100 });
+});

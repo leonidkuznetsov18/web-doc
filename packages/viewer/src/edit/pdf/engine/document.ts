@@ -27,6 +27,7 @@ import { insertTextBox } from "./text-box.js";
 import { replaceText, setTextStyle } from "./existing-text.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
+import { insertShape, setShapeStyle } from "./shapes.js";
 import {
   displayedSize,
   rectContains,
@@ -69,6 +70,8 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   deletePage: deletePage as OperationHandler,
   movePage: movePage as OperationHandler,
   rotatePage: rotatePage as OperationHandler,
+  insertShape: insertShape as OperationHandler,
+  setShapeStyle: setShapeStyle as OperationHandler,
 };
 
 export class PdfEditDocument {

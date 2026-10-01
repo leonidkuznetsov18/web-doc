@@ -32,6 +32,36 @@ const definitions: Readonly<Record<string, JsonSchema>> = {
     additionalProperties: false,
     properties: { dx: { type: "number" }, dy: { type: "number" } },
   },
+  stroke: {
+    type: "object",
+    required: ["color", "width"],
+    additionalProperties: false,
+    properties: {
+      color: { $ref: "#/$defs/color" },
+      width: { type: "number", minimum: 0, maximum: 100 },
+    },
+  },
+  fill: {
+    type: "object",
+    required: ["color"],
+    additionalProperties: false,
+    properties: { color: { $ref: "#/$defs/color" } },
+  },
+  strokeOrNull: {
+    type: ["object", "null"],
+    required: ["color", "width"],
+    additionalProperties: false,
+    properties: {
+      color: { $ref: "#/$defs/color" },
+      width: { type: "number", minimum: 0, maximum: 100 },
+    },
+  },
+  fillOrNull: {
+    type: ["object", "null"],
+    required: ["color"],
+    additionalProperties: false,
+    properties: { color: { $ref: "#/$defs/color" } },
+  },
   textBoxStyle: {
     type: "object",
     additionalProperties: false,
@@ -149,6 +179,28 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
         rotation: { enum: [0, 90, 180, 270] },
       },
       ["pageIndex", "rotation"],
+    ),
+    insertShape: operation(
+      "insertShape",
+      {
+        pageIndex: { type: "integer", minimum: 0 },
+        shape: { enum: ["rectangle", "ellipse", "line"] },
+        rect: { $ref: "#/$defs/rect" },
+        from: { $ref: "#/$defs/point" },
+        to: { $ref: "#/$defs/point" },
+        stroke: { $ref: "#/$defs/stroke" },
+        fill: { $ref: "#/$defs/fill" },
+      },
+      ["pageIndex", "shape"],
+    ),
+    setShapeStyle: operation(
+      "setShapeStyle",
+      {
+        target: { $ref: "#/$defs/target" },
+        stroke: { $ref: "#/$defs/strokeOrNull" },
+        fill: { $ref: "#/$defs/fillOrNull" },
+      },
+      ["target"],
     ),
   }),
 });
