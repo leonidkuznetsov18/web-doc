@@ -69,6 +69,11 @@ export interface EditEngine {
     query: ElementQuery,
     signal: AbortSignal,
   ): Promise<readonly EditElement[]>;
+  /** Direct lookup; without it the core scans `getElements`. */
+  getElement?(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<EditElement | undefined>;
   elementsAt(
     pageIndex: number,
     point: PagePoint,

@@ -127,18 +127,18 @@ interface (reopen and emit) so it can be tested with fakes.
 
 **Acceptance criteria:**
 
-- [ ] Every rule in the spec sections "Applying a batch", "History, revisions
+- [x] Every rule in the spec sections "Applying a batch", "History, revisions
       and dirty state" and "Saving" has a passing test against a fake engine and
       a fake host.
-- [ ] A failure in engine apply, materialize or host reopen, or an abort during
+- [x] A failure in engine apply, materialize or host reopen, or an abort during
       apply, restores the previous prefix and rejects with the right code and
       `stage`.
-- [ ] Undo to revision 0 materializes the original bytes; replaying a history
+- [x] Undo to revision 0 materializes the original bytes; replaying a history
       materializes identical bytes.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `edit-history.test.ts`,
+- [x] `npm run test --workspace web-doc` (new `edit-history.test.ts`,
       `edit-session.test.ts`)
 
 **Dependencies:** Task 3

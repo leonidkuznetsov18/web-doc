@@ -1,0 +1,310 @@
+import type { ResourceLimits, ViewerEventMap } from "../../src/contracts.js";
+import type {
+  EditEngine,
+  EditEngineContext,
+  EditEngineProvider,
+  EngineChange,
+} from "../../src/edit/engine.js";
+import type { EditSessionHost } from "../../src/edit/session.js";
+import type {
+  EditableFormat,
+  EditElement,
+  EditFindOptions,
+  EditOperation,
+  ElementQuery,
+  OperationIssue,
+  OperationSchemaSet,
+  PagePoint,
+  TextTarget,
+} from "../../src/edit/types.js";
+import { abortError } from "../../src/errors.js";
+import { defaultResourceLimits, resolveLimits } from "../../src/limits.js";
+
+/*
+ * A text document engine for exercising the editing core without a real
+ * format: pages are strings, the file is their JSON encoding. Every failure
+ * mode the core must survive can be scripted.
+ */
+
+export type FakeOperation =
+  | {
+      readonly op: "setText";
+      readonly pageIndex: number;
+      readonly text: string;
+    }
+  | { readonly op: "insertPage"; readonly index: number; readonly text: string }
+  | { readonly op: "deletePage"; readonly pageIndex: number }
+  /** Passes validation, fails in `apply`. */
+  | { readonly op: "fail" }
+  /** Passes validation, waits until the signal aborts. */
+  | { readonly op: "hang" };
+
+export const fakeSchemas: OperationSchemaSet = {
+  format: "pdf",
+  version: 1,
+  operations: {
+    setText: {
+      type: "object",
+      required: ["op", "pageIndex", "text"],
+      additionalProperties: false,
+      properties: {
+        op: { const: "setText" },
+        pageIndex: { type: "integer", minimum: 0 },
+        text: { type: "string", maxLength: 100 },
+      },
+    },
+    insertPage: {
+      type: "object",
+      required: ["op", "index", "text"],
+      additionalProperties: false,
+      properties: {
+        op: { const: "insertPage" },
+        index: { type: "integer", minimum: 0 },
+        text: { type: "string" },
+      },
+    },
+    deletePage: {
+      type: "object",
+      required: ["op", "pageIndex"],
+      additionalProperties: false,
+      properties: {
+        op: { const: "deletePage" },
+        pageIndex: { type: "integer", minimum: 0 },
+      },
+    },
+    fail: { type: "object", properties: { op: { const: "fail" } } },
+    hang: { type: "object", properties: { op: { const: "hang" } } },
+  },
+};
+
+export function encodePages(pages: readonly string[]): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(pages));
+}
+
+export function decodePages(bytes: Uint8Array): string[] {
+  return JSON.parse(new TextDecoder().decode(bytes)) as string[];
+}
+
+export interface FakeEngineOptions {
+  /** Throw from `materialize` while true. */
+  failMaterialize?: boolean;
+  /** Throw from `restore` while true. */
+  failRestore?: boolean;
+}
+
+export class FakeEditEngine implements EditEngine {
+  readonly schemas = fakeSchemas;
+  readonly original: readonly string[];
+  readonly options: FakeEngineOptions;
+  readonly calls: string[] = [];
+  pages: string[];
+  disposed = false;
+
+  constructor(original: Uint8Array, options: FakeEngineOptions = {}) {
+    this.original = decodePages(original);
+    this.pages = [...this.original];
+    this.options = options;
+  }
+
+  async validate(
+    operations: readonly EditOperation[],
+  ): Promise<readonly OperationIssue[]> {
+    this.calls.push("validate");
+    const issues: OperationIssue[] = [];
+    let pageCount = this.pages.length;
+    operations.forEach((raw, operationIndex) => {
+      const operation = raw as FakeOperation;
+      if (operation.op === "setText" || operation.op === "deletePage") {
+        if (operation.pageIndex >= pageCount)
+          issues.push({
+            operationIndex,
+            path: "/pageIndex",
+            code: "unknown-target",
+            message: `No page ${operation.pageIndex}`,
+          });
+        else if (operation.op === "deletePage") pageCount -= 1;
+      } else if (operation.op === "insertPage") pageCount += 1;
+    });
+    return issues;
+  }
+
+  async apply(
+    operations: readonly EditOperation[],
+    signal: AbortSignal,
+  ): Promise<EngineChange> {
+    this.calls.push("apply");
+    const changed = new Set<number>();
+    const createdIds: string[] = [];
+    for (const raw of operations) {
+      const operation = raw as FakeOperation;
+      switch (operation.op) {
+        case "setText":
+          this.pages[operation.pageIndex] = operation.text;
+          changed.add(operation.pageIndex);
+          break;
+        case "insertPage":
+          this.pages.splice(operation.index, 0, operation.text);
+          createdIds.push(`page:${operation.text}`);
+          for (
+            let index = operation.index;
+            index < this.pages.length;
+            index += 1
+          )
+            changed.add(index);
+          break;
+        case "deletePage":
+          this.pages.splice(operation.pageIndex, 1);
+          for (
+            let index = operation.pageIndex;
+            index < this.pages.length;
+            index += 1
+          )
+            changed.add(index);
+          break;
+        case "fail":
+          // Half-applied on purpose: the core must roll this back.
+          this.pages[0] = "CORRUPT";
+          throw new Error("engine exploded");
+        case "hang":
+          await new Promise<never>((_, reject) =>
+            signal.addEventListener("abort", () => reject(abortError()), {
+              once: true,
+            }),
+          );
+      }
+    }
+    return {
+      createdIds,
+      changedPages: [...changed].sort((a, b) => a - b),
+      pageCount: this.pages.length,
+      warnings:
+        operations.length > 1
+          ? [{ code: "unsupported-feature", message: "batch" }]
+          : [],
+    };
+  }
+
+  async materialize(): Promise<Uint8Array> {
+    this.calls.push("materialize");
+    if (this.options.failMaterialize) throw new Error("disk full");
+    return encodePages(this.pages);
+  }
+
+  async restore(batches: readonly (readonly EditOperation[])[]): Promise<void> {
+    this.calls.push(`restore:${batches.length}`);
+    if (this.options.failRestore) throw new Error("restore failed");
+    this.pages = [...this.original];
+    for (const batch of batches)
+      await this.apply(batch, new AbortController().signal);
+  }
+
+  async getElements(query: ElementQuery): Promise<readonly EditElement[]> {
+    this.calls.push("getElements");
+    return this.pages.flatMap((text, pageIndex) =>
+      query.pageIndex !== undefined && query.pageIndex !== pageIndex
+        ? []
+        : text.split(" ").map((word, index) => ({
+            id: `p${pageIndex}w${index}`,
+            kind: "word",
+            pageIndex,
+            bounds: { x: index * 10, y: 0, width: 10, height: 10 },
+            text: word,
+            operations: ["setText"],
+          })),
+    );
+  }
+
+  async elementsAt(
+    pageIndex: number,
+    point: PagePoint,
+  ): Promise<readonly EditElement[]> {
+    const elements = await this.getElements({ pageIndex });
+    return elements.filter(
+      (element) =>
+        point.x >= element.bounds.x &&
+        point.x < element.bounds.x + element.bounds.width,
+    );
+  }
+
+  async findText(
+    query: string,
+    options: EditFindOptions,
+  ): Promise<readonly TextTarget[]> {
+    const targets: TextTarget[] = [];
+    this.pages.forEach((text, pageIndex) => {
+      const haystack = options.caseSensitive ? text : text.toLowerCase();
+      const needle = options.caseSensitive ? query : query.toLowerCase();
+      if (haystack.includes(needle))
+        targets.push({
+          pageIndex,
+          text: query,
+          rects: [{ x: 0, y: 0, width: 10, height: 10 }],
+          elementIds: [`p${pageIndex}w0`],
+        });
+    });
+    return targets;
+  }
+
+  async dispose(): Promise<void> {
+    this.disposed = true;
+  }
+}
+
+export function fakeProvider(
+  options: FakeEngineOptions = {},
+  onLoad?: (engine: FakeEditEngine) => void,
+): EditEngineProvider & { readonly loads: number } {
+  const provider = {
+    loads: 0,
+    formats: ["pdf"] as const satisfies readonly EditableFormat[],
+    async load(original: Uint8Array, _context: EditEngineContext) {
+      provider.loads += 1;
+      const engine = new FakeEditEngine(original, options);
+      onLoad?.(engine);
+      return engine;
+    },
+  };
+  return provider;
+}
+
+export interface FakeHostOptions {
+  readonly limits?: Partial<ResourceLimits>;
+  /** Throw from `replaceDocument` while true. */
+  failReplace?: boolean;
+}
+
+export class FakeHost implements EditSessionHost {
+  readonly format: EditableFormat = "pdf";
+  readonly limits: ResourceLimits;
+  readonly options: FakeHostOptions;
+  readonly events: { readonly type: string; readonly event: unknown }[] = [];
+  /** Every document the viewer was asked to show, decoded. */
+  readonly shown: string[][] = [];
+
+  constructor(options: FakeHostOptions = {}) {
+    this.options = options;
+    this.limits = resolveLimits(defaultResourceLimits, options.limits);
+  }
+
+  async replaceDocument(bytes: Uint8Array): Promise<number> {
+    if (this.options.failReplace) throw new Error("renderer rejected the file");
+    const pages = decodePages(bytes);
+    this.shown.push(pages);
+    return pages.length;
+  }
+
+  emit<K extends "editstatechange" | "documentchange">(
+    type: K,
+    event: ViewerEventMap[K],
+  ): void {
+    this.events.push({ type, event });
+  }
+
+  get eventTypes(): string[] {
+    return this.events.map((entry) => entry.type);
+  }
+
+  get current(): string[] | undefined {
+    return this.shown.at(-1);
+  }
+}
