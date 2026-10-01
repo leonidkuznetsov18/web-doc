@@ -98,8 +98,17 @@ export function createPdfEditHandler(
         assets.set(id, new Uint8Array(data));
         return undefined;
       }
-      case "edit-materialize":
-        return engine().materialize().buffer;
+      case "edit-materialize": {
+        const { purpose, options } = (payload ?? {}) as {
+          readonly purpose?: "show" | "save";
+          readonly options?: { readonly mode?: unknown };
+        };
+        const mode = options?.mode;
+        return engine().materialize(
+          purpose ?? "show",
+          mode === "full" || mode === "incremental" ? mode : undefined,
+        ).buffer;
+      }
       case "edit-restore": {
         const { batches, base } = payload as {
           readonly batches: readonly EngineBatch[];

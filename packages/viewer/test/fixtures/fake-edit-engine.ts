@@ -227,8 +227,15 @@ export class FakeEditEngine implements EditEngine {
     };
   }
 
-  async materialize(): Promise<Uint8Array> {
-    this.calls.push("materialize");
+  async materialize(
+    purpose: "show" | "save" = "show",
+    options: Readonly<Record<string, unknown>> = {},
+  ): Promise<Uint8Array> {
+    this.calls.push(
+      purpose === "save" && options.mode !== undefined
+        ? `materialize:${String(options.mode)}`
+        : "materialize",
+    );
     if (this.options.failMaterialize) throw new Error("disk full");
     return encodePages(this.pages);
   }

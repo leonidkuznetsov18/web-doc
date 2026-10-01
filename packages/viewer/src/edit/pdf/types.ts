@@ -6,6 +6,8 @@ import type {
   EditSessionBase,
   PagePoint,
   PageRect,
+  SavedDocument,
+  SaveOptions,
 } from "../types.js";
 
 export type PdfElementKind =
@@ -236,6 +238,16 @@ export type PdfOperation =
   | InsertTableOperation
   | SetTableCellOperation;
 
+export interface PdfSaveOptions extends SaveOptions {
+  /**
+   * `full` rewrites the file, so deleted content is gone and the bytes do not
+   * depend on which pages were read; `incremental` appends to the original
+   * bytes and keeps earlier signed revisions intact. The default is `full`
+   * for a document without signature fields and `incremental` for a signed one.
+   */
+  readonly mode?: "full" | "incremental";
+}
+
 /**
  * An operation's fields without its `op`, as the typed methods take them.
  * Distributes over unions so `insertShape` keeps its per-shape fields.
@@ -249,6 +261,7 @@ export interface PdfEditSession extends EditSessionBase<
   PdfElement
 > {
   readonly format: "pdf";
+  save(options?: PdfSaveOptions): Promise<SavedDocument>;
   /** Lays `text` out inside `rect` as new text objects; the box's id is in `createdIds`. */
   insertTextBox(
     fields: Fields<InsertTextBoxOperation>,

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
+import { inflateSync } from "node:zlib";
 
 import { PdfEditDocument } from "../src/edit/pdf/engine/document.js";
 import { createPdfEditHandler } from "../src/edit/pdf/engine/handler.js";
@@ -483,12 +484,125 @@ describe("checkpoints (revision 2)", () => {
       // regenerated page no longer references, and how many of those a
       // document carries depends on where it was opened from.
       assert.equal(
-        await extractPageText(viaCheckpoint.materialize("full"), 0),
-        await extractPageText(straight.materialize("full"), 0),
+        await extractPageText(viaCheckpoint.materialize("save", "full"), 0),
+        await extractPageText(straight.materialize("save", "full"), 0),
       );
     } finally {
       straight.dispose();
       viaCheckpoint.dispose();
+    }
+  });
+});
+
+describe("save modes (revision 2)", () => {
+  /** Every FlateDecode stream of a PDF, inflated, so hidden text can be searched. */
+  const streamTexts = (bytes: Uint8Array): string => {
+    const text = Array.from(bytes, (byte) => String.fromCharCode(byte)).join(
+      "",
+    );
+    const parts: string[] = [];
+    const pattern = /\/Length (\d+)[^>]*>>\s*stream\r?\n/g;
+    for (const match of text.matchAll(pattern)) {
+      const start = match.index! + match[0].length;
+      const slice = bytes.subarray(start, start + Number(match[1]));
+      try {
+        parts.push(new TextDecoder("latin1").decode(inflateSync(slice)));
+      } catch {
+        parts.push(new TextDecoder("latin1").decode(slice));
+      }
+    }
+    return parts.join("\n");
+  };
+  const secret = "SECRET-PHRASE-4711";
+  const box = {
+    op: "insertTextBox" as const,
+    pageIndex: 0,
+    rect: { x: 72, y: 72, width: 300, height: 40 },
+    text: secret,
+  };
+
+  it("drops deleted content from a full save and keeps it in an incremental one", async () => {
+    const pdfium = await fixturePdfium();
+    const original = await buildPdf(["One", "Two"]);
+    const model = new PdfEditDocument(pdfium, original);
+    try {
+      model.apply([box]);
+      assert.ok(
+        streamTexts(model.materialize("save", "incremental")).includes(secret),
+      );
+      model.apply([{ op: "deleteElement", target: "p0:n1.0.0" }]);
+      const full = model.materialize("save", "full");
+      assert.equal(streamTexts(full).includes(secret), false, "compacted away");
+      assert.ok(
+        streamTexts(model.materialize("save", "incremental")).includes(secret),
+        "an incremental save keeps earlier revisions",
+      );
+      // The compacted file is a complete, readable PDF.
+      const reopened = new PdfEditDocument(pdfium, full);
+      try {
+        assert.equal(reopened.pageCount, 2);
+        assert.equal(await extractPageText(full, 0), "One");
+        assert.equal(await extractPageText(full, 1), "Two");
+      } finally {
+        reopened.dispose();
+      }
+      // Unsigned files save in full mode by default; the viewer still reopens
+      // the incremental form.
+      assert.deepEqual(model.materialize("save"), full);
+      assert.ok(startsWith(model.materialize("show"), original));
+    } finally {
+      model.dispose();
+    }
+  });
+
+  it("produces the same full save with and without prior queries", async () => {
+    const pdfium = await fixturePdfium();
+    const original = await buildPdf(["One", "Two", "Three"]);
+    const quiet = new PdfEditDocument(pdfium, original);
+    const curious = new PdfEditDocument(pdfium, original);
+    try {
+      for (const model of [quiet, curious]) model.apply([box]);
+      curious.getElements({});
+      curious.findText("Two", {});
+      curious.elementsAt(2, { x: 10, y: 10 });
+      assert.deepEqual(
+        curious.materialize("save", "full"),
+        quiet.materialize("save", "full"),
+      );
+    } finally {
+      quiet.dispose();
+      curious.dispose();
+    }
+  });
+
+  it("keeps the incremental default for signed files and returns the original unchanged", async () => {
+    const pdfium = await fixturePdfium();
+    const signed = new PdfEditDocument(pdfium, signedPdf());
+    try {
+      assert.deepEqual(signed.materialize("save"), signedPdf());
+      signed.apply([box]);
+      assert.ok(startsWith(signed.materialize("save"), signedPdf()));
+      assert.equal(
+        startsWith(signed.materialize("save", "full"), signedPdf()),
+        false,
+      );
+    } finally {
+      signed.dispose();
+    }
+  });
+
+  it("passes the save mode from the session to the engine", async () => {
+    const original = await buildPdf(["One"]);
+    const { session, end } = await pdfSession(original);
+    try {
+      await session.insertTextBox(box);
+      const full = await session.save();
+      const incremental = await session.save({ mode: "incremental" });
+      assert.ok(startsWith(incremental.bytes, original));
+      assert.equal(startsWith(full.bytes, original), false);
+      assert.equal(full.stateToken, incremental.stateToken);
+    } finally {
+      await end();
     }
   });
 });

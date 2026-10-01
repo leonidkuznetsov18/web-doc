@@ -29,6 +29,7 @@ import { replaceText, setTextStyle } from "./existing-text.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import { insertShape, setShapeStyle } from "./shapes.js";
+import { compactPdf } from "./compact.js";
 import { ImageCache, insertImage } from "./images.js";
 import { AssetStore, type AssetSource } from "../../assets.js";
 import { insertTable, setTableCell, tableSpecOf } from "./tables.js";
@@ -285,11 +286,29 @@ export class PdfEditDocument {
     return resolved;
   }
 
-  /** The base bytes while nothing changed, else the document saved in `mode`. */
-  materialize(mode: "incremental" | "full" = "incremental"): Uint8Array {
-    return this.#batches === 0 && mode === "incremental"
-      ? this.#base.slice()
-      : this.#document.save(mode);
+  /**
+   * Bytes of the current state. The viewer reopens the incremental form,
+   * which is cheap to produce and read. A save defaults to a full rewrite —
+   * compacted, so deleted content is gone and the bytes do not depend on
+   * which pages were read — unless the file is signed, where the incremental
+   * form keeps the signed revision intact. Without changes either form is
+   * the bytes the document was opened from.
+   */
+  materialize(
+    purpose: "show" | "save" = "show",
+    mode?: "incremental" | "full",
+  ): Uint8Array {
+    const chosen =
+      purpose === "show"
+        ? "incremental"
+        : (mode ?? (this.#signatures > 0 ? "incremental" : "full"));
+    if (this.#batches === 0 && this.#base === this.#original)
+      return this.#original.slice();
+    if (chosen === "incremental")
+      return this.#batches === 0
+        ? this.#base.slice()
+        : this.#document.save("incremental");
+    return compactPdf(this.#document.save("full"));
   }
 
   /**

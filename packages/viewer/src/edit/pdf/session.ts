@@ -14,7 +14,6 @@ import type {
   ReadOptions,
   ReadResult,
   SavedDocument,
-  SaveOptions,
   TextTarget,
 } from "../types.js";
 import type {
@@ -31,6 +30,7 @@ import type {
   PdfEditSession,
   PdfElement,
   PdfOperation,
+  PdfSaveOptions,
   ReplaceTextOperation,
   ResizeElementOperation,
   RotatePageOperation,
@@ -90,7 +90,7 @@ export class PdfSession implements PdfEditSession {
     return this.#core.reset(options);
   }
 
-  save(options?: SaveOptions): Promise<SavedDocument> {
+  save(options?: PdfSaveOptions): Promise<SavedDocument> {
     return this.#core.save(options);
   }
 

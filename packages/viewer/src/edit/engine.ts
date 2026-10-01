@@ -51,6 +51,9 @@ export interface EngineBatch {
   readonly operations: readonly EditOperation[];
 }
 
+/** Format-specific save fields, as the session's `save()` received them without the signal. */
+export type MaterializeOptions = Readonly<Record<string, unknown>>;
+
 /** What `restore` rebuilds: a base document (a checkpoint, else the original) plus batches. */
 export interface RestoreTarget {
   readonly base?: Uint8Array;
@@ -87,8 +90,16 @@ export interface EditEngine {
    * element the operation cannot act on rejects with `invalid-operation`.
    */
   apply(batch: EngineBatch, signal: AbortSignal): Promise<EngineChange>;
-  /** Bytes of the current state; the original bytes when nothing changed. */
-  materialize(signal: AbortSignal): Promise<Uint8Array>;
+  /**
+   * Bytes of the current state; the original bytes when nothing changed.
+   * `show` asks for what the viewer reopens, `save` for what the host keeps;
+   * formats read their own fields from `options` (the PDF save mode).
+   */
+  materialize(
+    purpose: "show" | "save",
+    options: MaterializeOptions,
+    signal: AbortSignal,
+  ): Promise<Uint8Array>;
   /**
    * Rebuilds a state: the base document (a checkpoint, else the original)
    * with the batches applied in order. Used by undo, redo, reset, dry runs

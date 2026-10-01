@@ -185,7 +185,7 @@ export class EditSessionController implements EditSessionBase<
           const result = await this.#engine.apply(engineBatch, signal);
           // Producing the bytes catches what only saving would; then the
           // working copy goes back to the current state.
-          await this.#engine.materialize(signal);
+          await this.#engine.materialize("save", {}, signal);
           await this.#engine.restore(this.#restoreTarget(), signal);
           return result;
         });
@@ -299,8 +299,11 @@ export class EditSessionController implements EditSessionBase<
   }
 
   save(options: SaveOptions = {}): Promise<SavedDocument> {
+    // Format fields (the PDF save mode) travel to the engine; the signal stays.
+    const { signal: own, ...format } = options as SaveOptions &
+      Record<string, unknown>;
     return this.#enqueue(
-      options.signal,
+      own,
       async (signal) => {
         // A session whose recovery failed still hands out what it last
         // showed; the history state matches those bytes.
@@ -308,7 +311,7 @@ export class EditSessionController implements EditSessionBase<
           ? this.#committedBytes.slice()
           : this.#history.stateId === 0
             ? this.#original.slice()
-            : await this.#engine.materialize(signal);
+            : await this.#engine.materialize("save", format, signal);
         throwIfAborted(signal);
         return Object.freeze({
           bytes,
@@ -509,7 +512,7 @@ export class EditSessionController implements EditSessionBase<
   ): Promise<Shown> {
     let bytes: Uint8Array;
     try {
-      bytes = await this.#engine.materialize(signal);
+      bytes = await this.#engine.materialize("show", {}, signal);
     } catch (error) {
       throw stageError("materialize", error);
     }

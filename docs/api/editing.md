@@ -531,11 +531,22 @@ opened by the viewer and so cannot be edited.
 
 ### Saving and signatures
 
-`save()` returns the original bytes followed by an incremental update, so the
-output always starts with the original file and earlier revisions stay intact.
-Only pages an operation touched have their content rewritten. The same history
-produces byte-identical output, in this session or another one, and undoing to
-revision 0 — or saving without changes — returns the original bytes.
+`save({ mode })` takes `"full"` or `"incremental"`:
+
+- **Full** (the default for a document without signature fields) rewrites the
+  file and compacts it, so content that was deleted or replaced is gone from
+  the output and the bytes do not depend on which pages were read.
+- **Incremental** (the default for a signed document) appends the changes to
+  the original bytes: the output starts with the original file and earlier
+  revisions — including signed ones — stay intact and recoverable, so a reader
+  can still get at deleted content. It also repeats every object PDFium
+  parsed, so an incremental save can grow with the pages that were read.
+
+The viewer always reopens the incremental form after a change, which is
+cheaper to produce and read; the content is the same. Only pages an operation
+touched have their content rewritten. The same sequence of calls produces
+byte-identical output, in this session or another one, and saving without
+changes returns the original bytes in either mode.
 
 A digitally signed PDF can be edited. The first change reports a
 `fidelity-degraded` warning with `details.signatures` because the signatures

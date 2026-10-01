@@ -13,6 +13,7 @@ import type {
   EditEngineContext,
   EngineBatch,
   EngineChange,
+  MaterializeOptions,
   RestoreTarget,
 } from "../engine.js";
 import type {
@@ -137,11 +138,20 @@ export class PdfEditEngineClient implements EditEngine {
     return this.#request("edit-apply", { batch }, signal);
   }
 
-  async materialize(signal: AbortSignal): Promise<Uint8Array> {
+  /** A bare signal, as the unit tests pass it, asks for the shown form. */
+  async materialize(
+    purposeOrSignal: "show" | "save" | AbortSignal = "show",
+    options: MaterializeOptions = {},
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<Uint8Array> {
+    const purpose =
+      purposeOrSignal instanceof AbortSignal ? "show" : purposeOrSignal;
+    const own =
+      purposeOrSignal instanceof AbortSignal ? purposeOrSignal : signal;
     const buffer = await this.#request<ArrayBuffer>(
       "edit-materialize",
-      undefined,
-      signal,
+      { purpose, options },
+      own,
     );
     return new Uint8Array(buffer);
   }
