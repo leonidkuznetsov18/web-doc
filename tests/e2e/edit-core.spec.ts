@@ -129,6 +129,8 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
       close() {},
       edit: {
         formats: ["pdf"],
+        // The core already implements the session; a real format wraps it.
+        createSession: (core: unknown) => core,
         async load(original: Uint8Array) {
           const base = decode(original);
           let pages = [...base];
