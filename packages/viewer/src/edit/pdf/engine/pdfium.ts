@@ -172,6 +172,27 @@ export interface PdfiumFunctions {
     textPage: number,
     textIndex: number,
   ): number;
+  /** Advance box of a character as an FS_RECTF {left, top, right, bottom} of floats. */
+  FPDFText_GetLooseCharBox(
+    textPage: number,
+    index: number,
+    rect: number,
+  ): boolean;
+  /** Two doubles: the glyph origin in user space. */
+  FPDFText_GetCharOrigin(
+    textPage: number,
+    index: number,
+    x: number,
+    y: number,
+  ): boolean;
+  /** Char index at a user-space point within the tolerances, -1 for none, -3 on error. */
+  FPDFText_GetCharIndexAtPos(
+    textPage: number,
+    x: number,
+    y: number,
+    xTolerance: number,
+    yTolerance: number,
+  ): number;
   FPDFPageObjMark_CountParams(mark: number): number;
   FPDFPageObj_Transform(
     object: number,

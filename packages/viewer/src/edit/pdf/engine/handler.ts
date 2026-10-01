@@ -12,6 +12,7 @@ import type {
   EditOperation,
   ElementQuery,
   PagePoint,
+  TextRange,
 } from "../../types.js";
 import { pdfOperationSchemas } from "../schemas.js";
 import { PdfEditDocument } from "./document.js";
@@ -143,6 +144,19 @@ export function createPdfEditHandler(
         };
         return engine().findText(query, options);
       }
+      case "edit-text-layout":
+        return engine().textLayout((payload as { readonly id: string }).id);
+      case "edit-position-at": {
+        const { pageIndex, point } = payload as {
+          readonly pageIndex: number;
+          readonly point: PagePoint;
+        };
+        return engine().positionAt(pageIndex, point);
+      }
+      case "edit-range-rects":
+        return engine().rangeRects(
+          (payload as { readonly range: TextRange }).range,
+        );
       case "edit-dispose":
         state?.dispose();
         state = undefined;

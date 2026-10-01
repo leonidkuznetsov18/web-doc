@@ -13,6 +13,7 @@ import {
 } from "./assets.js";
 import type {
   EditEngine,
+  EditSessionCore,
   EngineBatch,
   EngineChange,
   RestoreTarget,
@@ -93,10 +94,7 @@ type FailureStage = "apply" | "materialize" | "reopen";
  * saving and the viewer refresh. Format modules wrap it to add typed methods.
  * Calls run one at a time in call order.
  */
-export class EditSessionController implements EditSessionBase<
-  EditOperation,
-  EditElement
-> {
+export class EditSessionController implements EditSessionCore {
   readonly format: EditableFormat;
   readonly schemas: OperationSchemaSet;
   readonly #engine: EditEngine;
@@ -388,6 +386,28 @@ export class EditSessionController implements EditSessionBase<
     const { signal: own, ...engineOptions } = options;
     return this.#enqueue(own, async (signal) =>
       this.#items(await this.#engine.findText(query, engineOptions, signal)),
+    );
+  }
+
+  readItem<T>(
+    options: ReadOptions | undefined,
+    task: (engine: EditEngine, signal: AbortSignal) => Promise<T | undefined>,
+  ): Promise<ReadItem<T>> {
+    return this.#enqueue(options?.signal, async (signal) =>
+      Object.freeze({
+        sessionId: this.sessionId,
+        revision: this.#revision,
+        item: await task(this.#engine, signal),
+      }),
+    );
+  }
+
+  readItems<T>(
+    options: ReadOptions | undefined,
+    task: (engine: EditEngine, signal: AbortSignal) => Promise<readonly T[]>,
+  ): Promise<ReadResult<T>> {
+    return this.#enqueue(options?.signal, async (signal) =>
+      this.#items(await task(this.#engine, signal)),
     );
   }
 

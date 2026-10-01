@@ -331,7 +331,7 @@ function textOf(pdfium: Pdfium, object: number, textPage: number): string {
   );
 }
 
-function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
+export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
   const { lib } = pdfium;
   const font = lib.FPDFTextObj_GetFont(object);
   const baseName = pdfium.readUtf8String((buffer, bytes) =>

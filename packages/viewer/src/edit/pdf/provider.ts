@@ -23,9 +23,27 @@ import type {
   ElementQuery,
   OperationIssue,
   PagePoint,
+  PageRect,
+  TextPosition,
+  TextRange,
   TextTarget,
 } from "../types.js";
 import { pdfOperationSchemas } from "./schemas.js";
+import type { TextLayout } from "./types.js";
+
+/** The reads behind the overlay primitives, beyond the core engine interface. */
+export interface PdfEngineReads {
+  textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined>;
+  positionAt(
+    pageIndex: number,
+    point: PagePoint,
+    signal: AbortSignal,
+  ): Promise<TextPosition | undefined>;
+  rangeRects(
+    range: TextRange,
+    signal: AbortSignal,
+  ): Promise<readonly PageRect[]>;
+}
 
 /** How long disposal waits for the worker's answer before terminating it. */
 const DISPOSE_GRACE_MS = 1000;
@@ -62,7 +80,7 @@ export async function loadPdfEditEngine(
   }
 }
 
-export class PdfEditEngineClient implements EditEngine {
+export class PdfEditEngineClient implements EditEngine, PdfEngineReads {
   readonly schemas = pdfOperationSchemas;
   readonly #rpc: WorkerRpcClient;
   readonly #context: EditEngineContext;
@@ -211,6 +229,25 @@ export class PdfEditEngineClient implements EditEngine {
     signal: AbortSignal,
   ): Promise<readonly TextTarget[]> {
     return this.#request("edit-find-text", { query, options }, signal);
+  }
+
+  textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined> {
+    return this.#request("edit-text-layout", { id }, signal);
+  }
+
+  positionAt(
+    pageIndex: number,
+    point: PagePoint,
+    signal: AbortSignal,
+  ): Promise<TextPosition | undefined> {
+    return this.#request("edit-position-at", { pageIndex, point }, signal);
+  }
+
+  rangeRects(
+    range: TextRange,
+    signal: AbortSignal,
+  ): Promise<readonly PageRect[]> {
+    return this.#request("edit-range-rects", { range }, signal);
   }
 
   async dispose(): Promise<void> {

@@ -7,11 +7,13 @@ import type {
   ElementQuery,
   OperationIssue,
   PagePoint,
+  PageRect,
   TextPosition,
   TextRange,
   TextTarget,
 } from "../../types.js";
-import type { PdfElement, PdfOperation } from "../types.js";
+import type { PdfElement, PdfOperation, TextLayout } from "../types.js";
+import { layoutOf, positionIn, rectsOf, type TextPageScan } from "./layout.js";
 import {
   markIsFresh,
   readMark,
@@ -466,22 +468,7 @@ export class PdfEditDocument {
       targets.length < limit;
       pageIndex += 1
     )
-      this.#withPage(pageIndex, (page, textPage, geometry) => {
-        const records = this.#objectsOf(pageIndex, page);
-        const { byObject, elements } = scanPage(
-          this.#pdfium,
-          page,
-          textPage,
-          pageIndex,
-          geometry,
-          records,
-        );
-        const offsets = this.#charOffsets(
-          page,
-          textPage,
-          byObject,
-          new Map(elements.map((element) => [element.id, element.text ?? ""])),
-        );
+      this.#scanText(pageIndex, ({ textPage, geometry, byObject, offsets }) => {
         for (const match of this.#matches(textPage, query, options)) {
           if (targets.length >= limit) break;
           targets.push(
@@ -497,6 +484,37 @@ export class PdfEditDocument {
         }
       });
     return targets;
+  }
+
+  /** Lines, glyph boxes and styles of a text, text box or table element. */
+  textLayout(elementId: string): TextLayout | undefined {
+    const pageIndex = this.#pageIndexOf(elementId);
+    if (pageIndex === undefined) return undefined;
+    return this.#scanText(pageIndex, (scan) => {
+      const element = scan.elements.find((entry) => entry.id === elementId);
+      return element ? layoutOf(this.#pdfium, scan, element) : undefined;
+    });
+  }
+
+  /** The caret position nearest to a page-space point; none on a page without text. */
+  positionAt(pageIndex: number, point: PagePoint): TextPosition | undefined {
+    if (pageIndex < 0 || pageIndex >= this.#pages.length) return undefined;
+    return this.#scanText(pageIndex, (scan) =>
+      positionIn(this.#pdfium, scan, point),
+    );
+  }
+
+  /** The rectangles a range covers, one per line fragment, in reading order. */
+  rangeRects(range: TextRange): PageRect[] {
+    const pageIndex = this.#pageIndexOf(range.start.elementId);
+    if (
+      pageIndex === undefined ||
+      pageIndex !== this.#pageIndexOf(range.end.elementId)
+    )
+      return [];
+    return this.#scanText(pageIndex, (scan) =>
+      rectsOf(this.#pdfium, scan, range),
+    );
   }
 
   dispose(): void {
@@ -731,6 +749,28 @@ export class PdfEditDocument {
       rotation: lib.FPDFPage_GetRotation(page),
     };
     return record.geometry;
+  }
+
+  /** Loads a page with its text page and the character-to-element mapping. */
+  #scanText<T>(pageIndex: number, use: (scan: TextPageScan) => T): T {
+    return this.#withPage(pageIndex, (page, textPage, geometry) => {
+      const records = this.#objectsOf(pageIndex, page);
+      const { byObject, elements } = scanPage(
+        this.#pdfium,
+        page,
+        textPage,
+        pageIndex,
+        geometry,
+        records,
+      );
+      const offsets = this.#charOffsets(
+        page,
+        textPage,
+        byObject,
+        new Map(elements.map((element) => [element.id, element.text ?? ""])),
+      );
+      return use({ page, textPage, geometry, byObject, elements, offsets });
+    });
   }
 
   #withPage<T>(

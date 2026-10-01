@@ -14,6 +14,9 @@ import type {
   OperationIssue,
   OperationSchemaSet,
   PagePoint,
+  ReadItem,
+  ReadOptions,
+  ReadResult,
   TextTarget,
 } from "./types.js";
 
@@ -33,8 +36,24 @@ export interface EditEngineContext {
   readonly signal: AbortSignal;
 }
 
-/** The format-independent session a provider wraps into its typed session. */
-export type EditSessionCore = EditSessionBase<EditOperation, EditElement>;
+/**
+ * The format-independent session a provider wraps into its typed session.
+ * The read hooks let a typed session add engine reads that queue behind
+ * earlier calls and carry the same envelope as the core's own reads.
+ */
+export interface EditSessionCore extends EditSessionBase<
+  EditOperation,
+  EditElement
+> {
+  readItem<T>(
+    options: ReadOptions | undefined,
+    task: (engine: EditEngine, signal: AbortSignal) => Promise<T | undefined>,
+  ): Promise<ReadItem<T>>;
+  readItems<T>(
+    options: ReadOptions | undefined,
+    task: (engine: EditEngine, signal: AbortSignal) => Promise<readonly T[]>,
+  ): Promise<ReadResult<T>>;
+}
 
 /** Advertised by a `DocumentAdapter` that can edit some of its formats. */
 export interface EditEngineProvider {

@@ -995,19 +995,19 @@ honoured.
 
 **Acceptance criteria:**
 
-- [ ] On pages rotated 0/90/180/270 and on a cropped page, every glyph box
+- [x] On pages rotated 0/90/180/270 and on a cropped page, every glyph box
       lies inside its element's bounds and the line bounds equal the union of
       its glyph boxes; a text box reports one line per drawn line and a table
       one per cell, in reading order.
-- [ ] `positionAt` at the centre of a glyph box returns that glyph's offset;
+- [x] `positionAt` at the centre of a glyph box returns that glyph's offset;
       `rangeRects` of a range contain the points that `positionAt` resolves
       back into the range (round-trip on all four rotations).
-- [ ] Unknown element, non-text element, a point on an empty page and a
+- [x] Unknown element, non-text element, a point on an empty page and a
       range across pages give `item: undefined` / `items: []`, not errors.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `test/pdf-edit-layout.test.ts`)
+- [x] `npm run test --workspace web-doc` (new `test/pdf-edit-layout.test.ts`)
 
 **Dependencies:** Task 28
 

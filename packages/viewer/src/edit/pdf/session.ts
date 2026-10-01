@@ -1,4 +1,5 @@
-import type { EditSessionCore } from "../engine.js";
+import { ViewerError } from "../../errors.js";
+import type { EditEngine, EditSessionCore } from "../engine.js";
 import type {
   ApplyOptions,
   AssetOptions,
@@ -10,12 +11,16 @@ import type {
   HistoryOptions,
   OperationSchemaSet,
   PagePoint,
+  PageRect,
   ReadItem,
   ReadOptions,
   ReadResult,
   SavedDocument,
+  TextPosition,
+  TextRange,
   TextTarget,
 } from "../types.js";
+import type { PdfEngineReads } from "./provider.js";
 import type {
   DeleteElementOperation,
   DeletePageOperation,
@@ -37,6 +42,7 @@ import type {
   SetShapeStyleOperation,
   SetTableCellOperation,
   SetTextStyleOperation,
+  TextLayout,
 } from "./types.js";
 
 /**
@@ -130,6 +136,34 @@ export class PdfSession implements PdfEditSession {
     options?: EditFindOptions,
   ): Promise<ReadResult<TextTarget>> {
     return this.#core.findText(query, options);
+  }
+
+  getTextLayout(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextLayout>> {
+    return this.#core.readItem(options, (engine, signal) =>
+      pdfReads(engine).textLayout(elementId, signal),
+    );
+  }
+
+  positionAt(
+    pageIndex: number,
+    point: PagePoint,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextPosition>> {
+    return this.#core.readItem(options, (engine, signal) =>
+      pdfReads(engine).positionAt(pageIndex, point, signal),
+    );
+  }
+
+  rangeRects(
+    range: TextRange,
+    options?: ReadOptions,
+  ): Promise<ReadResult<PageRect>> {
+    return this.#core.readItems(options, (engine, signal) =>
+      pdfReads(engine).rangeRects(range, signal),
+    );
   }
 
   insertTextBox(
@@ -239,4 +273,16 @@ export class PdfSession implements PdfEditSession {
   ): Promise<EditReceipt> {
     return this.apply([{ op: "setTableCell", ...fields }], options);
   }
+}
+
+/** The engine behind a PDF session answers the overlay reads; a stand-in may not. */
+function pdfReads(engine: EditEngine): PdfEngineReads {
+  const reads = engine as Partial<PdfEngineReads>;
+  if (!reads.textLayout || !reads.positionAt || !reads.rangeRects)
+    throw new ViewerError(
+      "edit-unsupported",
+      "This engine does not implement the PDF overlay primitives",
+      { details: { format: "pdf", reason: "no-overlay-primitives" } },
+    );
+  return reads as PdfEngineReads;
 }

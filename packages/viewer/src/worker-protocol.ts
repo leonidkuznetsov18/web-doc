@@ -30,6 +30,9 @@ export type EditWorkerOperation =
   | "edit-element"
   | "edit-elements-at"
   | "edit-find-text"
+  | "edit-text-layout"
+  | "edit-position-at"
+  | "edit-range-rects"
   | "edit-dispose";
 
 export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;

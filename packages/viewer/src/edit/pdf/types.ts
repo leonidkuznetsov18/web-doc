@@ -6,8 +6,13 @@ import type {
   EditSessionBase,
   PagePoint,
   PageRect,
+  ReadItem,
+  ReadOptions,
+  ReadResult,
   SavedDocument,
   SaveOptions,
+  TextPosition,
+  TextRange,
 } from "../types.js";
 
 export type PdfElementKind =
@@ -248,6 +253,39 @@ export interface PdfSaveOptions extends SaveOptions {
   readonly mode?: "full" | "incremental";
 }
 
+/** One drawn character of a layout line. */
+export interface TextLayoutGlyph {
+  /** Offset of the character in `EditElement.text`. */
+  readonly offset: number;
+  /** Tight box of the glyph in page space; a space takes its advance box. */
+  readonly box: PageRect;
+  /** Advance width along the baseline, in points. */
+  readonly advance: number;
+}
+
+/** One line of a text element: one PDFium text object, as the file stores it. */
+export interface TextLayoutLine {
+  /** The part of the element's text the line draws, half-open. */
+  readonly range: TextRange;
+  readonly text: string;
+  /** Union of the glyph boxes, in page space. */
+  readonly bounds: PageRect;
+  /** Start of the baseline, in page space. */
+  readonly baseline: PagePoint;
+  readonly glyphs: readonly TextLayoutGlyph[];
+  readonly fontFamily: string;
+  readonly fontSize: number;
+  readonly color: string;
+}
+
+/** The drawn geometry of a `text`, `textBox` or `table` element. */
+export interface TextLayout {
+  readonly elementId: string;
+  readonly pageIndex: number;
+  /** Lines in reading order: a text box's lines, a table's cells. */
+  readonly lines: readonly TextLayoutLine[];
+}
+
 /**
  * An operation's fields without its `op`, as the typed methods take them.
  * Distributes over unions so `insertShape` keeps its per-shape fields.
@@ -262,6 +300,22 @@ export interface PdfEditSession extends EditSessionBase<
 > {
   readonly format: "pdf";
   save(options?: PdfSaveOptions): Promise<SavedDocument>;
+  /** Lines, glyph boxes and styles of a `text`, `textBox` or `table` element. */
+  getTextLayout(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextLayout>>;
+  /** The text position nearest to a page-space point; none on a page without text. */
+  positionAt(
+    pageIndex: number,
+    point: PagePoint,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextPosition>>;
+  /** The rectangles a range covers, one per line fragment, in reading order. */
+  rangeRects(
+    range: TextRange,
+    options?: ReadOptions,
+  ): Promise<ReadResult<PageRect>>;
   /** Lays `text` out inside `rect` as new text objects; the box's id is in `createdIds`. */
   insertTextBox(
     fields: Fields<InsertTextBoxOperation>,
