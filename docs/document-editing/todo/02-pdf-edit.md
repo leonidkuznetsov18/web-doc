@@ -342,7 +342,9 @@ ACTION-825; they are additive, and the types they use (`TextPosition`,
 - Bold or italic changes on existing text; vertical, right-to-left and
   complex-script text.
 - Font subsetting (PDFium embeds whole font files).
-- Digital signing; compacting saves that rewrite the whole file.
+- Digital signing. (A full save does rewrite the file and drops unreachable
+  objects since revision 2; compaction beyond that — object renumbering,
+  garbage collection of unused resources inside kept objects — stays out.)
 - Encrypted PDFs (the viewer already refuses them).
 
 ## Work by layer
