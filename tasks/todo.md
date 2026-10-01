@@ -97,15 +97,15 @@ It reports every issue with operation index, JSON pointer, code and message.
 
 **Acceptance criteria:**
 
-- [ ] Functions, class instances, `undefined` in arrays, `NaN`, `Infinity`
+- [x] Functions, class instances, `undefined` in arrays, `NaN`, `Infinity`
       and cycles are rejected; `Uint8Array` is accepted only where the schema
       marks binary data.
-- [ ] All issues of a batch are collected (not just the first), with stable
+- [x] All issues of a batch are collected (not just the first), with stable
       codes and correct JSON pointers.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `edit-schema.test.ts`)
+- [x] `npm run test --workspace web-doc` (new `edit-schema.test.ts`)
 
 **Dependencies:** Task 2
 
