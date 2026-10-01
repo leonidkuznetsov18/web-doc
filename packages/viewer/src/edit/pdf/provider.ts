@@ -1,4 +1,4 @@
-import type { RegisteredFont } from "../../contracts.js";
+import type { RegisteredFont, ViewerWarning } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { WorkerRpcClient, type WorkerLike } from "../../worker-client.js";
 import type {
@@ -14,6 +14,7 @@ import type {
   EditEngineContext,
   EngineBatch,
   EngineChange,
+  MaterializedDocument,
   MaterializeOptions,
   RestoreTarget,
 } from "../engine.js";
@@ -173,16 +174,24 @@ export class PdfEditEngineClient implements EditEngine, PdfEngineReads {
     options: MaterializeOptions = {},
     signal: AbortSignal = new AbortController().signal,
   ): Promise<Uint8Array> {
+    return (await this.materializeDocument(purposeOrSignal, options, signal))
+      .bytes;
+  }
+
+  async materializeDocument(
+    purposeOrSignal: "show" | "save" | AbortSignal = "show",
+    options: MaterializeOptions = {},
+    signal: AbortSignal = new AbortController().signal,
+  ): Promise<MaterializedDocument> {
     const purpose =
       purposeOrSignal instanceof AbortSignal ? "show" : purposeOrSignal;
     const own =
       purposeOrSignal instanceof AbortSignal ? purposeOrSignal : signal;
-    const buffer = await this.#request<ArrayBuffer>(
-      "edit-materialize",
-      { purpose, options },
-      own,
-    );
-    return new Uint8Array(buffer);
+    const result = await this.#request<{
+      readonly data: ArrayBuffer;
+      readonly warnings: readonly ViewerWarning[];
+    }>("edit-materialize", { purpose, options }, own);
+    return { bytes: new Uint8Array(result.data), warnings: result.warnings };
   }
 
   restore(

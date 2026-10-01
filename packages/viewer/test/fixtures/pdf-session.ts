@@ -31,12 +31,16 @@ let fallbackFont: Uint8Array | undefined;
  */
 export async function pdfSession(
   original: Uint8Array,
-  options: { readonly fallbackFont?: boolean } = {},
+  options: {
+    readonly fallbackFont?: boolean;
+    readonly compact?: (bytes: Uint8Array) => Uint8Array;
+  } = {},
 ): Promise<{ session: PdfEditSession; end(): Promise<void> }> {
   const signal = new AbortController().signal;
   const pair = loopbackWorker(
     createPdfEditHandler({
       loadPdfium: () => fixturePdfium(),
+      ...(options.compact ? { compact: options.compact } : {}),
       fetchBytes: async (url) => {
         if (options.fallbackFont && url === FALLBACK_URL)
           return (fallbackFont ??= new Uint8Array(

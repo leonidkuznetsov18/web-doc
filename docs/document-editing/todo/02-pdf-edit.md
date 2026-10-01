@@ -266,8 +266,8 @@ Which operations an element accepts is listed in its `operations` field:
   old content recoverable; the docs say so. Without changes either mode
   returns the original bytes without calling PDFium.
 - The viewer's reopen after a change (`materialize("show")`) uses the
-  incremental form; the content is the same as the full form's. Whether it
-  should use the full form instead is [open question 1](#open-questions).
+  compacted full form for an unsigned document and the incremental form for
+  a signed one (decision 7); the content is the same either way.
 - PDFium's incremental section repeats every object it has parsed, not only
   the changed ones (see [Spike results](#spike-results)), and
   `FPDFPage_GenerateContent` — the call that rewrites a changed page — parses
@@ -487,28 +487,24 @@ Resolved on 2026-10-01 together with the approval of this spec:
 6. **R2, 2026-10-01.** The in-place `replaceText` rule stays glyph-coverage
    based (the embedded font's `cmap`; CFF subsets always fall back) rather
    than GenOffice's ASCII-only rule; a subset fixture proves it.
+7. **2026-10-02, reopen form.** `materialize("show")` is a full save plus
+   compaction for an unsigned document (the display copy stays at the
+   original size instead of about 2×); a signed document keeps the
+   incremental form so the signed revision stays intact in every base the
+   session may restore from. A compaction failure on this display-only path
+   shows the uncompacted full save and logs it; no warning, since privacy is
+   not at stake in what is only displayed.
+8. **2026-10-02, compaction failure on `save()`.** The save resolves with
+   PDFium's uncompacted full save and a `privacy-not-guaranteed` warning
+   (`details.reason: "pdf-compaction"`) in `SavedDocument.warnings`; it never
+   throws. The host decides (Operators asks the user to confirm before
+   uploading such a file). `PdfCompactionError` stays internal. Tracked in
+   ACTION-821.
 
 ## Open questions
 
-1. **Reopen form after a change.** `materialize("show")` uses PDFium's
-   incremental save, which after any change is the original bytes plus a copy
-   of every object (about 2× the file; 103 MB for a 52 MB scan, in the same
-   time as a full save: 857 ms against 825 ms). The full form with the
-   compaction pass is the original size and renumbers objects, which nothing
-   in the session depends on (ids live in marks). Keep the incremental form
-   for the reopen, or switch to the full form? Raised by the peer review of
-   2026-10-01; Leonid's call.
-2. **Compaction failure behaviour.** When the compaction pass cannot read
-   PDFium's full-save output (a cross-reference stream, a malformed object
-   header, an unterminated stream), `save()` now fails closed with
-   `edit-failed` and `details.reason: "pdf-compaction"`, and the session keeps
-   its last committed bytes. The alternative is to return PDFium's
-   uncompacted output with a warning, which keeps the save working but leaves
-   deleted content recoverable in the file — the privacy property the full
-   save exists for. PDFium's full save has produced only classic objects with
-   a `trailer` in every run so far (corpus, fixtures, fuzz loop), so the
-   branch is untaken in practice. Fail closed, or fall back with a warning?
-   Raised by the peer review of 2026-10-01; Leonid's call.
+None at the moment; the two questions raised by the compaction review were
+decided on 2026-10-02 (decisions 7 and 8).
 
 ## Actual result
 
@@ -584,8 +580,9 @@ Resolved on 2026-10-01 together with the approval of this spec:
   references, keeps the objects reachable from the trailer dictionary, and
   writes a fresh cross-reference table with one subsection per run of object
   numbers. Anything else (a cross-reference stream, a malformed header, an
-  unterminated object) raises `PdfCompactionError` (`edit-failed`,
-  `details.reason: "pdf-compaction"`); see open question 2. Proven by
+  unterminated object) raises `PdfCompactionError`, which the engine turns
+  into the uncompacted full save — silently for the display copy, with a
+  `privacy-not-guaranteed` warning on a save (decision 8). Proven by
   `test/pdf-edit-compact.test.ts`: hand-written files whose names, strings
   and comments spell `endobj` and `stream`, a reference split over lines, an
   indirect length defined after its stream, a bare `null` object, an orphan

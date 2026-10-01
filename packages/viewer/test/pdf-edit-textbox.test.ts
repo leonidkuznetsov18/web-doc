@@ -166,10 +166,14 @@ describe("insertTextBox", () => {
       });
       assert.ok(box.operations.includes("replaceText"));
 
+      // The display copy is the compacted full save (decision 7 of
+      // 2026-10-02); an incremental save still starts with the original.
       const saved = model.materialize();
       assert.equal(saved.length > original.length, true);
+      assert.deepEqual(saved, model.materialize("save", "full"));
+      const incremental = model.materialize("save", "incremental");
       assert.equal(
-        original.every((byte, index) => saved[index] === byte),
+        original.every((byte, index) => incremental[index] === byte),
         true,
       );
       const text = await extractPageText(saved, 0);

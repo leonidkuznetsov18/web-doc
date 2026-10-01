@@ -551,10 +551,10 @@ describe("save modes (revision 2)", () => {
       } finally {
         reopened.dispose();
       }
-      // Unsigned files save in full mode by default; the viewer still reopens
-      // the incremental form.
+      // Unsigned files save in full mode by default, and since 2026-10-02 the
+      // viewer reopens the same compacted form instead of the incremental one.
       assert.deepEqual(model.materialize("save"), full);
-      assert.ok(startsWith(model.materialize("show"), original));
+      assert.deepEqual(model.materialize("show"), full);
     } finally {
       model.dispose();
     }

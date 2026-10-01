@@ -1,5 +1,10 @@
 import { ViewerError } from "../../../errors.js";
-import type { EngineBatch, EngineChange, RestoreTarget } from "../../engine.js";
+import type {
+  EngineBatch,
+  EngineChange,
+  MaterializedDocument,
+  RestoreTarget,
+} from "../../engine.js";
 import { invalidOperationError, parseReference } from "../../operations.js";
 import type {
   EditFindOptions,
@@ -46,7 +51,7 @@ import { replaceText, setTextStyle } from "./existing-text.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import { insertShape, setShapeStyle } from "./shapes.js";
-import { compactPdf } from "./compact.js";
+import { compactPdf, PdfCompactionError } from "./compact.js";
 import { ImageCache, insertImage } from "./images.js";
 import { AssetStore, type AssetSource } from "../../assets.js";
 import { insertTable, setTableCell, tableSpecOf } from "./tables.js";
@@ -195,6 +200,7 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
 
 export class PdfEditDocument {
   readonly #pdfium: Pdfium;
+  readonly #compact: (bytes: Uint8Array) => Uint8Array;
   readonly #original: Uint8Array;
   readonly #fonts: FontLibrary;
   readonly images = new ImageCache();
@@ -219,7 +225,9 @@ export class PdfEditDocument {
     }),
     limits: ResourceLimits = defaultResourceLimits,
     assets: AssetSource = new AssetStore(),
+    compact: (bytes: Uint8Array) => Uint8Array = compactPdf,
   ) {
+    this.#compact = compact;
     this.#pdfium = pdfium;
     this.#original = original;
     this.#base = original;
@@ -402,17 +410,61 @@ export class PdfEditDocument {
     purpose: "show" | "save" = "show",
     mode?: "incremental" | "full",
   ): Uint8Array {
+    return this.materializeDocument(purpose, mode).bytes;
+  }
+
+  /**
+   * The bytes of the current state. A full save goes through the compaction
+   * pass; when the pass cannot read PDFium's output, the uncompacted full
+   * save stands in — silently for the display copy, with a
+   * `privacy-not-guaranteed` warning for a save, since deleted content may
+   * then remain recoverable in the file (decided 2026-10-02). Signed files
+   * take the incremental form for both purposes so the signed revision
+   * stays intact in every base the session may restore from.
+   */
+  materializeDocument(
+    purpose: "show" | "save" = "show",
+    mode?: "incremental" | "full",
+  ): MaterializedDocument {
     const chosen =
       purpose === "show"
-        ? "incremental"
+        ? this.#signatures > 0
+          ? "incremental"
+          : "full"
         : (mode ?? (this.#signatures > 0 ? "incremental" : "full"));
     if (this.#batches === 0 && this.#base === this.#original)
-      return this.#original.slice();
+      return { bytes: this.#original.slice(), warnings: [] };
     if (chosen === "incremental")
-      return this.#batches === 0
-        ? this.#base.slice()
-        : this.#document.save("incremental");
-    return compactPdf(this.#document.save("full"));
+      return {
+        bytes:
+          this.#batches === 0
+            ? this.#base.slice()
+            : this.#document.save("incremental"),
+        warnings: [],
+      };
+    const full = this.#document.save("full");
+    try {
+      return { bytes: this.#compact(full), warnings: [] };
+    } catch (error) {
+      if (!(error instanceof PdfCompactionError)) throw error;
+      if (purpose === "show") {
+        console.warn(
+          `web-doc: ${error.message}; the uncompacted full save is shown`,
+        );
+        return { bytes: full, warnings: [] };
+      }
+      return {
+        bytes: full,
+        warnings: [
+          {
+            code: "privacy-not-guaranteed",
+            message:
+              "The full save could not be compacted; deleted or replaced content may remain recoverable in the file",
+            details: { reason: "pdf-compaction", cause: error.message },
+          },
+        ],
+      };
+    }
   }
 
   /**

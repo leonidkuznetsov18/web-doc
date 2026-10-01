@@ -340,34 +340,31 @@ Stated so that hosts plan around them rather than discover them:
 
 ## Decisions log
 
-| Date       | Decision                                                                                                                                                                  |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-10-01 | API only, shared by the host UI and AI; formats PDF, PPTX, DOCX; Markdown and plain text dropped entirely.                                                                |
-| 2026-10-01 | PDF changes are written by PDFium WASM (`@embedpdf/pdfium` 2.15.1); PDF.js keeps rendering.                                                                               |
-| 2026-10-01 | Order: PDF, then PPTX, then DOCX; specs are written module by module.                                                                                                     |
-| 2026-10-01 | Specs are written in English.                                                                                                                                             |
-| 2026-10-01 | `edit-core` and `pdf-edit` specs approved together with their recommended answers to open questions.                                                                      |
-| 2026-10-01 | A TrueType build of the bundled Noto Sans Latin/Cyrillic face ships as a lazy PDF fallback font.                                                                          |
-| 2026-10-01 | Signed PDFs may be edited, with a warning.                                                                                                                                |
-| 2026-10-01 | The competitor research report stays outside this public repository.                                                                                                      |
-| 2026-10-01 | PNG images are decoded by the host (`createImageBitmap` in the worker) rather than inside PDFium's WASM.                                                                  |
-| 2026-10-01 | A table's inputs live in the mark of its path objects only; its text objects carry just the table's id.                                                                   |
-| 2026-10-01 | `edit-core` and `pdf-edit` are done: matrix 100/100, `npm run check` green, results recorded in both specs.                                                               |
-| 2026-10-01 | Architecture review accepted (Linear ACTION-821): `edit-core` revision 2 before the first release; `pdf-edit` follows it.                                                 |
-| 2026-10-01 | PDF `save()` defaults to a full rewrite for unsigned files; incremental for signed files and on request.                                                                  |
-| 2026-10-01 | Reads return `{ sessionId, revision, items }` envelopes now; paging stays additive for later.                                                                             |
-| 2026-10-01 | PDF overlay text-input primitives are a separate ticket after ACTION-821.                                                                                                 |
-| 2026-10-01 | `edit-core` and `pdf-edit` revision 2 approved; Phase 5 (T23–T30) starts under ACTION-821.                                                                                |
-| 2026-10-01 | Revision 2 done (T23–T30): checkpoints promise the same content, not the same bytes; PDF full saves are compacted.                                                        |
-| 2026-10-02 | PDF overlay primitives done (T32–T37, ACTION-825): layout, caret, range rectangles, suppressed render, selection and range mapping, ranged `replaceText`, geometry cache. |
+| Date       | Decision                                                                                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-01 | API only, shared by the host UI and AI; formats PDF, PPTX, DOCX; Markdown and plain text dropped entirely.                                                                          |
+| 2026-10-01 | PDF changes are written by PDFium WASM (`@embedpdf/pdfium` 2.15.1); PDF.js keeps rendering.                                                                                         |
+| 2026-10-01 | Order: PDF, then PPTX, then DOCX; specs are written module by module.                                                                                                               |
+| 2026-10-01 | Specs are written in English.                                                                                                                                                       |
+| 2026-10-01 | `edit-core` and `pdf-edit` specs approved together with their recommended answers to open questions.                                                                                |
+| 2026-10-01 | A TrueType build of the bundled Noto Sans Latin/Cyrillic face ships as a lazy PDF fallback font.                                                                                    |
+| 2026-10-01 | Signed PDFs may be edited, with a warning.                                                                                                                                          |
+| 2026-10-01 | The competitor research report stays outside this public repository.                                                                                                                |
+| 2026-10-01 | PNG images are decoded by the host (`createImageBitmap` in the worker) rather than inside PDFium's WASM.                                                                            |
+| 2026-10-01 | A table's inputs live in the mark of its path objects only; its text objects carry just the table's id.                                                                             |
+| 2026-10-01 | `edit-core` and `pdf-edit` are done: matrix 100/100, `npm run check` green, results recorded in both specs.                                                                         |
+| 2026-10-01 | Architecture review accepted (Linear ACTION-821): `edit-core` revision 2 before the first release; `pdf-edit` follows it.                                                           |
+| 2026-10-01 | PDF `save()` defaults to a full rewrite for unsigned files; incremental for signed files and on request.                                                                            |
+| 2026-10-01 | Reads return `{ sessionId, revision, items }` envelopes now; paging stays additive for later.                                                                                       |
+| 2026-10-01 | PDF overlay text-input primitives are a separate ticket after ACTION-821.                                                                                                           |
+| 2026-10-01 | `edit-core` and `pdf-edit` revision 2 approved; Phase 5 (T23–T30) starts under ACTION-821.                                                                                          |
+| 2026-10-01 | Revision 2 done (T23–T30): checkpoints promise the same content, not the same bytes; PDF full saves are compacted.                                                                  |
+| 2026-10-02 | PDF display copy is the compacted full save for unsigned files (incremental for signed); a compaction failure shows the uncompacted full save and logs it (02-pdf-edit decision 7). |
+| 2026-10-02 | A compaction failure on `save()` resolves with the uncompacted full save and a `privacy-not-guaranteed` warning instead of failing (02-pdf-edit decision 8).                        |
+| 2026-10-02 | PDF overlay primitives done (T32–T37, ACTION-825): layout, caret, range rectangles, suppressed render, selection and range mapping, ranged `replaceText`, geometry cache.           |
 
 ## Open questions
 
-New questions are recorded in the spec of the module that raises them. Open
-now:
-
-- [02-pdf-edit.md § Open questions](todo/02-pdf-edit.md#open-questions): what
-  a full save does when the compaction pass cannot read PDFium's output
-  (currently it fails closed), and whether the viewer's reopen after a change
-  should switch from the incremental form, which PDFium makes about twice the
-  file size after any change, to the full form.
+None at the moment. New questions are recorded in the spec of the module that
+raises them; the two compaction questions of 2026-10-01 were decided on
+2026-10-02 (02-pdf-edit.md, decisions 7 and 8).

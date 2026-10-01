@@ -215,6 +215,12 @@ export interface SavedDocument {
   readonly stateToken: string;
   readonly sessionId: string;
   readonly revision: number;
+  /**
+   * What the bytes do not guarantee: `privacy-not-guaranteed` when a PDF full
+   * save could not be compacted and deleted content may remain recoverable.
+   * Empty for a save that holds every guarantee.
+   */
+  readonly warnings: readonly ViewerWarning[];
 }
 
 export interface AssetOptions {

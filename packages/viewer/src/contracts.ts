@@ -63,7 +63,8 @@ export type ViewerWarningCode =
   | "font-substitution"
   | "font-unavailable"
   | "external-resource-blocked"
-  | "fidelity-degraded";
+  | "fidelity-degraded"
+  | "privacy-not-guaranteed";
 
 export interface ViewerErrorData {
   readonly name: "ViewerError";

@@ -24,6 +24,8 @@ import type { Pdfium } from "./pdfium.js";
 export interface PdfEditHost {
   /** Instantiates PDFium for a WASM URL. */
   loadPdfium(wasmUrl: string): Promise<Pdfium>;
+  /** The compaction pass of a full save; tests inject a failing one. */
+  readonly compact?: (bytes: Uint8Array) => Uint8Array;
   /** Fetches font bytes for a URL. */
   fetchBytes(url: string): Promise<Uint8Array>;
   /** Decodes an image into RGBA pixels. */
@@ -69,6 +71,7 @@ export function createPdfEditHandler(
           fonts,
           open.limits,
           assets,
+          host.compact,
         );
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
         return result;
@@ -105,10 +108,11 @@ export function createPdfEditHandler(
           readonly options?: { readonly mode?: unknown };
         };
         const mode = options?.mode;
-        return engine().materialize(
+        const { bytes, warnings } = engine().materializeDocument(
           purpose ?? "show",
           mode === "full" || mode === "incremental" ? mode : undefined,
-        ).buffer;
+        );
+        return { data: bytes.buffer, warnings };
       }
       case "edit-restore": {
         const { batches, base } = payload as {

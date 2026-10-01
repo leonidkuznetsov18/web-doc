@@ -199,6 +199,7 @@ describe("editing contracts", () => {
       stateToken: "t",
       sessionId: "s",
       revision: 1,
+      warnings: [],
     };
     const colours: EditColor[] = [
       "#ff0000",

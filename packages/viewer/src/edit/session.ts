@@ -16,6 +16,8 @@ import type {
   EditSessionCore,
   EngineBatch,
   EngineChange,
+  MaterializedDocument,
+  MaterializeOptions,
   RestoreTarget,
 } from "./engine.js";
 import { EditHistory, type HistoryEntry } from "./history.js";
@@ -305,17 +307,18 @@ export class EditSessionController implements EditSessionCore {
       async (signal) => {
         // A session whose recovery failed still hands out what it last
         // showed; the history state matches those bytes.
-        const bytes = this.#broken
-          ? this.#committedBytes.slice()
+        const { bytes, warnings } = this.#broken
+          ? { bytes: this.#committedBytes.slice(), warnings: [] }
           : this.#history.stateId === 0
-            ? this.#original.slice()
-            : await this.#engine.materialize("save", format, signal);
+            ? { bytes: this.#original.slice(), warnings: [] }
+            : await this.#materialize("save", format, signal);
         throwIfAborted(signal);
         return Object.freeze({
           bytes,
           stateToken: this.#stateToken(this.#history.stateId),
           sessionId: this.sessionId,
           revision: this.#revision,
+          warnings: Object.freeze([...warnings]),
         });
       },
       { allowBroken: true },
@@ -526,13 +529,27 @@ export class EditSessionController implements EditSessionCore {
    * is synchronous and cannot fail, so once it ran the call completes
    * whatever its signal says.
    */
+  /** The engine's bytes with their warnings; an engine without the richer form warns of nothing. */
+  async #materialize(
+    purpose: "show" | "save",
+    options: MaterializeOptions,
+    signal: AbortSignal,
+  ): Promise<MaterializedDocument> {
+    if (this.#engine.materializeDocument)
+      return this.#engine.materializeDocument(purpose, options, signal);
+    return {
+      bytes: await this.#engine.materialize(purpose, options, signal),
+      warnings: [],
+    };
+  }
+
   async #show(
     signal: AbortSignal,
     changedPages: readonly number[],
   ): Promise<Shown> {
     let bytes: Uint8Array;
     try {
-      bytes = await this.#engine.materialize("show", {}, signal);
+      ({ bytes } = await this.#materialize("show", {}, signal));
     } catch (error) {
       throw stageError("materialize", error);
     }

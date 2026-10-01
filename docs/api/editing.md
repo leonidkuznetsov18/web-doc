@@ -195,13 +195,13 @@ Receipts report the final ids in `createdIds`.
 
 ## History and saving
 
-| Method                  | Effect                                                                                                                                                                                                                                                     |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `undo()`                | Reverts the latest batch. With nothing to undo it resolves with a no-op receipt (`operationCount: 0`, same revision).                                                                                                                                      |
-| `redo()`                | Re-applies the batch undone last. A new `apply()` after an undo drops the redo tail.                                                                                                                                                                       |
-| `reset()`               | Returns to the original bytes and clears the history. It cannot be undone; `save()` first if that matters.                                                                                                                                                 |
-| `save()`                | Returns `{ bytes, stateToken, sessionId, revision }` for the current state; without changes the bytes equal the original file. Pure: neither the revision, the document nor `dirty` change.                                                                |
-| `markSaved(stateToken)` | Records that the host persisted the state a `save()` token names. `dirty` becomes false when the current content is that state — compared by content, so undoing back to a saved state is clean too. A token from another session is reported and ignored. |
+| Method                  | Effect                                                                                                                                                                                                                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `undo()`                | Reverts the latest batch. With nothing to undo it resolves with a no-op receipt (`operationCount: 0`, same revision).                                                                                                                                                                   |
+| `redo()`                | Re-applies the batch undone last. A new `apply()` after an undo drops the redo tail.                                                                                                                                                                                                    |
+| `reset()`               | Returns to the original bytes and clears the history. It cannot be undone; `save()` first if that matters.                                                                                                                                                                              |
+| `save()`                | Returns `{ bytes, stateToken, sessionId, revision, warnings }` for the current state; without changes the bytes equal the original file. `warnings` names what the bytes do not guarantee (PDF: `privacy-not-guaranteed`). Pure: neither the revision, the document nor `dirty` change. |
+| `markSaved(stateToken)` | Records that the host persisted the state a `save()` token names. `dirty` becomes false when the current content is that state — compared by content, so undoing back to a saved state is clean too. A token from another session is reported and ignored.                              |
 
 Each of `undo`, `redo` and `reset` accepts `expectedRevision` and a `signal`.
 The history keeps `maxEditHistory` batches (default 200); older ones are folded
@@ -548,16 +548,23 @@ opened by the viewer and so cannot be edited.
   so after any change an incremental save is about twice the original size.
 
 A full save that the compaction pass cannot read — PDFium's output with a
-cross-reference stream, or an object it cannot delimit — fails with
-`edit-failed` and `details.reason: "pdf-compaction"` instead of returning an
-uncompacted file; the session keeps its last committed bytes. No PDFium
-output has needed that branch so far.
+cross-reference stream, or an object it cannot delimit — still resolves: the
+bytes are PDFium's uncompacted full save and `save()` adds a warning with code
+`privacy-not-guaranteed` (`details.reason: "pdf-compaction"`) to its result,
+because deleted or replaced content may then remain recoverable in the file.
+The host decides what to do with such a file; a save that holds every
+guarantee has an empty `warnings` list. No PDFium output has needed that
+branch so far.
 
-The viewer reopens the incremental form after a change; the content is the
-same as the full form's. Only pages an operation touched have their content
-rewritten. The same sequence of calls produces byte-identical output, in this
-session or another one, and saving without changes returns the original bytes
-in either mode.
+After a change the viewer reopens the compacted full save of an unsigned
+document, so the copy it shows stays at about the original size; a signed
+document is shown in the incremental form, so the signed revision stays intact
+in every state the session may restore from. If compaction fails on this
+display-only path the uncompacted full save is shown and the failure is
+logged, without a warning: privacy is not at stake in what is only displayed.
+Only pages an operation touched have their content rewritten. The same
+sequence of calls produces byte-identical output, in this session or another
+one, and saving without changes returns the original bytes in either mode.
 
 A digitally signed PDF can be edited. The first change reports a
 `fidelity-degraded` warning with `details.signatures` because the signatures

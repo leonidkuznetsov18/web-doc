@@ -63,6 +63,13 @@ export interface EditEngineProvider {
   createSession(core: EditSessionCore): EditSession;
 }
 
+/** Bytes of a state, with what the engine could not guarantee about them. */
+export interface MaterializedDocument {
+  readonly bytes: Uint8Array;
+  /** For example `privacy-not-guaranteed` when a PDF full save could not be compacted. */
+  readonly warnings: readonly ViewerWarning[];
+}
+
 /** A batch with the identity the core assigned to the state after it. */
 export interface EngineBatch {
   /** Unique within the session and never reused; engines derive created ids from it. */
@@ -119,6 +126,15 @@ export interface EditEngine {
     options: MaterializeOptions,
     signal: AbortSignal,
   ): Promise<Uint8Array>;
+  /**
+   * `materialize` with what the bytes do not guarantee; an engine without it
+   * is taken to guarantee everything.
+   */
+  materializeDocument?(
+    purpose: "show" | "save",
+    options: MaterializeOptions,
+    signal: AbortSignal,
+  ): Promise<MaterializedDocument>;
   /**
    * Rebuilds a state: the base document (a checkpoint, else the original)
    * with the batches applied in order. Used by undo, redo, reset, dry runs
