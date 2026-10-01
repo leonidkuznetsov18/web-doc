@@ -677,17 +677,17 @@ every operation through `apply()` using only `session.schemas`.
 
 **Acceptance criteria:**
 
-- [ ] A signed fixture can be edited, the first change warns with
+- [x] A signed fixture can be edited, the first change warns with
       `fidelity-degraded`, and the signed revision's bytes stay intact.
-- [ ] Two independent sessions with the same history produce identical bytes;
+- [x] Two independent sessions with the same history produce identical bytes;
       a dry run changes nothing and returns the receipt a real apply would.
-- [ ] A client that knows only the schemas performs all 15 operations and
+- [x] A client that knows only the schemas performs all 15 operations and
       receives typed issues for invalid ones.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc`
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc`
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 20
 

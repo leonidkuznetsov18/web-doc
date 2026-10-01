@@ -236,8 +236,13 @@ export type PdfOperation =
   | InsertTableOperation
   | SetTableCellOperation;
 
-/** An operation's fields without its `op`, as the typed methods take them. */
-export type Fields<T extends PdfOperation> = Omit<T, "op">;
+/**
+ * An operation's fields without its `op`, as the typed methods take them.
+ * Distributes over unions so `insertShape` keeps its per-shape fields.
+ */
+export type Fields<T extends PdfOperation> = T extends unknown
+  ? Omit<T, "op">
+  : never;
 
 export interface PdfEditSession extends EditSessionBase<
   PdfOperation,

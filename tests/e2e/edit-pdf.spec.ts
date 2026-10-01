@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { buildPdf } from "../../packages/viewer/test/fixtures/pdf-builder.js";
+import { signedPdf } from "../../packages/viewer/test/fixtures/signed-pdf.js";
 
 /*
  * PDF editing through the public API against the real adapter: PDF.js renders,
@@ -430,4 +431,66 @@ test("inserts a table and edits a cell", async ({ page }) => {
   expect(result.matches).toBe(1);
   expect(result.dark).toBeGreaterThan(500);
   expect(result.revision).toBe(2);
+});
+
+test("warns once when a signed PDF is edited and keeps its bytes", async ({
+  page,
+}) => {
+  const original = signedPdf();
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    const first = await session.insertTextBox({
+      pageIndex: 0,
+      rect: { x: 72, y: 72, width: 200, height: 40 },
+      text: "Added",
+    });
+    const second = await session.replaceText({
+      target: first.createdIds[0],
+      text: "Changed",
+    });
+    const saved: Uint8Array = await session.save();
+    return {
+      firstCodes: first.warnings.map(
+        (warning: { code: string }) => warning.code,
+      ),
+      secondCodes: second.warnings.map(
+        (warning: { code: string }) => warning.code,
+      ),
+      saved: Array.from(saved.subarray(0, 400)),
+      length: saved.length,
+    };
+  });
+  expect(result.firstCodes).toEqual(["fidelity-degraded"]);
+  expect(result.secondCodes).toEqual([]);
+  expect(result.length).toBeGreaterThan(original.length);
+  expect(result.saved.slice(0, original.length)).toEqual(
+    Array.from(original.subarray(0, 400)),
+  );
+});
+
+test("applies one operation on a ten-page PDF within three seconds", async ({
+  page,
+}) => {
+  const original = await buildPdf(
+    Array.from({ length: 10 }, (_, index) => `Page ${index + 1}`),
+  );
+  await loadPdf(page, original);
+  const elapsed = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    const started = performance.now();
+    await session.insertTextBox({
+      pageIndex: 4,
+      rect: { x: 72, y: 72, width: 200, height: 40 },
+      text: "Timed",
+    });
+    return performance.now() - started;
+  });
+  test.info().annotations.push({
+    type: "apply-ms",
+    description: elapsed.toFixed(0),
+  });
+  expect(elapsed).toBeLessThan(3000);
 });

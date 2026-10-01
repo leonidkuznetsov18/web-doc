@@ -87,6 +87,8 @@ export class PdfEditDocument {
   readonly #fonts: FontLibrary;
   readonly images = new ImageCache();
   readonly #limits: ResourceLimits;
+  /** Signature fields in the original; an edit leaves them uncovering the new revision. */
+  readonly #signatures: number;
   #document: PdfiumDocument;
   #measurer: TextMeasurer;
   #pages: PageRecord[];
@@ -107,6 +109,12 @@ export class PdfEditDocument {
     this.#document = pdfium.openDocument(original);
     this.#measurer = new TextMeasurer(pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
+    this.#signatures = pdfium.lib.FPDF_GetSignatureCount(this.#document.handle);
+  }
+
+  /** Signature fields in the document. */
+  get signatureCount(): number {
+    return this.#signatures;
   }
 
   /**
@@ -164,6 +172,15 @@ export class PdfEditDocument {
     const createdIds: string[] = [];
     const changedPages = new Set<number>();
     const warnings: EngineChange["warnings"][number][] = [];
+    // The first change of a signed file is the point where the signatures
+    // stop covering what is shown; the incremental save keeps them valid for
+    // the original revision.
+    if (batch === 1 && this.#signatures > 0)
+      warnings.push({
+        code: "fidelity-degraded",
+        message: `The document carries ${this.#signatures} digital signature${this.#signatures === 1 ? "" : "s"} that will not cover the edited revision`,
+        details: { signatures: this.#signatures },
+      });
     operations.forEach((operation, operationIndex) => {
       const handler = handlers[operation.op as PdfOperation["op"]];
       if (!handler)
