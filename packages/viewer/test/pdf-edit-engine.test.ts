@@ -72,8 +72,18 @@ describe("PDF edit engine over the worker protocol", () => {
     assert.equal(engine.schemas.format, "pdf");
     const signal = new AbortController().signal;
     assert.deepEqual(await engine.materialize(signal), original);
-    assert.deepEqual(await engine.getElements({}, signal), []);
-    assert.deepEqual(await engine.findText("Page", {}, signal), []);
+    assert.deepEqual(
+      (await engine.getElements({}, signal)).map((element) => element.id),
+      ["p0:o0", "p1:o0"],
+    );
+    assert.deepEqual(
+      (await engine.findText("Page", {}, signal)).map((hit) => hit.pageIndex),
+      [0, 1],
+    );
+    assert.equal(
+      (await engine.getElement?.("p1:o0", signal))?.text,
+      "Page two",
+    );
     const issues = await engine.validate([{ op: "nope" }], signal);
     assert.equal(issues[0]?.code, "unknown-operation");
     await engine.restore([], signal);

@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
+import { MARK_NAME, MARK_PARAM } from "../../src/edit/pdf/engine/elements.js";
 import { Pdfium } from "../../src/edit/pdf/engine/pdfium.js";
+import { tinyJpeg } from "./tiny-jpeg.js";
 
 /*
  * Deterministic PDF fixtures built with PDFium itself, so no binary files are
- * committed. Every page shows its text in Helvetica at the given position.
+ * committed. Pages are described in PDF user space (points, y up).
  */
 
 const wasm = readFileSync(
@@ -20,13 +22,42 @@ export function fixturePdfium(): Promise<Pdfium> {
   return shared;
 }
 
+export interface FixtureText {
+  readonly text: string;
+  readonly x?: number;
+  readonly y?: number;
+  readonly fontSize?: number;
+  readonly font?: "Helvetica" | "Helvetica-Bold" | "Times-Italic";
+  readonly color?: readonly [number, number, number];
+  /** Tag the object with a WebDoc mark carrying these parameters. */
+  readonly mark?: Readonly<Record<string, unknown>>;
+  /** Tag the object with a mark whose parameter is not valid JSON. */
+  readonly brokenMark?: boolean;
+}
+
 export interface FixturePage {
   readonly text?: string;
+  readonly texts?: readonly FixtureText[];
   readonly width?: number;
   readonly height?: number;
   readonly rotation?: 0 | 1 | 2 | 3;
-  readonly x?: number;
-  readonly y?: number;
+  /** User-space crop box: left, bottom, right, top. */
+  readonly cropBox?: readonly [number, number, number, number];
+  readonly image?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly rect?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+    readonly fill?: readonly [number, number, number];
+    readonly stroke?: readonly [number, number, number];
+    readonly strokeWidth?: number;
+  };
 }
 
 export async function buildPdf(
@@ -44,26 +75,42 @@ export async function buildPdf(
         page.width ?? 612,
         page.height ?? 792,
       );
-      if (page.text) {
-        const font = lib.FPDFText_LoadStandardFont(
-          document.handle,
-          "Helvetica",
+      if (page.cropBox) lib.FPDFPage_SetCropBox(handle, ...page.cropBox);
+      const texts = [
+        ...(page.text ? [{ text: page.text }] : []),
+        ...(page.texts ?? []),
+      ];
+      for (const text of texts) addText(pdfium, document.handle, handle, text);
+      if (page.rect) {
+        const { rect } = page;
+        const path = lib.FPDFPageObj_CreateNewRect(
+          rect.x,
+          rect.y,
+          rect.width,
+          rect.height,
         );
-        const object = lib.FPDFPageObj_CreateTextObj(document.handle, font, 12);
-        const wide = pdfium.writeWideString(page.text);
-        try {
-          lib.FPDFText_SetText(object, wide);
-        } finally {
-          pdfium.free(wide);
+        if (rect.fill) lib.FPDFPageObj_SetFillColor(path, ...rect.fill, 255);
+        if (rect.stroke) {
+          lib.FPDFPageObj_SetStrokeColor(path, ...rect.stroke, 255);
+          lib.FPDFPageObj_SetStrokeWidth(path, rect.strokeWidth ?? 1);
         }
-        lib.FPDFPageObj_Transform(
+        lib.FPDFPath_SetDrawMode(path, rect.fill ? 1 : 0, Boolean(rect.stroke));
+        lib.FPDFPage_InsertObject(handle, path);
+      }
+      if (page.image) {
+        const { image } = page;
+        const object = lib.FPDFPageObj_NewImageObj(document.handle);
+        pdfium.withFileAccess(tinyJpeg(), (fileAccess) =>
+          lib.FPDFImageObj_LoadJpegFileInline(0, 0, object, fileAccess),
+        );
+        lib.FPDFImageObj_SetMatrix(
           object,
-          1,
+          image.width,
           0,
           0,
-          1,
-          page.x ?? 72,
-          page.y ?? 700,
+          image.height,
+          image.x,
+          image.y,
         );
         lib.FPDFPage_InsertObject(handle, object);
       }
@@ -75,6 +122,43 @@ export async function buildPdf(
   } finally {
     document.close();
   }
+}
+
+function addText(
+  pdfium: Pdfium,
+  document: number,
+  page: number,
+  text: FixtureText,
+): void {
+  const { lib } = pdfium;
+  const font = lib.FPDFText_LoadStandardFont(
+    document,
+    text.font ?? "Helvetica",
+  );
+  const object = lib.FPDFPageObj_CreateTextObj(
+    document,
+    font,
+    text.fontSize ?? 12,
+  );
+  const wide = pdfium.writeWideString(text.text);
+  try {
+    lib.FPDFText_SetText(object, wide);
+  } finally {
+    pdfium.free(wide);
+  }
+  if (text.color) lib.FPDFPageObj_SetFillColor(object, ...text.color, 255);
+  lib.FPDFPageObj_Transform(object, 1, 0, 0, 1, text.x ?? 72, text.y ?? 700);
+  if (text.mark || text.brokenMark) {
+    const mark = lib.FPDFPageObj_AddMark(object, MARK_NAME);
+    lib.FPDFPageObjMark_SetStringParam(
+      document,
+      object,
+      mark,
+      MARK_PARAM,
+      text.brokenMark ? "{not json" : JSON.stringify(text.mark),
+    );
+  }
+  lib.FPDFPage_InsertObject(page, object);
 }
 
 /** Text PDFium extracts from a page, for checking saved files. */

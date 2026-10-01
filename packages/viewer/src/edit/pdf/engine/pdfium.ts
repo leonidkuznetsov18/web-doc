@@ -25,6 +25,27 @@ export interface PdfiumFunctions {
   FPDF_ClosePage(page: number): void;
   FPDF_GetPageWidthF(page: number): number;
   FPDF_GetPageHeightF(page: number): number;
+  /** Media box ∩ crop box in user space, as an FS_RECTF {left, top, right, bottom}. */
+  FPDF_GetPageBoundingBox(page: number, rect: number): boolean;
+  FPDF_PageToDevice(
+    page: number,
+    startX: number,
+    startY: number,
+    sizeX: number,
+    sizeY: number,
+    rotate: number,
+    pageX: number,
+    pageY: number,
+    deviceX: number,
+    deviceY: number,
+  ): boolean;
+  FPDFPage_SetCropBox(
+    page: number,
+    left: number,
+    bottom: number,
+    right: number,
+    top: number,
+  ): void;
   FPDF_MovePages(
     document: number,
     pageIndices: number,
@@ -45,6 +66,86 @@ export interface PdfiumFunctions {
   FPDFPage_InsertObject(page: number, object: number): void;
   FPDFPage_GenerateContent(page: number): boolean;
   FPDFPageObj_GetType(object: number): number;
+  /** Four floats: left, bottom, right, top in user space. */
+  FPDFPageObj_GetBounds(
+    object: number,
+    left: number,
+    bottom: number,
+    right: number,
+    top: number,
+  ): boolean;
+  /** Six floats a, b, c, d, e, f. */
+  FPDFPageObj_GetMatrix(object: number, matrix: number): boolean;
+  FPDFPageObj_GetFillColor(
+    object: number,
+    r: number,
+    g: number,
+    b: number,
+    a: number,
+  ): boolean;
+  FPDFPageObj_GetStrokeColor(
+    object: number,
+    r: number,
+    g: number,
+    b: number,
+    a: number,
+  ): boolean;
+  FPDFPageObj_GetStrokeWidth(object: number, width: number): boolean;
+  FPDFPageObj_SetFillColor(
+    object: number,
+    r: number,
+    g: number,
+    b: number,
+    a: number,
+  ): boolean;
+  FPDFPageObj_SetStrokeColor(
+    object: number,
+    r: number,
+    g: number,
+    b: number,
+    a: number,
+  ): boolean;
+  FPDFPageObj_SetStrokeWidth(object: number, width: number): boolean;
+  FPDFPageObj_CreateNewRect(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): number;
+  FPDFPath_GetDrawMode(path: number, fillMode: number, stroke: number): boolean;
+  FPDFPath_SetDrawMode(
+    path: number,
+    fillMode: number,
+    stroke: boolean,
+  ): boolean;
+  FPDFTextObj_GetText(
+    textObject: number,
+    textPage: number,
+    buffer: number,
+    bytes: number,
+  ): number;
+  FPDFTextObj_GetFontSize(textObject: number, size: number): boolean;
+  FPDFTextObj_GetFont(textObject: number): number;
+  FPDFFont_GetFamilyName(font: number, buffer: number, bytes: number): number;
+  FPDFFont_GetBaseFontName(font: number, buffer: number, bytes: number): number;
+  FPDFFont_GetFlags(font: number): number;
+  FPDFFont_GetIsEmbedded(font: number): number;
+  FPDFFont_GetWeight(font: number): number;
+  FPDFText_GetCharBox(
+    textPage: number,
+    index: number,
+    left: number,
+    right: number,
+    bottom: number,
+    top: number,
+  ): boolean;
+  FPDFText_GetTextObject(textPage: number, index: number): number;
+  FPDFText_GetUnicode(textPage: number, index: number): number;
+  FPDFText_GetCharIndexFromTextIndex(
+    textPage: number,
+    textIndex: number,
+  ): number;
+  FPDFPageObjMark_CountParams(mark: number): number;
   FPDFPageObj_Transform(
     object: number,
     a: number,
@@ -129,8 +230,12 @@ export interface PdfiumRuntime {
     signature: string,
   ): number;
   removeFunction(pointer: number): void;
-  getValue(pointer: number, type: "i32"): number;
-  setValue(pointer: number, value: number, type: "i32"): void;
+  getValue(pointer: number, type: "i32" | "float" | "double"): number;
+  setValue(
+    pointer: number,
+    value: number,
+    type: "i32" | "float" | "double",
+  ): void;
 }
 
 export type PdfiumLibrary = PdfiumFunctions & {
@@ -252,6 +357,41 @@ export class Pdfium {
       }
     } finally {
       this.free(outBytes);
+    }
+  }
+
+  /** Reads a NUL-terminated UTF-8 string from an API that returns the byte size it needs. */
+  readUtf8String(read: (buffer: number, bytes: number) => number): string {
+    const bytes = read(0, 0);
+    if (bytes <= 1) return "";
+    const pointer = this.malloc(bytes);
+    try {
+      read(pointer, bytes);
+      const raw = this.readBytes(pointer, bytes);
+      const end = raw.indexOf(0);
+      return new TextDecoder().decode(end < 0 ? raw : raw.subarray(0, end));
+    } finally {
+      this.free(pointer);
+    }
+  }
+
+  /**
+   * Calls `read` with a scratch buffer of `count` numbers of `type` and
+   * returns what was written. Used for the many PDFium out-parameters.
+   */
+  readNumbers(
+    count: number,
+    type: "i32" | "float" | "double",
+    read: (pointers: number[]) => boolean,
+  ): number[] | undefined {
+    const size = type === "double" ? 8 : 4;
+    const base = this.malloc(count * size);
+    try {
+      const pointers = Array.from({ length: count }, (_, i) => base + i * size);
+      if (!read(pointers)) return undefined;
+      return pointers.map((pointer) => this.#runtime.getValue(pointer, type));
+    } finally {
+      this.free(base);
     }
   }
 

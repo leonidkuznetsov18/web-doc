@@ -352,16 +352,16 @@ styles, `getElements`, `getElement`, `elementsAt` and `findText`, plus
 
 **Acceptance criteria:**
 
-- [ ] On builder fixtures with rotations 0°, 90°, 180°, 270° and an offset crop
+- [x] On builder fixtures with rotations 0°, 90°, 180°, 270° and an offset crop
       box, element bounds match the expected page-space rectangles within
       0.5 pt.
-- [ ] Text, image, shape and other objects get the right kinds, text and
+- [x] Text, image, shape and other objects get the right kinds, text and
       styles; `findText` returns rectangles and element ids.
-- [ ] Ids are identical after `restore` of the same prefix.
+- [x] Ids are identical after `restore` of the same prefix.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-inspect.test.ts`)
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-inspect.test.ts`)
 
 **Dependencies:** Task 9
 

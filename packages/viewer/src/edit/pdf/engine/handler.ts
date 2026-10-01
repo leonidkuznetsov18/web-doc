@@ -12,8 +12,9 @@ import type {
   ElementQuery,
   PagePoint,
 } from "../../types.js";
-import type { Pdfium, PdfiumDocument } from "./pdfium.js";
+import type { Pdfium } from "./pdfium.js";
 import { pdfOperationSchemas } from "../schemas.js";
+import { PdfEditDocument } from "./document.js";
 
 /**
  * Serves the edit worker protocol for one PDF document. It runs inside the
@@ -24,9 +25,9 @@ export function createPdfEditHandler(
   loadPdfium: (wasmUrl: string) => Promise<Pdfium>,
 ): WorkerOperationHandler {
   let pdfium: Pdfium | undefined;
-  let state: PdfEditState | undefined;
+  let state: PdfEditDocument | undefined;
 
-  const engine = (): PdfEditState => {
+  const engine = (): PdfEditDocument => {
     if (!state)
       throw new ViewerError("lifecycle-error", "No PDF is open for editing");
     return state;
@@ -42,7 +43,10 @@ export function createPdfEditHandler(
         if (!pdfium)
           throw new ViewerError("lifecycle-error", "PDFium is not initialised");
         state?.dispose();
-        state = new PdfEditState(pdfium, payload as EditWorkerOpenPayload);
+        state = new PdfEditDocument(
+          pdfium,
+          new Uint8Array((payload as EditWorkerOpenPayload).data),
+        );
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
         return result;
       }
@@ -57,7 +61,7 @@ export function createPdfEditHandler(
             .operations,
         );
       case "edit-materialize":
-        return engine().materialize();
+        return engine().materialize().buffer;
       case "edit-restore":
         engine().restore(
           (
@@ -98,71 +102,6 @@ export function createPdfEditHandler(
         );
     }
   };
-}
-
-/**
- * The working copy of one PDF. Operations land here as they ship; until then
- * the state only proves that PDFium can open the document and hands the
- * original bytes back.
- */
-class PdfEditState {
-  readonly pageCount: number;
-  readonly #pdfium: Pdfium;
-  readonly #original: Uint8Array;
-  #document: PdfiumDocument;
-
-  constructor(pdfium: Pdfium, payload: EditWorkerOpenPayload) {
-    this.#pdfium = pdfium;
-    this.#original = new Uint8Array(payload.data);
-    this.#document = pdfium.openDocument(this.#original);
-    this.pageCount = pdfium.lib.FPDF_GetPageCount(this.#document.handle);
-  }
-
-  validate(operations: readonly EditOperation[]) {
-    return operations.map((operation, operationIndex) => ({
-      operationIndex,
-      path: "/op",
-      code: "unknown-operation",
-      message: `Unknown pdf operation ${operation.op}`,
-    }));
-  }
-
-  apply(operations: readonly EditOperation[]): never {
-    throw new ViewerError("internal", "No PDF operation is implemented yet", {
-      details: { operations: operations.length },
-    });
-  }
-
-  materialize(): ArrayBuffer {
-    return this.#original.slice().buffer;
-  }
-
-  restore(batches: readonly (readonly EditOperation[])[]): void {
-    if (batches.length > 0)
-      throw new ViewerError("internal", "No PDF operation is implemented yet");
-    this.#document.close();
-    this.#document = this.#pdfium.openDocument(this.#original);
-  }
-
-  getElements(_query: ElementQuery) {
-    return [];
-  }
-
-  getElement(_id: string) {
-    return undefined;
-  }
-
-  elementsAt(_pageIndex: number, _point: PagePoint) {
-    return [];
-  }
-
-  findText(_query: string, _options: EditFindOptions) {
-    return [];
-  }
-
-  dispose(): void {
-    this.#document.close();
-  }
 }
 
 export { pdfOperationSchemas };
