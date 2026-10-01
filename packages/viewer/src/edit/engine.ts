@@ -1,4 +1,8 @@
-import type { ResourceLimits, ViewerWarning } from "../contracts.js";
+import type {
+  RegisteredFont,
+  ResourceLimits,
+  ViewerWarning,
+} from "../contracts.js";
 import type { EditSession } from "./sessions.js";
 import type {
   EditableFormat,
@@ -24,6 +28,8 @@ export interface EditEngineContext {
   readonly fileName?: string;
   readonly limits: ResourceLimits;
   readonly assetBaseUrl?: URL;
+  /** Fonts the host registered with the client, for text the engine writes. */
+  readonly fonts?: readonly RegisteredFont[];
   readonly signal: AbortSignal;
 }
 

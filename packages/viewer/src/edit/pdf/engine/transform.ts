@@ -66,7 +66,7 @@ export const moveElement: OperationHandler<MoveElementOperation> = {
       to.x - from.x,
       to.y - from.y,
     ]);
-    return changed(location, false);
+    return changed(location, { overflow: false });
   },
 };
 
@@ -122,7 +122,7 @@ export const resizeElement: OperationHandler<ResizeElementOperation> = {
       to.x - from.x,
       to.y - from.y,
     ]);
-    return changed(location, false);
+    return changed(location, { overflow: false });
   },
 };
 
@@ -146,7 +146,7 @@ export const deleteElement: OperationHandler<DeleteElementOperation> = {
       location.indexes.length,
       [],
     );
-    return changed(location, false);
+    return changed(location, { overflow: false });
   },
 };
 

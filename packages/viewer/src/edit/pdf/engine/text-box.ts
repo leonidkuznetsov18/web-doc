@@ -1,17 +1,19 @@
-import type { PageRect } from "../../types.js";
+import type { EditOperation, PageRect } from "../../types.js";
 import type {
   InsertTextBoxOperation,
+  PdfOperation,
   PdfTextAlign,
   PdfTextBoxStyle,
   ReplaceTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
-import { MARK_NAME, MARK_PARAM, OBJECT_TEXT } from "./elements.js";
 import {
-  firstNonWinAnsi,
-  isStandardFamily,
-  standardFontName,
-} from "./fonts.js";
+  MARK_NAME,
+  MARK_PARAM,
+  OBJECT_TEXT,
+  type MarkParams,
+} from "./elements.js";
+import type { FontRequest } from "./fonts.js";
 import { displayedSize, pageToUser, type PageGeometry } from "./geometry.js";
 import { layoutText } from "./text-layout.js";
 import type {
@@ -47,9 +49,11 @@ export const insertTextBox: OperationHandler<InsertTextBoxOperation> = {
       return;
     }
     validateRect(operation.rect, context.geometry(operation.pageIndex), issue);
-    validateTextStyle(operation.style ?? {}, issue);
-    const bad = firstNonWinAnsi(operation.text);
-    if (bad !== undefined) issue("/text", "font-unavailable", unencodable(bad));
+    validateFont(
+      fontRequest(resolveStyle(operation.style ?? {}), operation.text),
+      context,
+      issue,
+    );
   },
 
   apply(operation, context) {
@@ -61,20 +65,24 @@ export const insertTextBox: OperationHandler<InsertTextBoxOperation> = {
       text: operation.text,
       style: resolveStyle(operation.style ?? {}),
     };
-    const overflow = drawTextBox(context, operation.pageIndex, spec);
+    const drawn = drawTextBox(context, operation.pageIndex, spec);
     return {
       createdIds: [id],
       changedPages: [operation.pageIndex],
-      warnings: overflowWarnings(overflow, id),
+      warnings: warningsFor(drawn, id),
     };
   },
 };
 
 export const replaceText: OperationHandler<ReplaceTextOperation> = {
   validate(operation, context, issue) {
-    if (!textBoxTarget(operation.target, context, issue)) return;
-    const bad = firstNonWinAnsi(operation.text);
-    if (bad !== undefined) issue("/text", "font-unavailable", unencodable(bad));
+    const target = textBoxTarget(operation.target, context, issue);
+    if (!target) return;
+    validateFont(
+      fontRequest(target.spec.style, operation.text),
+      context,
+      issue,
+    );
   },
   apply(operation, context) {
     const { location, spec } = textBoxTarget(operation.target, context)!;
@@ -87,8 +95,10 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
 
 export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
   validate(operation, context, issue) {
-    if (!textBoxTarget(operation.target, context, issue)) return;
-    validateTextStyle(operation.style, issue);
+    const target = textBoxTarget(operation.target, context, issue);
+    if (!target) return;
+    const style = { ...target.spec.style, ...definedFields(operation.style) };
+    validateFont(fontRequest(style, target.spec.text), context, issue);
   },
   apply(operation, context) {
     const { location, spec } = textBoxTarget(operation.target, context)!;
@@ -102,25 +112,30 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
   },
 };
 
+export interface DrawnTextBox {
+  readonly overflow: boolean;
+  /** Set when the text was drawn with another font than asked for. */
+  readonly substitution?: string;
+}
+
 /**
  * Lays the box out and inserts one text object per line, appended to the
- * page or at `insertAt` in drawing order. Returns whether it overflowed.
+ * page or at `insertAt` in drawing order.
  */
 export function drawTextBox(
   context: OperationContext,
   pageIndex: number,
   spec: TextBoxSpec,
   insertAt?: number,
-): boolean {
+): DrawnTextBox {
   const { pdfium, measurer } = context;
   const { lib } = pdfium;
-  const fontName = standardFontName(
-    spec.style.fontFamily,
-    spec.style.bold,
-    spec.style.italic,
-  )!;
-  const font = lib.FPDFText_LoadStandardFont(context.document, fontName);
-  const { ascent } = measurer.metrics(font, spec.style.fontSize);
+  const font = context.fonts.resolve(
+    pdfium,
+    context.document,
+    fontRequest(spec.style, spec.text),
+  );
+  const { ascent } = measurer.metrics(font.handle, spec.style.fontSize);
   const layout = layoutText({
     text: spec.text,
     width: spec.rect.width,
@@ -129,7 +144,7 @@ export function drawTextBox(
     lineHeight: spec.style.lineHeight,
     align: spec.style.align,
     ascent,
-    advance: (text) => measurer.advance(font, spec.style.fontSize, text),
+    advance: (text) => measurer.advance(font.handle, spec.style.fontSize, text),
   });
   const geometry = context.geometry(pageIndex);
   const [r, g, b] = parseColor(spec.style.color);
@@ -140,7 +155,7 @@ export function drawTextBox(
     for (const line of layout.lines) {
       const object = lib.FPDFPageObj_CreateTextObj(
         context.document,
-        font,
+        font.handle,
         spec.style.fontSize,
       );
       setText(pdfium, object, line.text);
@@ -167,7 +182,10 @@ export function drawTextBox(
     if (insertAt === undefined) context.appendObjects(pageIndex, records);
     else context.spliceObjects(pageIndex, insertAt, 0, records);
   });
-  return layout.overflow;
+  return {
+    overflow: layout.overflow,
+    ...(font.substitution ? { substitution: font.substitution } : {}),
+  };
 }
 
 /**
@@ -178,7 +196,7 @@ export function rebuildTextBox(
   context: OperationContext,
   location: ElementLocation,
   spec: TextBoxSpec,
-): boolean {
+): DrawnTextBox {
   const { lib } = context.pdfium;
   const first = location.indexes[0]!;
   context.withPage(location.pageIndex, (page) => {
@@ -219,28 +237,110 @@ export function textBoxTarget(
 
 export function changed(
   location: ElementLocation,
-  overflow: boolean,
+  drawn: DrawnTextBox,
 ): OperationResult {
   return {
     createdIds: [],
     changedPages: [location.pageIndex],
-    warnings: overflowWarnings(overflow, location.record.id),
+    warnings: warningsFor(drawn, location.record.id),
   };
 }
 
-function overflowWarnings(
-  overflow: boolean,
+function warningsFor(
+  drawn: DrawnTextBox,
   elementId: string,
 ): OperationResult["warnings"] {
-  return overflow
-    ? [
-        {
-          code: "fidelity-degraded",
-          message: "The text does not fit the box's height and runs past it",
-          details: { elementId },
-        },
-      ]
-    : [];
+  return [
+    ...(drawn.overflow
+      ? [
+          {
+            code: "fidelity-degraded" as const,
+            message: "The text does not fit the box's height and runs past it",
+            details: { elementId },
+          },
+        ]
+      : []),
+    ...(drawn.substitution
+      ? [
+          {
+            code: "font-substitution" as const,
+            message: drawn.substitution,
+            details: { elementId },
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
+ * The fonts a batch will need: what each operation draws, read from the
+ * operation itself or from the text box it rebuilds.
+ */
+export function fontRequestsOf(
+  operations: readonly EditOperation[],
+  markOf: (id: string) => MarkParams | undefined,
+): { readonly family: string; readonly text: string }[] {
+  const requests: { family: string; text: string }[] = [];
+  for (const raw of operations) {
+    const operation = raw as PdfOperation;
+    const spec = (id: string): TextBoxSpec | undefined => {
+      const mark = markOf(id);
+      return mark?.kind === "textBox"
+        ? (mark as unknown as TextBoxSpec)
+        : undefined;
+    };
+    switch (operation.op) {
+      case "insertTextBox":
+        requests.push({
+          family: operation.style?.fontFamily ?? "Helvetica",
+          text: operation.text,
+        });
+        break;
+      case "replaceText": {
+        const box = spec(operation.target);
+        if (box)
+          requests.push({ family: box.style.fontFamily, text: operation.text });
+        break;
+      }
+      case "setTextStyle": {
+        const box = spec(operation.target);
+        if (box)
+          requests.push({
+            family: operation.style.fontFamily ?? box.style.fontFamily,
+            text: box.text,
+          });
+        break;
+      }
+      case "resizeElement":
+      case "moveElement": {
+        const box = spec(operation.target);
+        if (box)
+          requests.push({ family: box.style.fontFamily, text: box.text });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return requests;
+}
+
+function fontRequest(style: TextBoxSpec["style"], text: string): FontRequest {
+  return {
+    family: style.fontFamily,
+    bold: style.bold,
+    italic: style.italic,
+    text,
+  };
+}
+
+function validateFont(
+  request: FontRequest,
+  context: OperationContext,
+  issue: Issue,
+): void {
+  const problem = context.fonts.problem(request);
+  if (problem) issue(problem.path, problem.code, problem.message);
 }
 
 /**
@@ -300,15 +400,6 @@ function definedFields(style: PdfTextBoxStyle): Partial<TextBoxSpec["style"]> {
   ) as Partial<TextBoxSpec["style"]>;
 }
 
-export function validateTextStyle(style: PdfTextBoxStyle, issue: Issue): void {
-  if (style.fontFamily !== undefined && !isStandardFamily(style.fontFamily))
-    issue(
-      "/style/fontFamily",
-      "unknown-font",
-      `Unknown font family ${style.fontFamily}; Helvetica, Times and Courier are available`,
-    );
-}
-
 export function validateRect(
   rect: PageRect,
   geometry: PageGeometry,
@@ -328,9 +419,4 @@ export function validateRect(
       "range",
       `The rectangle must lie within the ${size.width}×${size.height} pt page`,
     );
-}
-
-function unencodable(character: string): string {
-  const code = character.codePointAt(0)!.toString(16).toUpperCase();
-  return `No available font can draw "${character}" (U+${code.padStart(4, "0")})`;
 }

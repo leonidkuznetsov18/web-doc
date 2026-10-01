@@ -514,16 +514,16 @@ warnings for missing bold or italic faces. The size report counts `.ttf` fonts.
 
 **Acceptance criteria:**
 
-- [ ] A Cyrillic text box inserted without host fonts is extracted correctly by
+- [x] A Cyrillic text box inserted without host fonts is extracted correctly by
       PDF.js after save; with a registered TTF family, that font is embedded.
-- [ ] Text no available font covers fails with a `font-unavailable` issue; the
+- [x] Text no available font covers fails with a `font-unavailable` issue; the
       license gate verifies the TTF's size and hash.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-fonts.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
-- [ ] `npm run licenses` and `npm run report:size`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-fonts.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run licenses` and `npm run report:size`
 
 **Dependencies:** Task 13
 

@@ -1,6 +1,8 @@
+import type { RegisteredFont } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { WorkerRpcClient, type WorkerLike } from "../../worker-client.js";
 import type {
+  EditWorkerFont,
   EditWorkerInitPayload,
   EditWorkerOpenPayload,
   EditWorkerOpenResult,
@@ -24,6 +26,8 @@ const DISPOSE_GRACE_MS = 1000;
 export interface PdfEditProviderOptions {
   readonly workerUrl?: string | URL;
   readonly wasmUrl?: string | URL;
+  /** TrueType font for text the standard fonts cannot encode. */
+  readonly fallbackFontUrl?: string | URL;
   /** Test hook: supplies the worker instead of the packaged script. */
   readonly createWorker?: () => WorkerLike;
 }
@@ -65,27 +69,44 @@ class PdfEditEngineClient implements EditEngine {
     original: Uint8Array,
     options: PdfEditProviderOptions,
   ): Promise<void> {
+    const base = this.#context.assetBaseUrl;
     const init: EditWorkerInitPayload = {
       wasmUrl: resolveAssetUrl(
         options.wasmUrl,
-        this.#context.assetBaseUrl,
-        this.#context.assetBaseUrl
-          ? new URL("assets/pdfium/pdfium.wasm", this.#context.assetBaseUrl)
+        base,
+        base
+          ? new URL("assets/pdfium/pdfium.wasm", base)
           : packageRelativeUrl("../../../assets/pdfium/pdfium.wasm"),
+      ).href,
+      fallbackFontUrl: resolveAssetUrl(
+        options.fallbackFontUrl,
+        base,
+        base
+          ? new URL("fonts/noto-sans-latin-cyrillic.ttf", base)
+          : packageRelativeUrl("../../../fonts/noto-sans-latin-cyrillic.ttf"),
       ).href,
     };
     await this.#request("edit-init", init, this.#context.signal);
     const data = original.slice().buffer;
+    const fonts = (this.#context.fonts ?? []).map(toWorkerFont);
     const open: EditWorkerOpenPayload = {
       data,
       limits: this.#context.limits,
       ...(this.#context.fileName ? { fileName: this.#context.fileName } : {}),
+      ...(fonts.length > 0 ? { fonts } : {}),
     };
     await this.#request<EditWorkerOpenResult>(
       "edit-open",
       open,
       this.#context.signal,
-      [data],
+      [
+        data,
+        ...fonts
+          .map((font) => font.source)
+          .filter(
+            (source): source is ArrayBuffer => source instanceof ArrayBuffer,
+          ),
+      ],
     );
   }
 
@@ -174,6 +195,23 @@ class PdfEditEngineClient implements EditEngine {
       timeoutMs: this.#context.limits.maxOperationMs,
     });
   }
+}
+
+/** A host font in the worker's shape: bytes are copied, URLs made absolute. */
+function toWorkerFont(font: RegisteredFont): EditWorkerFont {
+  const source =
+    font.source instanceof ArrayBuffer
+      ? font.source.slice(0)
+      : font.source instanceof Uint8Array
+        ? font.source.slice().buffer
+        : new URL(font.source, globalThis.location?.href ?? "http://localhost/")
+            .href;
+  return {
+    family: font.family,
+    weight: font.weight ?? 400,
+    style: font.style ?? "normal",
+    source,
+  };
 }
 
 function createPackagedWorker(

@@ -974,6 +974,7 @@ export class DocumentViewer implements ViewerApi {
       const engine = await provider.load(this.#original!.slice(), {
         format,
         limits: this.#limits,
+        fonts: this.#runtime.fonts.registered,
         signal: operation.signal,
         ...(this.#originalFileName ? { fileName: this.#originalFileName } : {}),
         ...(this.#runtime.assetBaseUrl

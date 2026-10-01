@@ -6,5 +6,8 @@ The WOFF2 files in this directory are modified/subset builds of Noto Sans and No
 - Noto Sans CJK sources: `notofonts/noto-cjk` commit `f8d157532fbfaeda587e826d4cd5b21a49186f7c`.
 - License: SIL Open Font License 1.1; see `OFL-1.1.txt`.
 - Modified font family used by the viewer: `Zrimo Noto`.
+- `noto-sans-latin-cyrillic.ttf` is the same Latin/Cyrillic subset saved as an
+  uncompressed TrueType file; the PDF editor embeds it into documents whose
+  text the standard fonts cannot encode.
 
 No proprietary Microsoft font is included.

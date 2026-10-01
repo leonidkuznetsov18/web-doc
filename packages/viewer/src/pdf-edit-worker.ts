@@ -8,14 +8,17 @@ import { attachWorkerEndpoint } from "./worker-endpoint.js";
  * elsewhere (assetBaseUrl) needs no change here.
  */
 
+async function fetchBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok)
+    throw new Error(`Fetching ${url} failed with HTTP ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 attachWorkerEndpoint(
   self as unknown as DedicatedWorkerGlobalScope,
-  createPdfEditHandler(async (wasmUrl) => {
-    const response = await fetch(wasmUrl);
-    if (!response.ok)
-      throw new Error(
-        `Fetching ${wasmUrl} failed with HTTP ${response.status}`,
-      );
-    return Pdfium.load(await response.arrayBuffer());
+  createPdfEditHandler({
+    loadPdfium: async (wasmUrl) => Pdfium.load(await fetchBytes(wasmUrl)),
+    fetchBytes,
   }),
 );

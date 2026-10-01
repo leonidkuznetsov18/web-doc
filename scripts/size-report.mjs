@@ -42,7 +42,7 @@ const pdfPaths = files.filter((path) => {
 const fontPaths = files.filter(
   (path) =>
     relative(dist, path).startsWith("fonts/") &&
-    [".woff2", ".json", ".txt", ".md"].includes(extname(path)),
+    [".woff2", ".ttf", ".json", ".txt", ".md"].includes(extname(path)),
 );
 
 const assets = [];

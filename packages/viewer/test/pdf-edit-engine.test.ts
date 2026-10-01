@@ -23,7 +23,12 @@ import { buildPdf, fixturePdfium } from "./fixtures/pdf-builder.js";
  * is set, text searches never answer, so a crash can land mid-request.
  */
 function workerPair() {
-  const handler = createPdfEditHandler(() => fixturePdfium());
+  const handler = createPdfEditHandler({
+    loadPdfium: () => fixturePdfium(),
+    fetchBytes: async (url) => {
+      throw new Error(`No font at ${url}`);
+    },
+  });
   const state = { held: false };
   const pair = loopbackWorker(async (operation, payload, context) => {
     if (operation === "edit-find-text" && state.held)

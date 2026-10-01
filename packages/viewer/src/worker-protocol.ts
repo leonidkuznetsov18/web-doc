@@ -90,12 +90,24 @@ export interface WorkerRenderPayload {
 export interface EditWorkerInitPayload {
   /** Where the worker fetches the engine's WebAssembly from. */
   readonly wasmUrl: string;
+  /** TrueType font for text the standard PDF fonts cannot encode. */
+  readonly fallbackFontUrl?: string;
+}
+
+/** A host-registered font as the edit worker receives it. */
+export interface EditWorkerFont {
+  readonly family: string;
+  readonly weight: number;
+  readonly style: "normal" | "italic" | "oblique";
+  /** Font bytes, or an absolute URL the worker fetches on first use. */
+  readonly source: ArrayBuffer | string;
 }
 
 export interface EditWorkerOpenPayload {
   readonly data: ArrayBuffer;
   readonly limits: ResourceLimits;
   readonly fileName?: string;
+  readonly fonts?: readonly EditWorkerFont[];
 }
 
 export interface EditWorkerOpenResult {

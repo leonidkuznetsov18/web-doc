@@ -224,3 +224,41 @@ test("changes the page structure and the viewer follows", async ({ page }) => {
   expect(result.finalCount).toBe(2);
   expect(result.revision).toBe(4);
 });
+
+test("embeds the fallback font for Cyrillic text and fetches it only then", async ({
+  page,
+}) => {
+  const original = await buildPdf(["Latin"]);
+  const requests: string[] = [];
+  page.on("request", (request) =>
+    requests.push(new URL(request.url()).pathname),
+  );
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    await session.insertTextBox({
+      pageIndex: 0,
+      rect: { x: 72, y: 200, width: 450, height: 60 },
+      text: "Only Latin here",
+    });
+    const fontRequestsBefore = performance
+      .getEntriesByType("resource")
+      .filter((entry) => entry.name.endsWith(".ttf")).length;
+    const receipt = await session.insertTextBox({
+      pageIndex: 0,
+      rect: { x: 72, y: 300, width: 450, height: 60 },
+      text: "Привіт, світе!",
+    });
+    const text: string = await viewer.getPageText(0);
+    return {
+      fontRequestsBefore,
+      warning: receipt.warnings[0]?.code,
+      text,
+    };
+  });
+  expect(result.fontRequestsBefore).toBe(0);
+  expect(result.warning).toBe("font-substitution");
+  expect(result.text).toContain("Привіт, світе!");
+  expect(requests).toContain("/fonts/noto-sans-latin-cyrillic.ttf");
+});

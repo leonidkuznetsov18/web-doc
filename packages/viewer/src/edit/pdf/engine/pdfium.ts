@@ -209,6 +209,14 @@ export interface PdfiumFunctions {
     f: number,
   ): boolean;
   FPDFText_LoadStandardFont(document: number, name: string): number;
+  FPDFText_LoadFont(
+    document: number,
+    data: number,
+    size: number,
+    fontType: number,
+    cid: boolean,
+  ): number;
+  FPDFFont_Close(font: number): void;
   FPDFText_SetText(textObject: number, text: number): boolean;
   FPDFText_LoadPage(page: number): number;
   FPDFText_ClosePage(textPage: number): void;

@@ -78,6 +78,7 @@ const required = [
   "dist/assets/image/index_bg.wasm",
   "dist/assets/legacy/index_bg.wasm",
   "dist/fonts/manifest.json",
+  "dist/fonts/noto-sans-latin-cyrillic.ttf",
   "LICENSE-MIT",
   "LICENSE-APACHE",
   "THIRD_PARTY_NOTICES.md",

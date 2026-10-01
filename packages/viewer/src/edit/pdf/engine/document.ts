@@ -15,7 +15,8 @@ import {
   type MarkParams,
   type ObjectRecord,
 } from "./elements.js";
-import { TextMeasurer } from "./fonts.js";
+import { FontLibrary, TextMeasurer } from "./fonts.js";
+import { fontRequestsOf } from "./text-box.js";
 import {
   issueCollector,
   type ElementLocation,
@@ -72,17 +73,35 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
 export class PdfEditDocument {
   readonly #pdfium: Pdfium;
   readonly #original: Uint8Array;
+  readonly #fonts: FontLibrary;
   #document: PdfiumDocument;
   #measurer: TextMeasurer;
   #pages: PageRecord[];
   #batches = 0;
 
-  constructor(pdfium: Pdfium, original: Uint8Array) {
+  constructor(
+    pdfium: Pdfium,
+    original: Uint8Array,
+    fonts: FontLibrary = new FontLibrary(async () => {
+      throw new Error("No font source is configured");
+    }),
+  ) {
     this.#pdfium = pdfium;
     this.#original = original;
+    this.#fonts = fonts;
     this.#document = pdfium.openDocument(original);
     this.#measurer = new TextMeasurer(pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
+  }
+
+  /**
+   * The families and texts a batch will draw, so the fonts can be fetched
+   * before the synchronous validation and application run.
+   */
+  fontRequests(
+    operations: readonly PdfOrUnknownOperation[],
+  ): { readonly family: string; readonly text: string }[] {
+    return fontRequestsOf(operations, (id) => this.#locate(id)?.record.mark);
   }
 
   get pageCount(): number {
@@ -158,6 +177,7 @@ export class PdfEditDocument {
   }
 
   restore(batches: readonly (readonly PdfOrUnknownOperation[])[]): void {
+    this.#fonts.release(this.#pdfium, this.#document.handle);
     this.#document.close();
     this.#document = this.#pdfium.openDocument(this.#original);
     this.#measurer = new TextMeasurer(this.#pdfium, this.#document.handle);
@@ -233,6 +253,7 @@ export class PdfEditDocument {
   }
 
   dispose(): void {
+    this.#fonts.release(this.#pdfium, this.#document.handle);
     this.#document.close();
   }
 
@@ -242,6 +263,7 @@ export class PdfEditDocument {
       pdfium: this.#pdfium,
       document: this.#document.handle,
       measurer: this.#measurer,
+      fonts: this.#fonts,
       pageCount: this.pageCount,
       geometry: (pageIndex) => {
         const record = this.#pages[pageIndex];

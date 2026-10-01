@@ -12,20 +12,29 @@ import type {
   ElementQuery,
   PagePoint,
 } from "../../types.js";
-import type { Pdfium } from "./pdfium.js";
 import { pdfOperationSchemas } from "../schemas.js";
 import { PdfEditDocument } from "./document.js";
+import { FontLibrary } from "./fonts.js";
+import type { Pdfium } from "./pdfium.js";
+
+export interface PdfEditHost {
+  /** Instantiates PDFium for a WASM URL. */
+  loadPdfium(wasmUrl: string): Promise<Pdfium>;
+  /** Fetches font bytes for a URL. */
+  fetchBytes(url: string): Promise<Uint8Array>;
+}
 
 /**
  * Serves the edit worker protocol for one PDF document. It runs inside the
- * edit worker in the browser and directly in Node tests; `loadPdfium` is how
- * the host obtains an engine instance for a WASM URL.
+ * edit worker in the browser and directly in Node tests; the host supplies
+ * how WebAssembly and fonts are obtained.
  */
 export function createPdfEditHandler(
-  loadPdfium: (wasmUrl: string) => Promise<Pdfium>,
+  host: PdfEditHost,
 ): WorkerOperationHandler {
   let pdfium: Pdfium | undefined;
   let state: PdfEditDocument | undefined;
+  const fonts = new FontLibrary((url) => host.fetchBytes(url));
 
   const engine = (): PdfEditDocument => {
     if (!state)
@@ -36,41 +45,45 @@ export function createPdfEditHandler(
   return async (operation: WorkerOperation, payload: unknown) => {
     switch (operation) {
       case "edit-init": {
-        pdfium ??= await loadPdfium((payload as EditWorkerInitPayload).wasmUrl);
+        const init = payload as EditWorkerInitPayload;
+        pdfium ??= await host.loadPdfium(init.wasmUrl);
+        fonts.setFallbackUrl(init.fallbackFontUrl);
         return undefined;
       }
       case "edit-open": {
         if (!pdfium)
           throw new ViewerError("lifecycle-error", "PDFium is not initialised");
+        const open = payload as EditWorkerOpenPayload;
         state?.dispose();
-        state = new PdfEditDocument(
-          pdfium,
-          new Uint8Array((payload as EditWorkerOpenPayload).data),
-        );
+        fonts.register(open.fonts ?? []);
+        state = new PdfEditDocument(pdfium, new Uint8Array(open.data), fonts);
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
         return result;
       }
-      case "edit-validate":
-        return engine().validate(
-          (payload as { readonly operations: readonly EditOperation[] })
-            .operations,
-        );
-      case "edit-apply":
-        return engine().apply(
-          (payload as { readonly operations: readonly EditOperation[] })
-            .operations,
-        );
+      case "edit-validate": {
+        const { operations } = payload as {
+          readonly operations: readonly EditOperation[];
+        };
+        await fonts.prepare(engine().fontRequests(operations));
+        return engine().validate(operations);
+      }
+      case "edit-apply": {
+        const { operations } = payload as {
+          readonly operations: readonly EditOperation[];
+        };
+        await fonts.prepare(engine().fontRequests(operations));
+        return engine().apply(operations);
+      }
       case "edit-materialize":
         return engine().materialize().buffer;
-      case "edit-restore":
-        engine().restore(
-          (
-            payload as {
-              readonly batches: readonly (readonly EditOperation[])[];
-            }
-          ).batches,
-        );
+      case "edit-restore": {
+        const { batches } = payload as {
+          readonly batches: readonly (readonly EditOperation[])[];
+        };
+        await fonts.prepare(engine().fontRequests(batches.flat()));
+        engine().restore(batches);
         return undefined;
+      }
       case "edit-elements":
         return engine().getElements(
           (payload as { readonly query: ElementQuery }).query,

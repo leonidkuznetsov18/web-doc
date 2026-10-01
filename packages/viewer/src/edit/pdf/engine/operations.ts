@@ -4,13 +4,14 @@ import type { PdfElement, PdfOperation } from "../types.js";
 import type { PageGeometry } from "./geometry.js";
 import type { ObjectRecord } from "./elements.js";
 import type { Pdfium } from "./pdfium.js";
-import type { TextMeasurer } from "./fonts.js";
+import type { FontLibrary, TextMeasurer } from "./fonts.js";
 
 /** What an operation sees of the document while validating or applying. */
 export interface OperationContext {
   readonly pdfium: Pdfium;
   readonly document: number;
   readonly measurer: TextMeasurer;
+  readonly fonts: FontLibrary;
   readonly pageCount: number;
   /** Geometry of a page; loads it if needed. */
   geometry(pageIndex: number): PageGeometry;
