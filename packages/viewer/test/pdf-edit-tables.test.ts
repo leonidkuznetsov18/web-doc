@@ -101,6 +101,7 @@ describe("insertTable", () => {
       const change = model.apply([operation]);
       assert.deepEqual(change, {
         createdIds: ["p0:n1.0.0"],
+        removedIds: [],
         changedPages: [0],
         pageCount: 2,
         warnings: [],
@@ -296,6 +297,7 @@ describe("table edits", () => {
       ]);
       assert.deepEqual(changed, {
         createdIds: [],
+        removedIds: [],
         changedPages: [0],
         pageCount: 1,
         warnings: [],

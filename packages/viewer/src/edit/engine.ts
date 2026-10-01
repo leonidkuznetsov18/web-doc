@@ -46,7 +46,11 @@ export interface EditEngineProvider {
 
 export interface EngineChange {
   readonly createdIds: readonly string[];
-  /** Page indexes in the resulting document whose content changed. */
+  /** Ids that no longer exist after the batch, including every element of a deleted page. */
+  readonly removedIds: readonly string[];
+  /** Old id → new id, when the format had to rename an element. */
+  readonly remappedIds?: Readonly<Record<string, string>>;
+  /** A superset of the pages whose content changed. */
   readonly changedPages: readonly number[];
   readonly pageCount: number;
   readonly warnings: readonly ViewerWarning[];

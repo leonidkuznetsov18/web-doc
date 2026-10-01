@@ -2,7 +2,7 @@
 
 > **Status, 2026-10-01 (evening):** `edit-core` and `pdf-edit` revision 1 are
 > done and documented; revision 2 of the contract (Linear ACTION-821, from the
-> architecture review) is drafted and awaits approval before any code changes.
+> architecture review) is approved and being implemented (Phase 5).
 > The capability map below is approved, and so are the
 > specs for `edit-core` and `pdf-edit`. Module specs are written one at a time,
 > right before a module starts, so each one can use what the previous modules
@@ -357,6 +357,7 @@ Stated so that hosts plan around them rather than discover them:
 | 2026-10-01 | PDF `save()` defaults to a full rewrite for unsigned files; incremental for signed files and on request.                  |
 | 2026-10-01 | Reads return `{ sessionId, revision, items }` envelopes now; paging stays additive for later.                             |
 | 2026-10-01 | PDF overlay text-input primitives are a separate ticket after ACTION-821.                                                 |
+| 2026-10-01 | `edit-core` and `pdf-edit` revision 2 approved; Phase 5 (T23–T30) starts under ACTION-821.                                |
 
 ## Open questions
 

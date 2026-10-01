@@ -2,6 +2,7 @@ import type { EditEngineProvider } from "./edit/engine.js";
 import type { EditSession } from "./edit/sessions.js";
 import type {
   DocumentChange,
+  LayoutChange,
   EditOptions,
   EditStateChange,
   PageHit,
@@ -100,6 +101,8 @@ export interface ResourceLimits {
   readonly maxEditOperations: number;
   /** Undoable edit batches kept; older ones are folded into the starting point. */
   readonly maxEditHistory: number;
+  /** Memory for retained edit checkpoints; fewer are kept when a file is big. */
+  readonly maxEditCheckpointBytes: number;
 }
 
 export type BinaryDocumentSource = ArrayBuffer | Uint8Array | Blob;
@@ -324,6 +327,7 @@ export interface ViewerEventMap {
   readonly searchchange: SearchResult | null;
   readonly editstatechange: EditStateChange;
   readonly documentchange: DocumentChange;
+  readonly layoutchange: LayoutChange;
 }
 
 /**

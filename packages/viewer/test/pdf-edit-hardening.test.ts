@@ -132,10 +132,12 @@ describe("PDF sessions", () => {
       };
       const dry = await session.insertTextBox(fields, { dryRun: true });
       assert.deepEqual(dry, {
+        sessionId: session.sessionId,
         revision: 0,
         dryRun: true,
         operationCount: 1,
         createdIds: ["p0:n1.0.0"],
+        removedIds: [],
         changedPages: [0],
         pageCount: 2,
         warnings: [],

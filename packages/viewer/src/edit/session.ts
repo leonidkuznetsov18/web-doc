@@ -58,6 +58,7 @@ export class EditSessionController implements EditSessionBase<
   readonly #original: Uint8Array;
   readonly #originalPageCount: number;
   readonly #ending = new AbortController();
+  readonly sessionId = newSessionId();
   #state: EditState;
   #queue: Promise<unknown> = Promise.resolve();
   #revision = 0;
@@ -89,12 +90,19 @@ export class EditSessionController implements EditSessionBase<
     return this.#state;
   }
 
+  applyJson(
+    operations: readonly EditOperation[],
+    options: ApplyOptions = {},
+  ): Promise<EditReceipt> {
+    return this.apply(operations, options);
+  }
+
   apply(
     operations: readonly EditOperation[],
     options: ApplyOptions = {},
   ): Promise<EditReceipt> {
     return this.#enqueue(options.signal, async (signal) => {
-      this.#assertRevision(options.expectedRevision);
+      this.#assertRevision(options);
       assertBatchSize(operations, this.#host.limits.maxEditOperations);
       const shapeIssues = checkOperations(operations, this.schemas);
       if (shapeIssues.length > 0) throw invalidOperationError(shapeIssues);
@@ -133,7 +141,7 @@ export class EditSessionController implements EditSessionBase<
 
   undo(options: HistoryOptions = {}): Promise<EditReceipt> {
     return this.#enqueue(options.signal, async (signal) => {
-      this.#assertRevision(options.expectedRevision);
+      this.#assertRevision(options);
       const entry = this.#history.undoEntry;
       if (!entry) return this.#noop();
       await this.#moveTo(this.#history.position - 1, signal);
@@ -151,7 +159,7 @@ export class EditSessionController implements EditSessionBase<
 
   redo(options: HistoryOptions = {}): Promise<EditReceipt> {
     return this.#enqueue(options.signal, async (signal) => {
-      this.#assertRevision(options.expectedRevision);
+      this.#assertRevision(options);
       const entry = this.#history.redoEntry;
       if (!entry) return this.#noop();
       await this.#moveTo(this.#history.position + 1, signal);
@@ -169,7 +177,7 @@ export class EditSessionController implements EditSessionBase<
 
   reset(options: HistoryOptions = {}): Promise<EditReceipt> {
     return this.#enqueue(options.signal, async (signal) => {
-      this.#assertRevision(options.expectedRevision);
+      this.#assertRevision(options);
       const applied = this.#history.applied();
       if (this.#history.stateId === 0 && this.#history.isPristine)
         return this.#noop();
@@ -378,6 +386,7 @@ export class EditSessionController implements EditSessionBase<
     this.#state = this.#snapshot();
     this.#emitState();
     this.#host.emit("documentchange", {
+      sessionId: this.sessionId,
       revision: this.#revision,
       reason,
       changedPages: Object.freeze([...changedPages]),
@@ -387,6 +396,7 @@ export class EditSessionController implements EditSessionBase<
 
   #snapshot(): EditState {
     return Object.freeze({
+      sessionId: this.sessionId,
       revision: this.#revision,
       dirty: this.#history.stateId !== this.#savedStateId,
       canUndo: this.#history.canUndo,
@@ -407,13 +417,19 @@ export class EditSessionController implements EditSessionBase<
     dryRun: boolean,
     operationCount: number,
     createdIds: readonly string[],
-    change: Pick<EngineChange, "changedPages" | "pageCount" | "warnings">,
+    change: Pick<EngineChange, "changedPages" | "pageCount" | "warnings"> &
+      Partial<Pick<EngineChange, "removedIds" | "remappedIds">>,
   ): EditReceipt {
     return Object.freeze({
+      sessionId: this.sessionId,
       revision: this.#revision,
       dryRun,
       operationCount,
       createdIds: Object.freeze([...createdIds]),
+      removedIds: Object.freeze([...(change.removedIds ?? [])]),
+      ...(change.remappedIds
+        ? { remappedIds: Object.freeze({ ...change.remappedIds }) }
+        : {}),
       changedPages: Object.freeze([...change.changedPages]),
       pageCount: change.pageCount,
       warnings: Object.freeze(
@@ -430,12 +446,29 @@ export class EditSessionController implements EditSessionBase<
     });
   }
 
-  #assertRevision(expected: number | undefined): void {
-    if (expected !== undefined && expected !== this.#revision)
+  #assertRevision(options: {
+    readonly expectedRevision?: number;
+    readonly expectedSessionId?: string;
+  }): void {
+    const { expectedRevision, expectedSessionId } = options;
+    const staleSession =
+      expectedSessionId !== undefined && expectedSessionId !== this.sessionId;
+    const staleRevision =
+      expectedRevision !== undefined && expectedRevision !== this.#revision;
+    if (staleSession || staleRevision)
       throw new ViewerError(
         "edit-conflict",
-        "The document changed since it was read",
-        { details: { expectedRevision: expected, revision: this.#revision } },
+        staleSession
+          ? "The session the caller read from has ended"
+          : "The document changed since it was read",
+        {
+          details: {
+            ...(expectedRevision === undefined ? {} : { expectedRevision }),
+            revision: this.#revision,
+            ...(expectedSessionId === undefined ? {} : { expectedSessionId }),
+            sessionId: this.sessionId,
+          },
+        },
       );
   }
 
@@ -484,4 +517,15 @@ function pagesTouched(entry: HistoryEntry, pageCount: number): number[] {
 
 function allPages(pageCount: number): number[] {
   return Array.from({ length: pageCount }, (_, index) => index);
+}
+
+/** 128 random bits as URL-safe base64; unique across sessions and reloads. */
+function newSessionId(): string {
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }

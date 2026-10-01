@@ -95,6 +95,7 @@ describe("viewer editing integration", () => {
     assert.deepEqual(started, {
       active: true,
       format: "pdf",
+      sessionId: first.sessionId,
       revision: 0,
       dirty: false,
       canUndo: false,

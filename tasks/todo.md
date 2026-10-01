@@ -749,14 +749,14 @@ and write the R2 parts of `docs/api/editing.md` and `reference.md`.
 
 **Acceptance criteria:**
 
-- [ ] Every R2 type in the spec exists and is exported; the compile-only test
+- [x] Every R2 type in the spec exists and is exported; the compile-only test
       narrows the union and calls `applyJson` on it.
-- [ ] Docs describe the interaction model, envelopes, `save`/`markSaved`,
+- [x] Docs describe the interaction model, envelopes, `save`/`markSaved`,
       assets, `$n` references, text ranges, `layoutchange` and the id rules.
 
 **Verification:**
 
-- [ ] `npm run typecheck --workspace web-doc`, `npm run pages:build`
+- [x] `npm run typecheck --workspace web-doc`, `npm run pages:build`
 
 **Dependencies:** Approved spec
 

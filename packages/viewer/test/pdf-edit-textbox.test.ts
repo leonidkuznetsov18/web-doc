@@ -136,6 +136,7 @@ describe("insertTextBox", () => {
       const change = model.apply([operation]);
       assert.deepEqual(change, {
         createdIds: ["p0:n1.0.0"],
+        removedIds: [],
         changedPages: [0],
         pageCount: 2,
         warnings: [],
@@ -343,6 +344,7 @@ describe("text box edits", () => {
       ]);
       assert.deepEqual(replaced, {
         createdIds: [],
+        removedIds: [],
         changedPages: [0],
         pageCount: 1,
         warnings: [],

@@ -2,6 +2,7 @@ import type { EditSessionCore } from "../engine.js";
 import type {
   ApplyOptions,
   EditFindOptions,
+  EditOperation,
   EditReceipt,
   EditState,
   ElementQuery,
@@ -46,6 +47,10 @@ export class PdfSession implements PdfEditSession {
     this.#core = core;
   }
 
+  get sessionId(): string {
+    return this.#core.sessionId;
+  }
+
   get state(): EditState {
     return this.#core.state;
   }
@@ -59,6 +64,13 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.#core.apply(operations, options);
+  }
+
+  applyJson(
+    operations: readonly EditOperation[],
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.#core.applyJson(operations, options);
   }
 
   undo(options?: HistoryOptions): Promise<EditReceipt> {

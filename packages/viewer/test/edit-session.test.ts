@@ -48,6 +48,7 @@ describe("EditSessionController", () => {
   it("starts clean and applies a batch end to end", async () => {
     const { session: edit, host, apply } = session();
     assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
       revision: 0,
       dirty: false,
       canUndo: false,
@@ -59,10 +60,12 @@ describe("EditSessionController", () => {
       { label: "shout" },
     );
     assert.deepEqual(receipt, {
+      sessionId: edit.sessionId,
       revision: 1,
       dryRun: false,
       operationCount: 1,
       createdIds: [],
+      removedIds: [],
       changedPages: [1],
       pageCount: 3,
       warnings: [],
@@ -70,6 +73,7 @@ describe("EditSessionController", () => {
     assert.equal(Object.isFrozen(receipt), true);
     assert.deepEqual(host.current, ["one", "TWO", "three"]);
     assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
       revision: 1,
       dirty: true,
       canUndo: true,
@@ -78,6 +82,7 @@ describe("EditSessionController", () => {
     });
     assert.deepEqual(host.eventTypes, ["editstatechange", "documentchange"]);
     assert.deepEqual(host.events[1]?.event, {
+      sessionId: edit.sessionId,
       revision: 1,
       reason: "apply",
       changedPages: [1],
@@ -93,7 +98,11 @@ describe("EditSessionController", () => {
         expectedRevision: 0,
       }),
       rejectsWith("edit-conflict", (error) =>
-        assert.deepEqual(error.details, { expectedRevision: 0, revision: 1 }),
+        assert.deepEqual(error.details, {
+          expectedRevision: 0,
+          revision: 1,
+          sessionId: edit.sessionId,
+        }),
       ),
     );
     await assert.rejects(
@@ -282,10 +291,12 @@ describe("EditSessionController", () => {
       dryRun: true,
     });
     assert.deepEqual(receipt, {
+      sessionId: edit.sessionId,
       revision: 0,
       dryRun: true,
       operationCount: 1,
       createdIds: ["page:new"],
+      removedIds: [],
       changedPages: [0, 1, 2, 3],
       pageCount: 4,
       warnings: [],
@@ -305,10 +316,12 @@ describe("EditSessionController", () => {
     const { session: edit, host, apply } = session();
     const noop = await edit.undo();
     assert.deepEqual(noop, {
+      sessionId: edit.sessionId,
       revision: 0,
       dryRun: false,
       operationCount: 0,
       createdIds: [],
+      removedIds: [],
       changedPages: [],
       pageCount: 3,
       warnings: [],
@@ -330,6 +343,7 @@ describe("EditSessionController", () => {
     // The page count changed, so every page of the result is reported.
     assert.deepEqual(undone.changedPages, [0, 1, 2]);
     assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
       revision: 3,
       dirty: true,
       canUndo: true,
@@ -352,6 +366,7 @@ describe("EditSessionController", () => {
     assert.equal(reset.operationCount, 2);
     assert.deepEqual(reset.changedPages, [0, 1, 2]);
     assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
       revision: 7,
       dirty: false,
       canUndo: false,
@@ -465,5 +480,54 @@ describe("EditSessionController", () => {
     assert.equal(last.active, false);
     assert.equal(last.format, "pdf");
     await edit.end();
+  });
+});
+
+describe("session identity (revision 2)", () => {
+  it("gives every session a unique id and stamps it on state, receipts and events", async () => {
+    const first = session();
+    const second = session();
+    assert.match(first.session.sessionId, /^[A-Za-z0-9_-]{22}$/);
+    assert.notEqual(first.session.sessionId, second.session.sessionId);
+    assert.equal(first.session.state.sessionId, first.session.sessionId);
+    const receipt = await first.apply([
+      { op: "setText", pageIndex: 0, text: "x" },
+    ]);
+    assert.equal(receipt.sessionId, first.session.sessionId);
+    assert.deepEqual(receipt.removedIds, []);
+    const change = first.host.events.find(
+      (entry) => entry.type === "documentchange",
+    )?.event as { sessionId: string };
+    assert.equal(change.sessionId, first.session.sessionId);
+  });
+
+  it("rejects calls that name another session, before the revision check", async () => {
+    const { session: edit, engine, apply } = session();
+    const other = session().session.sessionId;
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }], {
+        expectedSessionId: other,
+        expectedRevision: 0,
+      }),
+      rejectsWith("edit-conflict", (error) =>
+        assert.deepEqual(error.details, {
+          expectedRevision: 0,
+          revision: 0,
+          expectedSessionId: other,
+          sessionId: edit.sessionId,
+        }),
+      ),
+    );
+    assert.deepEqual(engine.calls, []);
+    // Plain JSON, as an AI client would hold it.
+    const json = JSON.parse('{"op":"setText","pageIndex":0,"text":"x"}');
+    const ok = await edit.applyJson([json as EditOperation], {
+      expectedSessionId: edit.sessionId,
+    });
+    assert.equal(ok.revision, 1);
+    await assert.rejects(
+      edit.undo({ expectedSessionId: other }),
+      rejectsWith("edit-conflict"),
+    );
   });
 });

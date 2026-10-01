@@ -199,6 +199,7 @@ export class PdfEditDocument {
     this.#batches = batch;
     return {
       createdIds,
+      removedIds: [],
       changedPages: [...changedPages].sort((a, b) => a - b),
       pageCount: this.pageCount,
       warnings,

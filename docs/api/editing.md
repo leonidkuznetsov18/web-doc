@@ -12,6 +12,13 @@ Editing is available for the formats a built-in engine supports; the
 document qualifies. Format-specific operations are documented in their own
 sections of this page as they ship.
 
+The supported interaction model is **overlay editing with commit on blur or
+idle**: the host draws its own input surface over the viewer, lets the user
+type there, and commits the result as one batch when the field loses focus or
+after an idle delay. One batch is one undo step and one reopen of the file, so
+`apply()` is a commit path, not a keystroke path; Word-like continuous typing
+with live reflow is out of scope for this package.
+
 ## Starting a session
 
 ```ts
@@ -57,6 +64,13 @@ interface EditState {
 emits `editstatechange` with the same fields plus `active` and `format`, both
 when the session starts (`active: true`) and when it ends (`active: false`).
 
+Every session has a `sessionId` — 22 URL-safe characters, unique across
+sessions and reloads — that is stamped on `state`, receipts and
+`documentchange`. A caller that outlives a session (an agent working through a
+host, for example) passes it back as `expectedSessionId` next to
+`expectedRevision`; a mismatch rejects with `edit-conflict` before anything is
+read or applied.
+
 ## Operations
 
 Every change is a batch of plain JSON operations:
@@ -71,7 +85,9 @@ const receipt = await session.apply(
 Format sessions also expose one typed method per operation; each method is
 `apply()` with a single operation and the same options. Use the methods from
 TypeScript and the JSON form from anything that speaks JSON — an AI tool call,
-a message from another worker, a recorded script.
+a message from another worker, a recorded script. `applyJson()` is `apply()`
+typed for plain `EditOperation` values, so a format-agnostic caller can use it
+on the session union without narrowing by `format` first.
 
 Operation values are limited to JSON types (strings, finite numbers, booleans,
 `null`, arrays and plain objects). Binary payloads such as images are declared
@@ -116,15 +132,21 @@ over several calls.
 
 ```ts
 interface EditReceipt {
+  readonly sessionId: string;
   readonly revision: number; // after the call; unchanged for a dry run or a no-op
   readonly dryRun: boolean;
   readonly operationCount: number;
   readonly createdIds: readonly string[]; // elements the batch created, in operation order
-  readonly changedPages: readonly number[]; // page indexes in the resulting document
+  readonly removedIds: readonly string[]; // ids that no longer exist, including those of a deleted page
+  readonly remappedIds?: Readonly<Record<string, string>>; // old id → new id, formats that rename only
+  readonly changedPages: readonly number[]; // may over-approximate; a superset of the changed pages
   readonly pageCount: number;
   readonly warnings: readonly ViewerWarning[];
 }
 ```
+
+An id is never reused: once an element is deleted or undone away, no later
+element gets its id in the same session.
 
 ## History and saving
 
@@ -171,7 +193,36 @@ the document the engine sees, so it can differ slightly from the viewer's
 Page space uses the units of `DocumentInfo.pageSizes` at zoom 1 — points for
 PDF, CSS pixels for Office formats — with the origin at the top-left corner of
 the page as displayed, `y` growing downwards and page rotation already applied.
-Font sizes are always points; colours are `#RRGGBB` strings.
+Font sizes are always points. Colours are `EditColor` values: a string
+(`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
+for Office formats, a theme slot `{ theme, mods? }` that keeps the theme link.
+PDF accepts the string form only.
+
+An element that spans pages (a Office paragraph or a repeated header) lists
+every piece in `fragments`; `pageIndex` and `bounds` describe the first one,
+and queries match any fragment. `story` says where a flow element lives
+(`body`, `header`, `footer`, `footnote`, `endnote`, `comment`, `notes`,
+`layout`, `master`); `frame` carries the untransformed box with rotation and
+flips for formats that keep one, while `bounds` stays the axis-aligned box.
+
+### Text positions and ranges
+
+```ts
+interface TextPosition {
+  readonly elementId: string;
+  readonly offset: number; // UTF-16 code units of EditElement.text
+}
+interface TextRange {
+  readonly start: TextPosition; // half-open; may span elements in reading order
+  readonly end: TextPosition;
+}
+```
+
+Offsets count UTF-16 code units of `EditElement.text`, the visible text of the
+element. A tab, a line or page break, an inline image and a field each count as
+exactly one placeholder character (U+0009, U+000A, U+FFFC, U+FFFC). Every
+format follows this convention, so a `TextRange` from `findText()` (its
+`ranges` field) can be handed to any operation that takes one.
 
 Two viewer methods translate between page space and the host's own DOM:
 
@@ -218,10 +269,11 @@ issues, so a client handles one error shape per batch. `aborted`,
 
 ## Limits
 
-| Limit               | Default | Meaning                                                              |
-| ------------------- | ------- | -------------------------------------------------------------------- |
-| `maxEditOperations` | 500     | Operations in one `apply()` call                                     |
-| `maxEditHistory`    | 200     | Undoable batches kept; older ones are folded into the starting point |
+| Limit                    | Default | Meaning                                                                |
+| ------------------------ | ------- | ---------------------------------------------------------------------- |
+| `maxEditOperations`      | 500     | Operations in one `apply()` call                                       |
+| `maxEditHistory`         | 200     | Undoable batches kept; older ones are folded into the starting point   |
+| `maxEditCheckpointBytes` | 64 MiB  | Memory for retained history checkpoints; fewer are kept for a big file |
 
 Binary payloads count against `maxInputBytes`; the engine work of one call
 counts against `maxOperationMs`.

@@ -187,6 +187,7 @@ export class FakeEditEngine implements EditEngine {
     }
     return {
       createdIds,
+      removedIds: [],
       changedPages: [...changed].sort((a, b) => a - b),
       pageCount: this.pages.length,
       warnings:
