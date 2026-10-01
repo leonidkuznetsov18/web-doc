@@ -385,3 +385,55 @@ Resolved on 2026-10-01 together with the approval of this spec:
 3. **Signed PDFs.** Editing is allowed; the first change emits a
    `fidelity-degraded` warning, and the incremental save keeps the signed
    revision intact.
+
+## Actual result
+
+- PDFium 2.15.1 runs in `dist/workers/pdf-edit-worker.js` with
+  `dist/assets/pdfium/pdfium.wasm`; Node tests drive the same handler through a
+  loopback worker. All 15 operations in the table above ship with a typed
+  method on `PdfEditSession`, a JSON Schema in `pdfOperationSchemas`
+  (version 1), unit tests and a browser round trip; a client that knows only
+  the schemas performs all of them through `apply()`.
+- Inspection returns the six element kinds with bounds in page space, verified
+  against `FPDF_PageToDevice` on rotated and cropped pages. Ids are stable
+  across undo, redo and page moves. Text boxes store their inputs in the
+  `WebDoc` mark of every line object; tables store theirs once, on the grid and
+  header-fill paths, and their cell text objects carry only the id, so a
+  100×20 table does not repeat its contents. Invalid marks, and table members
+  whose head mark is missing, are listed as plain objects.
+- Fonts: the standard fonts for WinAnsi text, host-registered TrueType and
+  OpenType fonts by family and `cmap` coverage, then the bundled Noto Sans
+  Latin/Cyrillic TTF, fetched only when first needed. `replaceText` keeps an
+  existing font when its `cmap` covers the new text and otherwise redraws at
+  the same baseline in a covering font with a `font-substitution` warning.
+  `FPDFFont_GetFamilyName` reports PDFium's substitute for non-embedded fonts,
+  so the declared base font name is used instead.
+- Images: JPEG inline through `FPDFImageObj_LoadJpegFileInline`; PNG decoded
+  by the host (`createImageBitmap` and `OffscreenCanvas` in the worker, a small
+  codec in Node tests) and stored as a BGRA bitmap, which PDFium writes with a
+  soft mask. Headers are parsed before decoding so `maxInputBytes` and
+  `maxDecodedPixels` reject oversized data early.
+- Saving is incremental and deterministic; the signed-PDF warning comes from
+  `FPDF_GetSignatureCount` on the first batch, and the signed revision's bytes
+  are kept intact.
+- Tests: 67 PDF unit tests (bridge, inspection, text boxes, transforms, pages,
+  fonts, existing text, shapes, images, tables, hardening) in a viewer suite
+  of 208; `tests/e2e/edit-pdf.spec.ts` holds 11 browser tests and the full
+  matrix passes 100/100 on Chromium, Chromium at DPR 2, Firefox and WebKit.
+  One `insertTextBox` on a ten-page file, including the PDF.js reopen, takes
+  about 0.2 s in headless Chromium against the 3 s ceiling. The size gate
+  reports 16.1 MiB Brotli with every optional font, under the 20 MiB target;
+  the license gate and `npm run check` pass.
+- Found along the way: `FPDF_MovePages` takes the destination as the resulting
+  index; PDFium grows a stroked path's bounds by the full stroke width per
+  side (half a point for a hairline); PDFium joins text objects that share a
+  baseline into one extracted line; PDF.js cannot serve a reopened document
+  from the worker that still shows the old one; the edit-core browser fixture
+  had been missing `createSession` since the PDF session landed and was fixed
+  during this close-out.
+- Added beyond the spec: `Fields<T>` distributes over the operation union so
+  `insertShape` keeps its per-shape fields; `signatureCount` on the engine
+  model; `last-page`, `invalid-data` and `range` issue codes; `elementsAt`
+  lists the top-most element first.
+- Deferred, as listed under out of scope: annotations, paragraph reflow, bold
+  or italic on existing text, font subsetting, right-to-left text.

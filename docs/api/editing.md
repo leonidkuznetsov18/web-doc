@@ -226,6 +226,223 @@ issues, so a client handles one error shape per batch. `aborted`,
 Binary payloads count against `maxInputBytes`; the engine work of one call
 counts against `maxOperationMs`.
 
+## PDF
+
+PDF documents are edited with [PDFium](https://pdfium.googlesource.com/pdfium/)
+compiled to WebAssembly, running in a dedicated module worker, while PDF.js
+keeps rendering. The worker (`workers/pdf-edit-worker.js`), the WebAssembly
+module (`assets/pdfium/pdfium.wasm`) and the fallback font
+(`fonts/noto-sans-latin-cyrillic.ttf`) are resolved against `assetBaseUrl` and
+fetched on the first `edit()` of a PDF, never before. Hosts that serve them
+elsewhere pass `edit: { workerUrl, wasmUrl, fallbackFontUrl }` to the PDF
+adapter.
+
+`session.format` is `"pdf"` and the session is a `PdfEditSession`: `apply()`
+takes `PdfOperation` values, the inspection methods return `PdfElement`
+values, and each operation has a typed method with the same name.
+
+### Methods
+
+Every method takes the operation's fields and the usual `ApplyOptions`
+(`expectedRevision`, `dryRun`, `label`, `signal`) and resolves with an
+`EditReceipt`.
+
+| Method          | Fields                                                                                                                  | Notes                                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `insertTextBox` | `pageIndex`, `rect`, `text` (1–20 000 chars), `style?: PdfTextBoxStyle`                                                 | Wraps the text inside `rect`; the new element's id is `createdIds[0]`.                              |
+| `replaceText`   | `target` (a `text` or `textBox`), `text`                                                                                | A text box is laid out again; a text object keeps its font, size, colour and baseline.              |
+| `setTextStyle`  | `target` (a `text` or `textBox`), `style: PdfTextBoxStyle`                                                              | Fields left out keep their value. Existing text objects accept `color` and `fontSize` only.         |
+| `insertImage`   | `pageIndex`, `rect`, `data: BinaryData`, `mimeType: "image/png" \| "image/jpeg"`                                        | JPEG bytes are embedded as they are; PNG is decoded and stored losslessly with its alpha channel.   |
+| `insertShape`   | `pageIndex`, `shape: "rectangle" \| "ellipse"` with `rect`, or `shape: "line"` with `from` and `to`; `stroke?`, `fill?` | A rectangle or ellipse needs a stroke, a fill or both; a line needs a stroke.                       |
+| `setShapeStyle` | `target` (a `shape`), `stroke?: PdfStroke \| null`, `fill?: PdfFill \| null`                                            | `null` removes; absent keeps. A shape keeps at least one of the two.                                |
+| `insertTable`   | `pageIndex`, `at`, `width`, `rows: string[][]`, `columnWidths?: number[]`, `style?: PdfTableStyle`                      | 1–100 rows, 1–20 columns, every row the same length; `columnWidths` are relative weights.           |
+| `setTableCell`  | `target` (a `table`), `row`, `column`, `text` (up to 2 000 chars, empty clears)                                         | The table is laid out again from its stored inputs.                                                 |
+| `moveElement`   | `target`, exactly one of `to: PagePoint` (new top-left of the bounds) or `by: { dx, dy }`                               | Any element.                                                                                        |
+| `resizeElement` | `target`, `rect`                                                                                                        | Text boxes reflow inside `rect`; images, shapes and text objects stretch; tables cannot be resized. |
+| `deleteElement` | `target`                                                                                                                | Removes the element and, for text boxes and tables, every object in it.                             |
+| `insertPage`    | `index` (0 to the page count), `size?: { width, height }` (3–14 400 pt)                                                 | A blank page; the size defaults to the page before, else after, the position.                       |
+| `deletePage`    | `pageIndex`                                                                                                             | The last page cannot be deleted (issue code `last-page`). Annotations on the page go with it.       |
+| `movePage`      | `from`, `to` (the page's index after the move)                                                                          |                                                                                                     |
+| `rotatePage`    | `pageIndex`, `rotation: 0 \| 90 \| 180 \| 270`                                                                          | Absolute clockwise rotation; page space turns with it.                                              |
+
+```ts
+interface PdfTextBoxStyle {
+  fontFamily?: string; // "Helvetica" (default), "Times", "Courier" or a registered family
+  fontSize?: number; // 1–500 pt, default 12
+  bold?: boolean;
+  italic?: boolean;
+  color?: string; // "#RRGGBB", default "#000000"
+  align?: "left" | "center" | "right"; // default "left"
+  lineHeight?: number; // multiple of the font size, 0.5–5, default 1.2
+}
+
+interface PdfStroke {
+  color: string;
+  width: number;
+} // 0–100 pt; 0 is a hairline
+interface PdfFill {
+  color: string;
+}
+
+interface PdfTableStyle {
+  fontFamily?: string; // as above, default "Helvetica"
+  fontSize?: number; // default 10
+  color?: string; // text colour
+  borderColor?: string; // default "#000000"
+  borderWidth?: number; // 0–20 pt, default 0.75
+  cellPadding?: number; // 0–100 pt, default 4
+  headerFill?: string; // fill of the first row; none by default
+}
+```
+
+### Elements
+
+```ts
+type PdfElementKind =
+  "text" | "image" | "shape" | "textBox" | "table" | "other";
+
+interface PdfElement extends EditElement {
+  kind: PdfElementKind;
+  textStyle?: PdfTextStyle; // text, textBox
+  shapeStyle?: PdfShapeStyle; // shape, table (the grid's stroke and header fill)
+  table?: { rows: string[][] }; // table
+}
+
+interface PdfTextStyle {
+  fontFamily: string; // the family the file declares, e.g. "Helvetica" or "Arial"
+  fontSize: number; // points
+  bold: boolean;
+  italic: boolean;
+  color: string;
+}
+```
+
+| Kind      | What it is                                                              | Accepts                                                                        |
+| --------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `text`    | One text object as stored in the file — often a word, a line or a run   | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement` |
+| `image`   | An image object                                                         | `moveElement`, `resizeElement`, `deleteElement`                                |
+| `shape`   | A path object                                                           | `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement`               |
+| `textBox` | A box created by `insertTextBox`; its lines are listed as one element   | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement` |
+| `table`   | A table created by `insertTable`; `text` joins cells by tab and newline | `setTableCell`, `moveElement`, `deleteElement`                                 |
+| `other`   | Shadings, form XObjects and anything else                               | `moveElement`, `resizeElement`, `deleteElement`                                |
+
+Ids look like `p0:o3` for objects of the original file and `p0:n2.0.0` for
+elements an operation created. They are stable for the whole session —
+across undo, redo and page moves — and the same history always yields the
+same ids. Text boxes and tables are parametric: their objects carry a
+`WebDoc` marked-content tag holding the inputs they were drawn from, so they
+are listed as one element again after `save()` and a later `edit()` of the
+saved file, in this or another session. A tag that fails validation leaves its
+objects as plain `text` and `shape` elements.
+
+`elementsAt()` lists the elements under a point top-most first. Bounds of
+stroked shapes include the stroke, as PDFium reports them.
+
+### Page space
+
+Page space is the page as the viewer displays it at zoom 1: points, origin at
+the top-left corner of the crop box, `y` growing downwards, `/Rotate` already
+applied. Inserted content is upright on the displayed page whatever its
+rotation, and `rotatePage` turns page space with the page. The engine converts
+to and from PDF user space for every page, so the same rectangle means the same
+thing to `renderPage()`, `pageToClient()` and the session.
+
+### Text and fonts
+
+`insertTextBox` splits paragraphs on `\n`, wraps words greedily to
+`rect.width` (a word wider than the box is broken), applies `align` and
+`lineHeight`, and writes one text object per line. Text that does not fit
+`rect.height` is still drawn and reported as a `fidelity-degraded` warning with
+`details.elementId`.
+
+Fonts are chosen in this order:
+
+1. The standard PDF fonts — Helvetica, Times and Courier with their bold and
+   italic faces — when every character is WinAnsi-encodable. Nothing is
+   embedded.
+2. A TrueType or OpenType font registered through `ViewerClientOptions.fonts`
+   whose family matches `fontFamily` (case-insensitively) and whose `cmap`
+   covers the text. The font file is embedded whole; subsetting is not done.
+3. The bundled Noto Sans Latin/Cyrillic fallback, fetched the first time it is
+   needed. Using it, or a registered family without the requested bold or
+   italic face, adds a `font-substitution` warning.
+
+An unknown `fontFamily` is an issue coded `unknown-font`; text no available
+font covers is `font-unavailable`; right-to-left and complex-script text is
+`unsupported-script`. Text is horizontal and left-to-right.
+
+`replaceText` on an existing text object keeps its font when that font can
+draw the new text — a standard font for WinAnsi text, or an embedded font whose
+`cmap` covers it — and otherwise redraws the text at the same baseline, size
+and colour in a covering font with a `font-substitution` warning. The reported
+`fontFamily` of existing text is the family the file declares, not the face
+PDFium substitutes for a font that is not embedded.
+
+### Images, shapes and tables
+
+- `insertImage` accepts JPEG (embedded unchanged, so the file keeps the
+  original stream) and PNG (decoded in the worker, stored as a lossless bitmap
+  with the alpha channel as a soft mask). The data counts against
+  `maxInputBytes` and the decoded size against `maxDecodedPixels`
+  (`resource-limit`); unreadable data is an `invalid-data` issue.
+- Rectangles and lines are single paths; ellipses are four Bézier curves.
+- `insertTable` draws the grid as one stroked path, an optional header fill and
+  one text object per wrapped cell line. Column widths are `width` split by
+  `columnWidths` (equal when omitted); each row is as tall as its tallest cell
+  at a line height of 1.2. A table that runs past the bottom of the page is
+  drawn anyway with a `fidelity-degraded` warning. `setTableCell` and
+  `moveElement` redraw it from its stored rows; `resizeElement` is refused
+  (`unsupported-target`).
+
+### What stays unchanged
+
+Annotations — links, highlights, comments, form fields — are separate from
+page content and are not edited: a link stays where it was when the text under
+it moves, and deleting a page removes its annotations. Existing text is edited
+one object at a time; paragraphs are not reflowed. Encrypted PDFs cannot be
+opened by the viewer and so cannot be edited.
+
+### Saving and signatures
+
+`save()` returns the original bytes followed by an incremental update, so the
+output always starts with the original file and earlier revisions stay intact.
+Only pages an operation touched have their content rewritten. The same history
+produces byte-identical output, in this session or another one, and undoing to
+revision 0 — or saving without changes — returns the original bytes.
+
+A digitally signed PDF can be edited. The first change reports a
+`fidelity-degraded` warning with `details.signatures` because the signatures
+cover the original revision only; they remain valid for that revision, and a
+reader that checks them will show the document as modified since signing.
+Editing never signs.
+
+### `findText()` and `search()`
+
+`findText()` searches the text PDFium extracts from the edited document and
+returns page rectangles plus the ids of the text objects holding the match, so
+its results can be passed straight to `replaceText` or `deleteElement`. The
+viewer's `search()` reads the PDF.js text layer, which can join or split runs
+differently; use `findText()` to target edits and `search()` to highlight for
+the user.
+
+### PDF issue codes
+
+Beyond the shape codes (`required`, `type`, `pattern`, `minimum`, `maximum`,
+`min-items`, `max-items`, `additional-property`, `one-of`), engine validation
+reports `unknown-target`, `unsupported-target`, `unsupported-style`,
+`unknown-font`, `font-unavailable`, `unsupported-script`, `range` (geometry
+outside the page, a bad row or column, ragged rows, too few or too many rows),
+`invalid-data`, `required` (a shape without stroke and fill, a line without
+`from`/`to`), `last-page` and `unknown-operation`.
+
+### Performance
+
+Each `apply()` saves the working copy and reopens it in PDF.js. One operation
+on a ten-page document resolves well inside a second on a developer machine;
+the browser suite fails above three seconds. Batch operations that belong
+together, and keep `getElements()` queries to the pages you need — the engine
+loads a page only when an operation or a query touches it.
+
 ## Guidance for AI clients
 
 - Read before writing: list elements or `findText()` to obtain ids and

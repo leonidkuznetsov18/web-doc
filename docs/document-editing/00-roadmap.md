@@ -1,6 +1,7 @@
 # Roadmap: document editing API
 
-> **Status, 2026-10-01:** the capability map below is approved, and so are the
+> **Status, 2026-10-01 (evening):** `edit-core` and `pdf-edit` are done and
+> documented. The capability map below is approved, and so are the
 > specs for `edit-core` and `pdf-edit`. Module specs are written one at a time,
 > right before a module starts, so each one can use what the previous modules
 > taught us.
@@ -317,16 +318,19 @@ browser round-trip test, and every error code has a test that triggers it.
 
 ## Decisions log
 
-| Date       | Decision                                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------------------- |
-| 2026-10-01 | API only, shared by the host UI and AI; formats PDF, PPTX, DOCX; Markdown and plain text dropped entirely. |
-| 2026-10-01 | PDF changes are written by PDFium WASM (`@embedpdf/pdfium` 2.15.1); PDF.js keeps rendering.                |
-| 2026-10-01 | Order: PDF, then PPTX, then DOCX; specs are written module by module.                                      |
-| 2026-10-01 | Specs are written in English.                                                                              |
-| 2026-10-01 | `edit-core` and `pdf-edit` specs approved together with their recommended answers to open questions.       |
-| 2026-10-01 | A TrueType build of the bundled Noto Sans Latin/Cyrillic face ships as a lazy PDF fallback font.           |
-| 2026-10-01 | Signed PDFs may be edited, with a warning.                                                                 |
-| 2026-10-01 | The competitor research report stays outside this public repository.                                       |
+| Date       | Decision                                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| 2026-10-01 | API only, shared by the host UI and AI; formats PDF, PPTX, DOCX; Markdown and plain text dropped entirely.  |
+| 2026-10-01 | PDF changes are written by PDFium WASM (`@embedpdf/pdfium` 2.15.1); PDF.js keeps rendering.                 |
+| 2026-10-01 | Order: PDF, then PPTX, then DOCX; specs are written module by module.                                       |
+| 2026-10-01 | Specs are written in English.                                                                               |
+| 2026-10-01 | `edit-core` and `pdf-edit` specs approved together with their recommended answers to open questions.        |
+| 2026-10-01 | A TrueType build of the bundled Noto Sans Latin/Cyrillic face ships as a lazy PDF fallback font.            |
+| 2026-10-01 | Signed PDFs may be edited, with a warning.                                                                  |
+| 2026-10-01 | The competitor research report stays outside this public repository.                                        |
+| 2026-10-01 | PNG images are decoded by the host (`createImageBitmap` in the worker) rather than inside PDFium's WASM.    |
+| 2026-10-01 | A table's inputs live in the mark of its path objects only; its text objects carry just the table's id.     |
+| 2026-10-01 | `edit-core` and `pdf-edit` are done: matrix 100/100, `npm run check` green, results recorded in both specs. |
 
 ## Open questions
 

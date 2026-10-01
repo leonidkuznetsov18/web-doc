@@ -439,7 +439,7 @@ is reopened, and the first browser round trip.
 
 ### Checkpoint B: first PDF slice (demo)
 
-- [ ] Unit and `edit-pdf.spec.ts` (Chromium) pass; existing suites pass
+- [x] Unit and `edit-pdf.spec.ts` (Chromium) pass; existing suites pass
 - [ ] Demo for the human: open a PDF, insert and restyle a text box, undo/redo,
       save, reopen
 - [ ] Decide with the human whether the remaining operations keep this order
@@ -708,14 +708,14 @@ in both specs.
 
 **Acceptance criteria:**
 
-- [ ] The PDF docs cover every method and field, element kinds, page space,
+- [x] The PDF docs cover every method and field, element kinds, page space,
       fonts and their limits, annotations and links, signatures, and
       `findText` versus `search()`.
-- [ ] `npm run test:e2e:matrix` and `npm run check` pass.
+- [x] `npm run test:e2e:matrix` and `npm run check` pass.
 
 **Verification:**
 
-- [ ] `npm run pages:build`, `npm run test:e2e:matrix`, `npm run check`
+- [x] `npm run pages:build`, `npm run test:e2e:matrix`, `npm run check`
 
 **Dependencies:** Task 21
 
@@ -731,5 +731,5 @@ in both specs.
 
 ### Checkpoint E: both modules done
 
-- [ ] Every item of both definitions of done is checked
-- [ ] Roadmap statuses updated; ready for merge review with the human
+- [x] Every item of both definitions of done is checked
+- [x] Roadmap statuses updated; ready for merge review with the human
