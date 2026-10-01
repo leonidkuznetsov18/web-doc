@@ -1,7 +1,7 @@
 # Module 01. `edit-core` — editing contract and viewer integration
 
-**Status:** ✅ Revision 1 done 2026-10-01 · 🔄 Revision 2 (ACTION-821) drafted
-2026-10-01, awaiting approval; no code changes until it is approved.
+**Status:** ✅ Revision 1 done 2026-10-01 · 🔄 Revision 2 (ACTION-821) approved
+2026-10-01, implementation in progress (Phase 5, T23–T30).
 
 Revision 2 follows the architecture review of 2026-10-01 (report kept outside
 the repository). It changes the public contract while nothing has been
@@ -939,7 +939,7 @@ Revision 1, 2026-10-01:
   engine fails to start, and an optional `getElement` on the engine
   interface so engines can answer id lookups without a scan.
 
-Revision 2: pending. The review verified against revision 1 that folded
+Revision 2: approved 2026-10-01, in progress. The review verified against revision 1 that folded
 history entries are replayed forever, that an abort or a throwing listener
 after the reopen left the viewer ahead of the engine, that ids repeated after
 an undo, that a throwing listener rejected a committed call, that `end()`

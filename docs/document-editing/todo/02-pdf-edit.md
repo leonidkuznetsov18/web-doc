@@ -1,8 +1,7 @@
 # Module 02. `pdf-edit` — PDF editing on PDFium
 
 **Status:** ✅ Revision 1 done 2026-10-01 (T9–T22) · 🔄 Revision 2 (ACTION-821)
-drafted 2026-10-01, awaiting approval. **R2** marks the changes; they land only
-after `edit-core` revision 2 is approved.
+approved 2026-10-01, implementation in progress. **R2** marks the changes.
 
 ## Goal
 
