@@ -1,8 +1,8 @@
 # Roadmap: document editing API
 
-> **Status, 2026-10-01 (evening):** `edit-core` and `pdf-edit` revision 1 are
-> done and documented; revision 2 of the contract (Linear ACTION-821, from the
-> architecture review) is approved and being implemented (Phase 5).
+> **Status, 2026-10-01 (night):** `edit-core` and `pdf-edit` are done in
+> revision 2 (Linear ACTION-821, from the architecture review); the PDF overlay
+> primitives (ACTION-825) and the OOXML modules follow.
 > The capability map below is approved, and so are the
 > specs for `edit-core` and `pdf-edit`. Module specs are written one at a time,
 > right before a module starts, so each one can use what the previous modules
@@ -358,6 +358,7 @@ Stated so that hosts plan around them rather than discover them:
 | 2026-10-01 | Reads return `{ sessionId, revision, items }` envelopes now; paging stays additive for later.                             |
 | 2026-10-01 | PDF overlay text-input primitives are a separate ticket after ACTION-821.                                                 |
 | 2026-10-01 | `edit-core` and `pdf-edit` revision 2 approved; Phase 5 (T23–T30) starts under ACTION-821.                                |
+| 2026-10-01 | Revision 2 done (T23–T30): checkpoints promise the same content, not the same bytes; PDF full saves are compacted.        |
 
 ## Open questions
 

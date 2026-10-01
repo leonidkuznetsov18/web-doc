@@ -917,12 +917,12 @@ ACTION-821 proofs attached.
 
 **Acceptance criteria:**
 
-- [ ] Matrix and `npm run check` pass; both specs' R2 definitions of done are
+- [x] Matrix and `npm run check` pass; both specs' R2 definitions of done are
       ticked.
 
 **Verification:**
 
-- [ ] `npm run pages:build`, `npm run test:e2e:matrix`, `npm run check`
+- [x] `npm run pages:build`, `npm run test:e2e:matrix`, `npm run check`
 
 **Dependencies:** Tasks 25, 27, 29
 
@@ -932,8 +932,8 @@ ACTION-821 proofs attached.
 
 ### Checkpoint F: revision 2 done
 
-- [ ] Every R2 item of both definitions of done is checked
-- [ ] Linear: ACTION-821 Done with proofs; PR opened and ACTION-808/811 moved
+- [x] Every R2 item of both definitions of done is checked
+- [x] Linear: ACTION-821 Done with proofs; PR opened and ACTION-808/811 moved
       to Code Review with the human
 
 ## Phase 6 — PDF overlay primitives (Linear ACTION-825)

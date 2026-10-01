@@ -1,7 +1,7 @@
 # Module 02. `pdf-edit` — PDF editing on PDFium
 
-**Status:** ✅ Revision 1 done 2026-10-01 (T9–T22) · 🔄 Revision 2 (ACTION-821)
-approved 2026-10-01, implementation in progress. **R2** marks the changes.
+**Status:** ✅ Revision 1 done 2026-10-01 (T9–T22) · ✅ Revision 2 (ACTION-821)
+done 2026-10-01. **R2** marks the changes.
 
 ## Goal
 
@@ -526,6 +526,30 @@ Resolved on 2026-10-01 together with the approval of this spec:
 
 ### Revision 2 (ACTION-821)
 
+- Ids of created elements derive from the history state id
+  (`p0:n<stateId>.<op>.<k>`, page keys `q<stateId>.<op>`); `removedIds` lists
+  deleted elements and every element of a deleted page; `$<n>` references are
+  resolved while applying with the handler's own checks run on the resolved
+  operation.
+- `save({ mode })`: full is the default for unsigned files and goes through a
+  compaction pass, because PDFium's full save still writes objects a
+  regenerated page no longer references — the pass keeps the objects
+  reachable from the trailer and rewrites the xref, so deleted content is
+  gone and the bytes do not depend on which pages were read; incremental
+  stays the default for signed files. The viewer reopens the incremental form.
+- The first-change warning names signatures, a DocMDP certification, a
+  tagged structure (raw `/MarkInfo` or a structure tree on the first page)
+  and a PDF/A claim (`pdfaid:part` in the uncompressed XMP) in
+  `details.features`.
+- A marked text box or table whose objects no longer match its stored inputs
+  (text compared whitespace-normalized; bounds within the box's first line
+  band and width, or the table's frame) is listed as plain objects.
+- `findText` returns `ranges` with offsets into each element's text; lines of
+  a text box and cells of a table are located inside the element's text.
+- In-place `replaceText` requires every character to map through the
+  embedded font's `cmap` to a glyph with outline data; the fallback font is
+  also fetched for families only it can stand in for. PDFium embeds the
+  fallback TrueType once per document (`/FontFile`), proven by a test.
 - Latency of one `insertTextBox` through `apply()` — engine, incremental
   save, PDF.js reopen and the page-count update — on fixture PDFs with one
   text object per page, headless Chromium (Playwright) on an Apple M4 Pro,

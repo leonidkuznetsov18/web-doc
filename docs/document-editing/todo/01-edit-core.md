@@ -1,7 +1,7 @@
 # Module 01. `edit-core` — editing contract and viewer integration
 
-**Status:** ✅ Revision 1 done 2026-10-01 · 🔄 Revision 2 (ACTION-821) approved
-2026-10-01, implementation in progress (Phase 5, T23–T30).
+**Status:** ✅ Revision 1 done 2026-10-01 · ✅ Revision 2 (ACTION-821) done
+2026-10-01 (Phase 5, T23–T30).
 
 Revision 2 follows the architecture review of 2026-10-01 (report kept outside
 the repository). It changes the public contract while nothing has been
@@ -943,9 +943,29 @@ Revision 1, 2026-10-01:
   engine fails to start, and an optional `getElement` on the engine
   interface so engines can answer id lookups without a scan.
 
-Revision 2: approved 2026-10-01, in progress. The review verified against revision 1 that folded
-history entries are replayed forever, that an abort or a throwing listener
-after the reopen left the viewer ahead of the engine, that ids repeated after
-an undo, that a throwing listener rejected a committed call, that `end()`
-rejected queued calls with `lifecycle-error`, and that a broken session could
-not save; the revised behaviour above addresses each.
+Revision 2, 2026-10-01 (Linear ACTION-821, T23–T30):
+
+- The review had verified against revision 1 that folded history entries were
+  replayed forever, that an abort or a throwing listener after the reopen
+  left the viewer ahead of the engine, that ids repeated after an undo, that a
+  throwing listener rejected a committed call, that `end()` rejected queued
+  calls with `lifecycle-error`, and that a broken session could not save. Each
+  is fixed and covered by a unit test named after it.
+- Shipped as specified: `sessionId` and `expectedSessionId`; read envelopes
+  with signals; `applyJson`; pure `save()` → `SavedDocument` and
+  `markSaved()`; the asset store with interning and `addAsset()`; `$<n>`
+  same-batch references; `TextPosition`/`TextRange`, `fragments`, `story`,
+  `frame`, `EditColor`; `removedIds`/`remappedIds`; `layoutchange`; the
+  two-phase reopen with renderer-owned page counts and `changedPages` as a
+  superset; `stateId`-derived ids; checkpoints with `maxEditCheckpointBytes`
+  and `restore({ base, batches })`; per-page render keys; the synchronous
+  batch snapshot; listener isolation; `aborted` on `end()`.
+- Changed from the draft: checkpoints guarantee the same ids and content, not
+  the same bytes (see History, revisions and dirty state), so determinism is
+  stated per sequence of calls; the engine's `materialize` takes a purpose
+  (`show` or `save`) and the host's save options instead of a mode of its
+  own.
+- Tests: the viewer suite grew from 208 to 241 tests; `edit-core.spec.ts`
+  waits for `layoutchange` and checks that untouched pages keep their
+  bitmaps; the matrix (108/108 on Chromium, Chromium DPR 2, Firefox and
+  WebKit) and `npm run check` are green (T30).
