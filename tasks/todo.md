@@ -1356,3 +1356,173 @@ paragraph; `npm run check` and the matrix; Linear proofs; ACTION-810 Done.
 ### Checkpoint H: package layer done
 
 - [x] ACTION-810 Done with proofs; ACTION-812 and ACTION-813 unblocked
+
+## Phase 8 — PPTX editing (Linear ACTION-812)
+
+Spec: `docs/document-editing/todo/04-pptx-edit.md` (draft 2026-10-02).
+Commits carry `[linear:ACTION-812]`; each task posts a Linear comment with a
+proof image.
+
+### Task 44: Spike, engine skeleton, inspection
+
+**Description:** `PptxEditEngine` over `OoxmlPackage` with open, `restore`,
+`materialize`, schemas and an empty operation set; the slide index
+(`presentation.xml`, `p:sldIdLst`, slide, layout and master resolution);
+element listing with frames, placeholder inheritance and group transforms;
+`elementsAt`, `findText`, `getSlides`, `getLayouts`; the shared OOXML edit
+worker, the generalized worker client, the Office adapter's `edit` provider
+and `reopen`, the `pptm`/`ppsx` mapping. Spike: `PptxPresentation.load` time
+on synthetic 10-, 100- and 500-slide decks with and without
+`progressiveLayout`; engine bounds against the renderer's for the corpus.
+
+**Acceptance criteria:**
+
+- [ ] `viewer.edit()` on `sample.pptx` returns a `PptxEditSession` whose
+      `getElements` lists every slide-level element with bounds within one CSS
+      pixel of the renderer's `getElementBoundsByIds`, with the worker fetched
+      only on `edit()`.
+- [ ] `save()` without changes returns identical bytes; `restore` replays.
+- [ ] Spike results recorded in the spec.
+
+**Verification:**
+
+- [ ] `node --test .test-dist/test/pptx-edit-inspect.test.js`;
+      `npm run test:e2e -- tests/e2e/edit-pptx.spec.ts`
+
+**Dependencies:** Task 43
+
+**Files likely touched:** `src/edit/pptx/{engine,index,provider,session,schemas,types,geometry,slides}.ts`
+(new), `src/ooxml-edit-worker.ts` (new), `src/edit/worker-engine.ts` (new),
+`src/edit/pdf/provider.ts`, `src/adapters/office.ts`, `src/viewer.ts`,
+`src/edit/sessions.ts`, `src/worker-protocol.ts`, `scripts/build-viewer.mjs`,
+`test/fixtures/pptx-builder.ts` (new), `test/pptx-edit-inspect.test.ts` (new),
+`tests/e2e/edit-pptx.spec.ts` (new)
+
+**Estimated scope:** Large (split across two commits: engine + inspection, then worker + adapter)
+
+### Task 45: Text
+
+**Description:** `replaceText` (whole body and ranged), `setTextStyle` (runs,
+alignment, colours, fonts), the `\n`/`\v` text model, field handling, autofit
+scale dropping, `invalid-text` and `invalid-range`.
+
+**Acceptance criteria:**
+
+- [ ] Whole and ranged replacements keep untouched runs' bytes and the
+      first run's `a:rPr`; `\n` splits paragraphs and `\v` becomes `a:br`.
+- [ ] `setTextStyle` writes only the given properties; theme colours round
+      trip as `{ theme, mods }`.
+- [ ] Both operations render in the viewer and survive save and reload.
+
+**Verification:**
+
+- [ ] `node --test .test-dist/test/pptx-edit-text.test.js`; the e2e spec
+
+**Dependencies:** Task 44
+
+**Files likely touched:** `src/edit/pptx/{text,engine,schemas,types,session}.ts`,
+`test/pptx-edit-text.test.ts` (new), `tests/e2e/edit-pptx.spec.ts`
+
+**Estimated scope:** Medium
+
+### Task 46: Shapes
+
+**Description:** `setShapeStyle` (fill, line, `null` fallbacks, `p:spPr`
+child order, `mc:AlternateContent`), `moveElement` and `resizeElement`
+(explicit `a:xfrm`, placeholders, group chains), `deleteElement` (exclusive
+relationships, groups), `insertTextBox`.
+
+**Acceptance criteria:**
+
+- [ ] Every operation reads back through `getElements` with the expected
+      frame or style and renders in the viewer.
+- [ ] Deleting a picture removes its relationship and leaves the media part.
+
+**Verification:**
+
+- [ ] `node --test .test-dist/test/pptx-edit-shapes.test.js`; the e2e spec
+
+**Dependencies:** Task 45
+
+**Files likely touched:** `src/edit/pptx/{shapes,engine,schemas,types,session}.ts`,
+`test/pptx-edit-shapes.test.ts` (new), `tests/e2e/edit-pptx.spec.ts`
+
+**Estimated scope:** Medium
+
+### Task 47: Images and tables
+
+**Description:** `insertImage` (media, relationship, content type, `p:pic`),
+`insertTable` (`p:graphicFrame`, `a:tbl`, grid, style id when defined),
+`setTableCell`.
+
+**Acceptance criteria:**
+
+- [ ] An inserted PNG and JPEG render in the viewer; the same bytes twice
+      produce one media part.
+- [ ] A table renders with its cell text; `setTableCell` keeps `a:tcPr`.
+
+**Verification:**
+
+- [ ] `node --test .test-dist/test/pptx-edit-tables.test.js`; the e2e spec
+
+**Dependencies:** Task 46
+
+**Files likely touched:** `src/edit/pptx/{tables,images,engine,schemas,types,session}.ts`,
+`test/pptx-edit-tables.test.ts` (new), `tests/e2e/edit-pptx.spec.ts`
+
+**Estimated scope:** Medium
+
+### Task 48: Slides
+
+**Description:** `insertSlide` (layout placeholders instantiated, `.rels`,
+Override, presentation relationship, `p:sldId`), `duplicateSlide` (owned
+parts cloned, media shared), `deleteSlide` (notes slide removed, last slide
+refused), `moveSlide`.
+
+**Acceptance criteria:**
+
+- [ ] Every slide operation changes `pageCount` and `changedPages` as the
+      spec says, renders in the viewer and survives save and reload.
+- [ ] A duplicated slide with a chart renders both charts; no dangling
+      relationship warning is raised.
+
+**Verification:**
+
+- [ ] `node --test .test-dist/test/pptx-edit-slides.test.js`; the e2e spec
+
+**Dependencies:** Task 47
+
+**Files likely touched:** `src/edit/pptx/{slides,engine,schemas,types,session}.ts`,
+`test/pptx-edit-slides.test.ts` (new), `tests/e2e/edit-pptx.spec.ts`
+
+**Estimated scope:** Medium
+
+### Task 49: Browser round trip, latency, fixtures, docs, gate
+
+**Description:** The e2e spec covers every method with a render check and a
+save-reload check and compares the saved entries with the original; `apply()`
+latency on 10, 100 and 500 slides; `npm run fixtures:pptx` writes the edited
+fixture set for the manual PowerPoint and Keynote check; `docs/api/editing.md`
+PPTX section; roadmap, architecture, notices; `npm run check` and the matrix;
+Linear proofs; ACTION-812 Done except its release criterion.
+
+**Acceptance criteria:**
+
+- [ ] The definition of done of `04-pptx-edit.md` is met, except the manual
+      PowerPoint/Keynote check, which is handed to Leonid with the fixture
+      set.
+
+**Verification:**
+
+- [ ] `npm run test:e2e -- tests/e2e/edit-pptx.spec.ts`,
+      `npm run test:e2e:matrix`, `npm run check`
+
+**Dependencies:** Task 48
+
+**Files likely touched:** `tests/e2e/edit-pptx.spec.ts`, `scripts/pptx-fixtures.mjs` (new), docs
+
+**Estimated scope:** Medium
+
+### Checkpoint I: PPTX editing done
+
+- [ ] ACTION-812 Done with proofs (release criterion left to Leonid); ACTION-813 next

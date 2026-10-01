@@ -101,6 +101,7 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 | 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821)                                                          |
 | 6. PDF overlay primitives  | T32–T37 | Checkpoint G: layout, suppressed render, selection and range mapping, range-scoped `replaceText`, geometry cache, browser test (Linear ACTION-825) |
 | 7. OOXML package layer     | T38–T43 | Checkpoint H: ZIP reader and writer, OPC model, XML scanner, patches and transactions, corpus and browser reopen (Linear ACTION-810)               |
+| 8. PPTX editing            | T44–T49 | Checkpoint I: inspection, text, shapes, images and tables, slides, browser round trip and latency on 10/100/500 slides (Linear ACTION-812)         |
 
 ## Revision 2 decisions (ACTION-821)
 
@@ -182,6 +183,27 @@ listed here for explicit approval with the plan:
 | PDFium heap growth across sessions                                                            | Low    | One worker per session, terminated when the session ends                                                                            |
 | First browser run builds Rust/WASM and installs `wasm-bindgen-cli` (minutes)                  | Low    | One-time cost; the development loop uses Chromium only                                                                              |
 
+## Phase 8 decisions (ACTION-812)
+
+23. **The PPTX engine is spec-bound.** `04-pptx-edit.md` (draft 2026-10-02,
+    written under the instruction to execute the Linear plan without
+    stopping) fixes the operation table, the element model and thirteen
+    decisions; the tasks implement it and record Spike results and the
+    Actual result in it. Deviations go into the spec first.
+24. **Inspection from the XML, not the renderer.** Bounds, inheritance and
+    group transforms are computed by the engine in the worker; the
+    renderer's `getElementBoundsByIds` is a browser-test oracle only
+    (04-pptx-edit decision 1).
+25. **One OOXML edit worker.** `src/ooxml-edit-worker.ts` serves PPTX now and
+    DOCX in Phase 10; the PDF worker client's transport becomes a shared base
+    class so the three clients differ only in their format reads.
+26. **Ids `<slideKey>:<cNvPrId>` with next-free allocation**, so files look
+    as if PowerPoint wrote them and replays reproduce ids; the reuse caveat
+    after deleting a created slide is documented (04-pptx-edit decision 3).
+27. **Full reopen per `apply()` with a three-second ceiling**, measured on
+    synthetic 10-, 100- and 500-slide decks that the renderer opens; the
+    spike also tries `progressiveLayout` on reopen.
+
 ## Verification commands
 
 ```bash
@@ -190,6 +212,7 @@ npm run test --workspace web-doc                      # all viewer unit tests
 node --test packages/viewer/.test-dist/test/<file>.test.js   # one compiled test file, after a full run compiled it
 npm run test:e2e -- tests/e2e/edit-core.spec.ts       # Chromium, builds first
 npm run test:e2e -- tests/e2e/edit-pdf.spec.ts
+npm run test:e2e -- tests/e2e/edit-pptx.spec.ts
 npm run test:e2e:matrix                               # at checkpoints
 npm run licenses && npm run report:size && npm run test:pack
 npm run check                                         # at the final checkpoint
