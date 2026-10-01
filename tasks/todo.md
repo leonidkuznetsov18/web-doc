@@ -968,9 +968,218 @@ questions for Leonid.
 
 ## Phase 6 — PDF overlay primitives (Linear ACTION-825)
 
-Blocked by ACTION-821; blocks ACTION-815 (Operators PDF UI). The API is
-specified in `02-pdf-edit.md` under "Overlay primitives"; tasks are written
-when Phase 5 lands and carry `[linear:ACTION-825]`: `getTextLayout`,
-`positionAt` / `rangeRects`, `renderPageWithout`, `elementsForSelection`,
-range-scoped `replaceText`, `mapRange`, the main-thread geometry cache and
-`elementsAtSync`.
+Blocked by ACTION-821 (Done 2026-10-01); blocks ACTION-815 (Operators PDF
+UI). The API is fixed by `02-pdf-edit.md` → "Overlay primitives"; every
+commit carries `[linear:ACTION-825]`. Plumbing shared by the tasks: the
+engine client gains one worker request per primitive, the core session
+exposes a `read()` hook that queues a read behind earlier calls and stamps
+the envelope, and `PdfSession` wraps both. Types live in
+`src/edit/pdf/types.ts`.
+
+### Task 32: Text layout, positions and range rectangles
+
+**Description:** `getTextLayout(elementId)` → `ReadItem<TextLayout>`,
+`positionAt(pageIndex, point)` → `ReadItem<TextPosition>`,
+`rangeRects(range)` → `ReadResult<PageRect>`. A new engine module reads the
+text page once per call: characters are mapped to their object and element
+(the `findText` char-offset mapping), grouped into lines in reading order
+(one per text object; a text box's lines and a table's cells are separate
+objects), each line with its baseline (`FPDFText_GetCharOrigin`), glyph boxes
+(`FPDFText_GetCharBox`), advances (`FPDFText_GetLooseCharBox`), font family,
+size, colour and the `TextRange` it covers. `positionAt` uses
+`FPDFText_GetCharIndexAtPos` with a tolerance, then the nearest glyph box on
+the page. `rangeRects` unions the glyph boxes per line for the offsets inside
+the range, across the elements the range spans in reading order. All
+geometry goes through `PageGeometry`, so rotation and crop boxes are
+honoured.
+
+**Acceptance criteria:**
+
+- [ ] On pages rotated 0/90/180/270 and on a cropped page, every glyph box
+      lies inside its element's bounds and the line bounds equal the union of
+      its glyph boxes; a text box reports one line per drawn line and a table
+      one per cell, in reading order.
+- [ ] `positionAt` at the centre of a glyph box returns that glyph's offset;
+      `rangeRects` of a range contain the points that `positionAt` resolves
+      back into the range (round-trip on all four rotations).
+- [ ] Unknown element, non-text element, a point on an empty page and a
+      range across pages give `item: undefined` / `items: []`, not errors.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (new `test/pdf-edit-layout.test.ts`)
+
+**Dependencies:** Task 28
+
+**Files likely touched:** `src/edit/pdf/types.ts`, `src/edit/pdf/engine/layout.ts`
+(new), `document.ts`, `pdfium.ts`, `handler.ts`, `provider.ts`, `session.ts`,
+`src/edit/session.ts`, `src/edit/engine.ts`, `src/worker-protocol.ts`
+
+**Estimated scope:** Medium
+
+### Task 33: Suppressed render
+
+**Description:** `renderPageWithout(pageIndex, elementIds, options)` →
+`ReadItem<PageBitmap>`: the worker marks the elements' objects inactive
+(`FPDFPageObj_SetIsActive`), renders the page with `FPDF_RenderPageBitmap`
+into a BGRA bitmap at `options.scale` device pixels per point (default 1,
+bounded by the raster limits), converts it to RGBA, restores the objects and
+returns the pixels as a transferable buffer with the bitmap's size. Nothing
+is reopened and the session's bytes do not change.
+
+**Acceptance criteria:**
+
+- [ ] The suppressed render differs from a normal render inside the
+      element's bounds and is identical outside; a normal render taken after
+      it equals the one taken before (the objects are active again), and a
+      save after it equals a save before it.
+- [ ] Unknown ids are ignored; a scale that exceeds the raster limit is
+      refused with `limit-exceeded`.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-render.test.ts`)
+
+**Dependencies:** Task 32 (plumbing)
+
+**Files likely touched:** `src/edit/pdf/engine/render.ts` (new), `pdfium.ts`,
+`handler.ts`, `provider.ts`, `session.ts`, `types.ts`, `src/worker-protocol.ts`
+
+**Estimated scope:** Small
+
+### Task 34: Selection mapping and range mapping
+
+**Description:** `elementsForSelection(selection)` → `ReadResult<TextRange>`
+maps the viewer's `TextSelection` (PDF.js runs with rectangles in page space)
+to elements and ranges through the overlap ladder: a run and a layout line
+whose rectangles overlap by at least 50 % of the run; else the single text
+object that contains the run's rectangle; else a text match after NFKC
+folding and whitespace removal. Offsets inside a matched line come from the
+run's characters against the line's glyphs. The ladder is GenOffice's
+(Apache-2.0); the attribution goes into `THIRD_PARTY_NOTICES.md` and the
+module header. `mapRange(range, fromRevision)` → `ReadItem<TextRange>` walks
+the history entries after `fromRevision`: a `replaceText` on the element
+shifts offsets after its range by the length difference (or by the whole
+text when it has no range), a deleted element or page gives `undefined`,
+`remappedIds` are followed, undo and redo are already reflected in the
+entries.
+
+**Acceptance criteria:**
+
+- [ ] A selection built from the fixture's PDF.js runs resolves to the right
+      element and offsets on each ladder rung (overlap, containment, text
+      match); a selection of nothing resolves to `items: []`.
+- [ ] After `replaceText` with a range before, inside and after a saved
+      range, `mapRange` returns the moved range; after `deleteElement` it
+      returns `undefined`; after `undo` the original range.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-selection.test.ts`),
+      `npm run licenses`
+
+**Dependencies:** Task 32
+
+**Files likely touched:** `src/edit/pdf/selection.ts` (new), `session.ts`,
+`types.ts`, `src/edit/session.ts` (history access), `THIRD_PARTY_NOTICES.md`
+
+**Estimated scope:** Medium
+
+### Task 35: Range-scoped `replaceText`
+
+**Description:** `ReplaceTextOperation.range?: TextRange` inside the target.
+A text box splices its stored text and is laid out again. A text object is
+rewritten in place with the spliced text when its font covers the new
+characters; otherwise the object is split around the range into up to three
+objects — the parts before and after keep the font, size, colour and
+baseline, the middle part is drawn in the fallback font at the same baseline
+and the following part is shifted by the advance difference. The split
+object's id stays on the first part; the others are new ids in `createdIds`.
+Validation: the range must lie inside the target's text (`invalid-range`),
+and tables stay unsupported.
+
+**Acceptance criteria:**
+
+- [ ] Replacing a word in the middle of a Helvetica text object keeps one
+      object and the other words' glyph boxes; replacing it with Cyrillic
+      produces three objects on one baseline whose texts concatenate to the
+      expected string, with the tail moved by the advance difference.
+- [ ] A text box with a range reflows; a range outside the text or on a
+      table is refused with the stated codes; the operation's JSON schema
+      accepts `range`.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-hardening.test.ts`
+      additions), `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+
+**Dependencies:** Task 32
+
+**Files likely touched:** `src/edit/pdf/engine/existing-text.ts`, `text-box.ts`,
+`src/edit/pdf/types.ts`, `schema` of the operation, docs
+
+**Estimated scope:** Medium
+
+### Task 36: Main-thread geometry cache
+
+**Description:** `PdfSession` keeps the last `getElements({ pageIndex })`
+result per page and exposes `elementsAtSync(pageIndex, point)` →
+`ReadResult<PdfElement>` read synchronously from it (empty with the cached
+revision when the page has not been read; `cachedPages` says which have).
+On every receipt the cache drops the changed pages and refetches the ones
+that were cached, so hover never waits behind an `apply()`; `end()` clears
+it.
+
+**Acceptance criteria:**
+
+- [ ] After `getElements({ pageIndex: 0 })`, `elementsAtSync(0, point)`
+      returns the same elements as `elementsAt` without awaiting; while an
+      `apply()` is queued it still answers from the previous revision and
+      reports that revision; after the receipt the changed page is refreshed.
+
+**Verification:**
+
+- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-session.test.ts`)
+
+**Dependencies:** Task 32
+
+**Files likely touched:** `src/edit/pdf/session.ts`, `types.ts`,
+`src/edit/session.ts` (receipt hook)
+
+**Estimated scope:** Small
+
+### Task 37: Browser test, docs, matrix, proofs
+
+**Description:** A Playwright test selects text in the viewer with the
+mouse, resolves it with `elementsForSelection`, compares the layout's glyph
+boxes with the PDF.js text layer within 1 CSS px on rotated and cropped
+pages, replaces the range, maps it with `mapRange` after `documentchange`
+and restores the selection with `selectText`; a suppressed render is drawn
+over the page and the next normal render shows the element again.
+`docs/api/editing.md` gets an "Overlay primitives" section with the
+interaction model (overlay input → commit on blur or idle → re-selection);
+the PDF spec's Actual result records Phase 6; matrix and `npm run check`
+pass; proofs attached and ACTION-825 Done.
+
+**Acceptance criteria:**
+
+- [ ] The browser test passes on the matrix; the docs describe every
+      primitive with its envelope and the interaction model; the spec's
+      overlay definition of done is ticked.
+
+**Verification:**
+
+- [ ] `npm run test:e2e -- tests/e2e/edit-pdf-overlay.spec.ts`,
+      `npm run test:e2e:matrix`, `npm run check`
+
+**Dependencies:** Tasks 33–36
+
+**Files likely touched:** `tests/e2e/edit-pdf-overlay.spec.ts` (new), docs, specs
+
+**Estimated scope:** Medium
+
+### Checkpoint G: overlay primitives done
+
+- [ ] ACTION-825 acceptance criteria met; Linear Done with proofs
+- [ ] ACTION-815 (Operators) unblocked; parent ACTION-723 reviewed with
+      Leonid for the PR / Code Review step

@@ -91,15 +91,15 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 
 ## Phases
 
-| Phase                      | Tasks   | Ends with                                                                                 |
-| -------------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| 0. Risk first              | T1      | PDFium mechanics proven in Node, or the spec updated                                      |
-| 1. `edit-core`             | T2–T8   | Checkpoint A: core done on all browsers, human review                                     |
-| 2. First PDF slice         | T9–T13  | Checkpoint B: insert and edit a text box in a real PDF, save, reload — demo               |
-| 3. PDF method set          | T14–T20 | Checkpoints C and D: all 15 operations                                                    |
-| 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review |
-| 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821) |
-| 6. PDF overlay primitives  | later   | Tasks written after Phase 5; spec in `02-pdf-edit.md` (Linear ACTION-825)                 |
+| Phase                      | Tasks   | Ends with                                                                                                                                          |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Risk first              | T1      | PDFium mechanics proven in Node, or the spec updated                                                                                               |
+| 1. `edit-core`             | T2–T8   | Checkpoint A: core done on all browsers, human review                                                                                              |
+| 2. First PDF slice         | T9–T13  | Checkpoint B: insert and edit a text box in a real PDF, save, reload — demo                                                                        |
+| 3. PDF method set          | T14–T20 | Checkpoints C and D: all 15 operations                                                                                                             |
+| 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review                                                          |
+| 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821)                                                          |
+| 6. PDF overlay primitives  | T32–T37 | Checkpoint G: layout, suppressed render, selection and range mapping, range-scoped `replaceText`, geometry cache, browser test (Linear ACTION-825) |
 
 ## Revision 2 decisions (ACTION-821)
 
@@ -119,6 +119,28 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 15. **Read envelopes without paging**; `sessionId` is a random 128-bit value.
 16. **PDF saves default to full** for unsigned files; the viewer reopen keeps
     using the incremental form.
+
+## Phase 6 decisions (ACTION-825)
+
+16. **One worker request per primitive.** `edit-text-layout`,
+    `edit-position-at`, `edit-range-rects` and `edit-render-without` join the
+    protocol; the core session gains a `read()` hook that queues any read
+    behind earlier calls and stamps the envelope, so the PDF session adds
+    methods without touching the core's queue.
+17. **Lines are objects.** A layout line is one PDFium text object: a text
+    box's lines and a table's cells are separate objects already, and a plain
+    text object is one line. Glyph geometry comes from the text page
+    (`FPDFText_GetCharBox`, `GetLooseCharBox`, `GetCharOrigin`) mapped through
+    `PageGeometry`, never from PDF.js.
+18. **Suppressed render returns pixels, not a reopen.** `renderPageWithout`
+    hands the host RGBA pixels at a requested scale; drawing them over the
+    page is the host's job, and the session's bytes stay as they were.
+19. **The selection ladder is GenOffice's.** Overlap ≥ 50 %, then containment,
+    then an NFKC text match — attributed under Apache-2.0 in
+    `THIRD_PARTY_NOTICES.md`; the code is web-doc's own.
+20. **Range mapping walks the history.** `mapRange` derives the moved range
+    from the entries after `fromRevision` (text length deltas, deletions,
+    `remappedIds`), so it needs no extra bookkeeping in the engine.
 
 ## Gate and configuration changes needing approval
 
