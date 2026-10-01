@@ -129,9 +129,9 @@ describe("editing contracts", () => {
       documentchange: change,
       editstatechange: state,
     };
-    const format: EditSession["format"] = "pptx";
+    const format: EditSession["format"] = "pdf";
     assert.equal(events.documentchange.revision, receipt.revision);
     assert.equal(issue.operationIndex, 0);
-    assert.equal(format, "pptx");
+    assert.equal(format, "pdf");
   });
 });

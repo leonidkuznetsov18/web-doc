@@ -32,6 +32,8 @@ for (const [entry, outfile] of [
   ["src/csv-worker.ts", "workers/csv-worker.js"],
   // Bundled so the worker realm gets Fuse.js without a bare-specifier import.
   ["src/fuzzy-search-worker.ts", "workers/fuzzy-search-worker.js"],
+  // Bundles the PDFium JavaScript glue; the WASM itself is fetched at runtime.
+  ["src/pdf-edit-worker.ts", "workers/pdf-edit-worker.js"],
 ])
   await build({
     entryPoints: [resolve(packageRoot, entry)],
@@ -68,6 +70,12 @@ await cp(
   // leaves unsupported intrinsics inside the worker realm.
   resolve(pdfJsRoot, "legacy/build/pdf.worker.min.mjs"),
   resolve(dist, "workers/pdf.worker.min.mjs"),
+);
+
+await mkdir(resolve(dist, "assets/pdfium"), { recursive: true });
+await cp(
+  resolve(root, "node_modules/@embedpdf/pdfium/dist/pdfium.wasm"),
+  resolve(dist, "assets/pdfium/pdfium.wasm"),
 );
 
 await cp(resolve(packageRoot, "fonts"), resolve(dist, "fonts"), {

@@ -259,6 +259,11 @@ export class EditSessionController implements EditSessionBase<
     return this.#ended;
   }
 
+  /** False once the session ended or a failed recovery left it inconsistent. */
+  get usable(): boolean {
+    return !this.#ended && !this.#broken;
+  }
+
   /** Runs `task` after every earlier call, with a signal bounded by `maxOperationMs`. */
   #enqueue<T>(
     signal: AbortSignal | undefined,
@@ -276,6 +281,9 @@ export class EditSessionController implements EditSessionBase<
       try {
         return await task(controller.signal);
       } catch (error) {
+        // A dead engine worker cannot be recovered; the next edit() starts anew.
+        if (error instanceof ViewerError && error.code === "worker-crashed")
+          this.#broken = true;
         if (timedOut)
           throw new ViewerError(
             "resource-limit",

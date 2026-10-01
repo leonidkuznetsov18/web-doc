@@ -1,9 +1,11 @@
 import type { ResourceLimits, ViewerWarning } from "../contracts.js";
+import type { EditSession } from "./sessions.js";
 import type {
   EditableFormat,
   EditElement,
   EditFindOptions,
   EditOperation,
+  EditSessionBase,
   ElementQuery,
   OperationIssue,
   OperationSchemaSet,
@@ -25,10 +27,15 @@ export interface EditEngineContext {
   readonly signal: AbortSignal;
 }
 
+/** The format-independent session a provider wraps into its typed session. */
+export type EditSessionCore = EditSessionBase<EditOperation, EditElement>;
+
 /** Advertised by a `DocumentAdapter` that can edit some of its formats. */
 export interface EditEngineProvider {
   readonly formats: readonly EditableFormat[];
   load(original: Uint8Array, context: EditEngineContext): Promise<EditEngine>;
+  /** Adds the format's typed methods on top of the core session. */
+  createSession(core: EditSessionCore): EditSession;
 }
 
 export interface EngineChange {

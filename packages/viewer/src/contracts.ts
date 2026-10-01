@@ -1,8 +1,8 @@
 import type { EditEngineProvider } from "./edit/engine.js";
+import type { EditSession } from "./edit/sessions.js";
 import type {
   DocumentChange,
   EditOptions,
-  EditSession,
   EditStateChange,
   PageHit,
   PageRect,

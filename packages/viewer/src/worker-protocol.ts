@@ -8,7 +8,7 @@ import type {
   ViewerWarning,
 } from "./contracts.js";
 
-export type WorkerOperation =
+export type DocumentWorkerOperation =
   | "init"
   | "open"
   | "get-info"
@@ -16,6 +16,22 @@ export type WorkerOperation =
   | "get-text-map"
   | "close"
   | "destroy";
+
+/** Operations of an edit engine worker; payloads mirror the engine interface. */
+export type EditWorkerOperation =
+  | "edit-init"
+  | "edit-open"
+  | "edit-validate"
+  | "edit-apply"
+  | "edit-materialize"
+  | "edit-restore"
+  | "edit-elements"
+  | "edit-element"
+  | "edit-elements-at"
+  | "edit-find-text"
+  | "edit-dispose";
+
+export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;
 
 export interface WorkerRequest {
   readonly kind: "request";
@@ -71,8 +87,28 @@ export interface WorkerRenderPayload {
   readonly devicePixelRatio: number;
 }
 
+export interface EditWorkerInitPayload {
+  /** Where the worker fetches the engine's WebAssembly from. */
+  readonly wasmUrl: string;
+}
+
+export interface EditWorkerOpenPayload {
+  readonly data: ArrayBuffer;
+  readonly limits: ResourceLimits;
+  readonly fileName?: string;
+}
+
+export interface EditWorkerOpenResult {
+  readonly pageCount: number;
+}
+
 export type WorkerOperationResult =
-  DocumentInfo | readonly TextRun[] | ImageBitmap | ArrayBuffer | undefined;
+  | DocumentInfo
+  | readonly TextRun[]
+  | ImageBitmap
+  | ArrayBuffer
+  | EditWorkerOpenResult
+  | undefined;
 
 export function transferablesFor(value: unknown): Transferable[] {
   if (value instanceof ArrayBuffer) return [value];

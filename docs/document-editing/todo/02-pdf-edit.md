@@ -255,8 +255,12 @@ Which operations an element accepts is listed in its `operations` field:
 
 ### Viewer refresh
 
-- After each change the viewer reopens the edited bytes with PDF.js, reusing the
-  viewer's PDF.js worker instead of starting a new one.
+- After each change the viewer reopens the edited bytes with PDF.js. Each
+  reopen starts a fresh PDF.js worker: PDF.js binds one `PDFWorker` to one
+  loading task and destroys it with that task, and a port carries one
+  `PDFWorker` at a time, so a worker cannot serve the new document while the
+  old one is still displayed (found in task 9; the plan's worker reuse is
+  dropped). The reopen cost is measured by the performance check in task 21.
 - Target: a one-operation `apply()` on a 10-page PDF resolves within 1 second
   in Chromium on a developer machine. The browser suite fails above 3 seconds,
   to catch pathological regressions on slower CI machines.

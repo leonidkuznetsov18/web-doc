@@ -8,8 +8,10 @@ import type {
   EditEngine,
   EditEngineContext,
   EditEngineProvider,
+  EditSessionCore,
   EngineChange,
 } from "../../src/edit/engine.js";
+import type { EditSession } from "../../src/edit/sessions.js";
 import type { EditSessionHost } from "../../src/edit/session.js";
 import type {
   EditableFormat,
@@ -273,6 +275,8 @@ export function fakeProvider(
       onLoad?.(engine);
       return engine;
     },
+    // The fake format borrows the PDF session type; tests cast it back.
+    createSession: (core: EditSessionCore) => core as unknown as EditSession,
   };
   return provider;
 }

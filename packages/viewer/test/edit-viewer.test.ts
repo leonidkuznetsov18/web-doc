@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { EditStateChange } from "../src/index.js";
+import type {
+  EditElement,
+  EditSession,
+  EditSessionBase,
+  EditStateChange,
+  ViewerApi,
+} from "../src/index.js";
 import { ViewerClient, ViewerError } from "../src/index.js";
 import {
   encodePages,
@@ -42,6 +48,13 @@ function viewerWith(
 /** Typed batches: literals would fail excess-property checks against EditOperation. */
 function ops(...operations: FakeOperation[]): FakeOperation[] {
   return operations;
+}
+
+type FakeSession = EditSessionBase<FakeOperation, EditElement>;
+
+/** The fake format's session, seen with its own operation type. */
+async function editFake(viewer: ViewerApi): Promise<FakeSession> {
+  return (await viewer.edit()) as unknown as FakeSession;
 }
 
 function rejectsWith(code: string) {
@@ -103,7 +116,7 @@ describe("viewer editing integration", () => {
     viewer.goToPage(2);
     events.length = 0;
 
-    const session = await viewer.edit();
+    const session = await editFake(viewer);
     const operations: FakeOperation[] = [
       { op: "setText", pageIndex: 1, text: "THREE changed" },
       { op: "deletePage", pageIndex: 2 },
@@ -139,7 +152,7 @@ describe("viewer editing integration", () => {
   it("reopens through the adapter's reopen when it has one", async () => {
     const { viewer, adapter } = viewerWith({ reopen: true });
     await viewer.load(original, { fileName: "doc.pdf" });
-    const session = await viewer.edit();
+    const session = await editFake(viewer);
     await session.apply(ops({ op: "setText", pageIndex: 0, text: "x" }));
     await session.undo();
     assert.deepEqual(adapter.reopened, [1, 2]);
@@ -150,7 +163,7 @@ describe("viewer editing integration", () => {
   it("leaves the document untouched when the reopen fails", async () => {
     const { viewer, adapter, options, engines } = viewerWith();
     await viewer.load(original, { fileName: "doc.pdf" });
-    const session = await viewer.edit();
+    const session = await editFake(viewer);
     options.failOpen = true;
     await assert.rejects(
       session.apply(ops({ op: "setText", pageIndex: 0, text: "x" })),
@@ -170,7 +183,7 @@ describe("viewer editing integration", () => {
   it("ends the session when the document is replaced, closed or destroyed", async () => {
     const { viewer, engines, events } = viewerWith();
     await viewer.load(original, { fileName: "doc.pdf" });
-    const session = await viewer.edit();
+    const session = await editFake(viewer);
     const pending = session.apply(ops({ op: "hang" }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     await viewer.load(original, { fileName: "again.pdf" });
@@ -210,6 +223,7 @@ describe("viewer editing integration", () => {
           signal: new AbortController().signal,
         });
       },
+      createSession: (core: unknown) => core as EditSession,
     };
     const viewer = ViewerClient.create({
       adapters: [fakeEditableAdapter({ edit: provider })],

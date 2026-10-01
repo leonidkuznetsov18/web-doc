@@ -30,12 +30,12 @@ import type {
 import type {
   EditableFormat,
   EditOptions,
-  EditSession,
   PageHit,
   PageRect,
   ViewportRect,
 } from "./edit/types.js";
 import type { EditEngineProvider } from "./edit/engine.js";
+import type { EditSession } from "./edit/sessions.js";
 import { EditSessionController, type EditSessionHost } from "./edit/session.js";
 import { linkedAbortController } from "./abort.js";
 import { detectFormat } from "./detect.js";
@@ -100,7 +100,9 @@ export class DocumentViewer implements ViewerApi {
   #originalContentType: string | undefined;
   /** Limits the current document was opened with; reused when it is reopened. */
   #limits: ResourceLimits;
-  #session: EditSessionController | undefined;
+  #session:
+    | { readonly core: EditSessionController; readonly session: EditSession }
+    | undefined;
   /** Shared by concurrent `edit()` calls while the engine starts. */
   #sessionStart: Promise<EditSession> | undefined;
   #activeLoad: AbortController | undefined;
@@ -878,7 +880,7 @@ export class DocumentViewer implements ViewerApi {
 
   async edit(options: EditOptions = {}): Promise<EditSession> {
     const { adapter, info } = this.#assertReady();
-    if (this.#session) return this.#session;
+    if (this.#session?.core.usable) return this.#session.session;
     if (this.#sessionStart) return this.#sessionStart;
     const format = editableFormat(adapter, info.format);
     if (!format || !adapter.edit)
@@ -898,7 +900,7 @@ export class DocumentViewer implements ViewerApi {
 
   getEditSession(): EditSession | undefined {
     this.#assertAlive();
-    return this.#session;
+    return this.#session?.session;
   }
 
   pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined {
@@ -964,6 +966,10 @@ export class DocumentViewer implements ViewerApi {
   ): Promise<EditSession> {
     const generation = this.#generation;
     const operation = this.#startOperation(options.signal);
+    // A session that broke (failed recovery) makes way for a fresh engine.
+    const stale = this.#session;
+    this.#session = undefined;
+    if (stale) await stale.core.end();
     try {
       const engine = await provider.load(this.#original!.slice(), {
         format,
@@ -985,15 +991,16 @@ export class DocumentViewer implements ViewerApi {
           this.#replaceDocument(bytes, signal),
         emit: (type, event) => this.#emit(type, event),
       };
-      const session = new EditSessionController(
+      const core = new EditSessionController(
         engine,
         host,
         this.#original!,
         this.#info!.pageCount,
       );
-      this.#session = session;
+      const session = provider.createSession(core);
+      this.#session = { core, session };
       this.#emit("editstatechange", {
-        ...session.state,
+        ...core.state,
         active: true,
         format,
       });
@@ -1191,7 +1198,7 @@ export class DocumentViewer implements ViewerApi {
     const session = this.#session;
     this.#session = undefined;
     this.#sessionStart = undefined;
-    if (session) await session.end();
+    if (session) await session.core.end();
     const adapter = this.#adapter;
     const handle = this.#handle;
     this.#adapter = undefined;

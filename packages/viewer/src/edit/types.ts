@@ -176,12 +176,6 @@ export interface EditSessionBase<
   ): Promise<readonly TextTarget[]>;
 }
 
-/**
- * The session of the loaded document. Format modules narrow this to a union of
- * format sessions discriminated by `format`.
- */
-export type EditSession = EditSessionBase<EditOperation, EditElement>;
-
 export interface EditStateChange extends EditState {
   readonly active: boolean;
   readonly format?: EditableFormat;

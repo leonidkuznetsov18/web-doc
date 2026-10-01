@@ -1,5 +1,7 @@
 export * from "./contracts.js";
 export * from "./edit/types.js";
+export * from "./edit/sessions.js";
+export * from "./edit/pdf/types.js";
 export * from "./client.js";
 export * from "./viewer.js";
 export * from "./detect.js";
