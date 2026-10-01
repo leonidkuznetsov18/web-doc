@@ -4,8 +4,10 @@ import { before, describe, it } from "node:test";
 
 import { createPdfEditHandler } from "../src/edit/pdf/engine/handler.js";
 import { parseCmap } from "../src/edit/pdf/engine/fonts.js";
-import { loadPdfEditEngine } from "../src/edit/pdf/provider.js";
-import type { EditEngine } from "../src/edit/engine.js";
+import {
+  loadPdfEditEngine,
+  type PdfEditEngineClient,
+} from "../src/edit/pdf/provider.js";
 import type { OperationIssue, PdfOperation } from "../src/index.js";
 import { defaultResourceLimits } from "../src/index.js";
 import { loopbackWorker } from "./fixtures/loopback-worker.js";
@@ -75,7 +77,7 @@ async function engineFor(
   return { engine, fetched };
 }
 
-async function applyOne(engine: EditEngine, operation: PdfOperation) {
+async function applyOne(engine: PdfEditEngineClient, operation: PdfOperation) {
   const issues = await engine.validate([operation], signal);
   if (issues.length > 0) return { issues };
   const change = await engine.apply([operation], signal);

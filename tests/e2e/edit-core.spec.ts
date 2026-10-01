@@ -205,17 +205,22 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
             async validate() {
               return [];
             },
-            async apply(operations: readonly Record<string, unknown>[]) {
-              return apply(operations);
+            // Batches arrive with the state id the core assigned them.
+            async apply(batch: {
+              readonly operations: readonly Record<string, unknown>[];
+            }) {
+              return apply(batch.operations);
             },
             async materialize() {
               return encode(pages);
             },
-            async restore(
-              batches: readonly (readonly Record<string, unknown>[])[],
-            ) {
+            async restore(target: {
+              readonly batches: readonly {
+                readonly operations: readonly Record<string, unknown>[];
+              }[];
+            }) {
               pages = [...base];
-              for (const batch of batches) apply(batch);
+              for (const batch of target.batches) apply(batch.operations);
             },
             async getElements() {
               return [];

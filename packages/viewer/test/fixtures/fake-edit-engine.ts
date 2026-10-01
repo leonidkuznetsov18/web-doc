@@ -5,6 +5,8 @@ import type {
   ViewerEventMap,
 } from "../../src/contracts.js";
 import type {
+  RestoreTarget,
+  EngineBatch,
   EditEngine,
   EditEngineContext,
   EditEngineProvider,
@@ -143,14 +145,11 @@ export class FakeEditEngine implements EditEngine {
     return issues;
   }
 
-  async apply(
-    operations: readonly EditOperation[],
-    signal: AbortSignal,
-  ): Promise<EngineChange> {
+  async apply(batch: EngineBatch, signal: AbortSignal): Promise<EngineChange> {
     this.calls.push("apply");
     const changed = new Set<number>();
     const createdIds: string[] = [];
-    for (const raw of operations) {
+    for (const raw of batch.operations) {
       const operation = raw as FakeOperation;
       switch (operation.op) {
         case "setText":
@@ -194,7 +193,7 @@ export class FakeEditEngine implements EditEngine {
       changedPages: [...changed].sort((a, b) => a - b),
       pageCount: this.pages.length,
       warnings:
-        operations.length > 1
+        batch.operations.length > 1
           ? [{ code: "unsupported-feature", message: "batch" }]
           : [],
     };
@@ -206,11 +205,11 @@ export class FakeEditEngine implements EditEngine {
     return encodePages(this.pages);
   }
 
-  async restore(batches: readonly (readonly EditOperation[])[]): Promise<void> {
-    this.calls.push(`restore:${batches.length}`);
+  async restore(target: RestoreTarget): Promise<void> {
+    this.calls.push(`restore:${target.batches.length}`);
     if (this.options.failRestore) throw new Error("restore failed");
     this.pages = [...this.original];
-    for (const batch of batches)
+    for (const batch of target.batches)
       await this.apply(batch, new AbortController().signal);
   }
 

@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { before, describe, it } from "node:test";
 
 import { createPdfEditHandler } from "../src/edit/pdf/engine/handler.js";
-import { loadPdfEditEngine } from "../src/edit/pdf/provider.js";
-import type { EditEngine } from "../src/edit/engine.js";
+import {
+  loadPdfEditEngine,
+  type PdfEditEngineClient,
+} from "../src/edit/pdf/provider.js";
 import type { OperationIssue, PdfElement, PdfOperation } from "../src/index.js";
 import { defaultResourceLimits } from "../src/index.js";
 import { loopbackWorker } from "./fixtures/loopback-worker.js";
@@ -23,7 +25,7 @@ const FALLBACK_URL = "https://fonts.test/noto.ttf";
 const signal = new AbortController().signal;
 const op = <T extends PdfOperation>(operation: T): T => operation;
 
-async function engineFor(original: Uint8Array): Promise<EditEngine> {
+async function engineFor(original: Uint8Array): Promise<PdfEditEngineClient> {
   const pair = loopbackWorker(
     createPdfEditHandler({
       loadPdfium: () => fixturePdfium(),
@@ -43,7 +45,7 @@ async function engineFor(original: Uint8Array): Promise<EditEngine> {
   );
 }
 
-async function run(engine: EditEngine, operation: PdfOperation) {
+async function run(engine: PdfEditEngineClient, operation: PdfOperation) {
   const issues = await engine.validate([operation], signal);
   if (issues.length > 0) return { issues };
   return { change: await engine.apply([operation], signal) };
@@ -52,7 +54,10 @@ async function run(engine: EditEngine, operation: PdfOperation) {
 const codes = (issues: readonly OperationIssue[] | undefined) =>
   (issues ?? []).map((issue) => `${issue.path}:${issue.code}`);
 
-async function element(engine: EditEngine, id: string): Promise<PdfElement> {
+async function element(
+  engine: PdfEditEngineClient,
+  id: string,
+): Promise<PdfElement> {
   return (await engine.getElement!(id, signal)) as PdfElement;
 }
 

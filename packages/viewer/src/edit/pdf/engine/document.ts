@@ -1,5 +1,6 @@
 import { ViewerError } from "../../../errors.js";
-import type { EngineChange } from "../../engine.js";
+import type { EngineBatch, EngineChange, RestoreTarget } from "../../engine.js";
+import { invalidOperationError, parseReference } from "../../operations.js";
 import type {
   EditFindOptions,
   EditOperation,
@@ -63,6 +64,19 @@ interface PageRecord {
 /** Batches arrive as plain JSON; unknown operations are reported, not typed away. */
 type PdfOrUnknownOperation = PdfOperation | EditOperation;
 
+/** Operations whose first created id a `"$<n>"` reference can name. */
+const CREATING_OPERATIONS = new Set<string>([
+  "insertTextBox",
+  "insertShape",
+  "insertImage",
+  "insertTable",
+]);
+
+function referenceOf(operation: { readonly op: string }): number | undefined {
+  const target = (operation as { readonly target?: unknown }).target;
+  return typeof target === "string" ? parseReference(target) : undefined;
+}
+
 const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   insertTextBox: insertTextBox as OperationHandler,
   replaceText: replaceText as OperationHandler,
@@ -89,6 +103,8 @@ export class PdfEditDocument {
   readonly #limits: ResourceLimits;
   /** Signature fields in the original; an edit leaves them uncovering the new revision. */
   readonly #signatures: number;
+  /** What the working copy was opened from: the original, or a checkpoint. */
+  #base: Uint8Array;
   #document: PdfiumDocument;
   #measurer: TextMeasurer;
   #pages: PageRecord[];
@@ -104,6 +120,7 @@ export class PdfEditDocument {
   ) {
     this.#pdfium = pdfium;
     this.#original = original;
+    this.#base = original;
     this.#fonts = fonts;
     this.#limits = limits;
     this.#document = pdfium.openDocument(original);
@@ -146,7 +163,7 @@ export class PdfEditDocument {
    */
   validate(operations: readonly PdfOrUnknownOperation[]): OperationIssue[] {
     const issues: OperationIssue[] = [];
-    const context = this.#context(this.#batches + 1, 0);
+    const context = this.#context(0, 0);
     operations.forEach((operation, operationIndex) => {
       const handler = handlers[operation.op as PdfOperation["op"]];
       if (!handler) {
@@ -158,69 +175,142 @@ export class PdfEditDocument {
         });
         return;
       }
-      handler.validate(
-        operation as PdfOperation,
-        context,
-        issueCollector(operationIndex, issues),
-      );
+      const issue = issueCollector(operationIndex, issues);
+      const reference = referenceOf(operation);
+      if (reference !== undefined) {
+        // The element does not exist yet; the rest is checked when applying.
+        const creator = operations[reference];
+        if (
+          reference >= operationIndex ||
+          !creator ||
+          !CREATING_OPERATIONS.has(creator.op)
+        )
+          issue(
+            "/target",
+            "unknown-target",
+            `"$${reference}" must name an earlier operation that creates an element`,
+          );
+        return;
+      }
+      handler.validate(operation as PdfOperation, context, issue);
     });
     return issues;
   }
 
-  apply(operations: readonly PdfOrUnknownOperation[]): EngineChange {
-    const batch = this.#batches + 1;
+  /**
+   * Applies a batch. Plain operation arrays, as the unit tests pass them, get
+   * the next batch number as their state id.
+   */
+  apply(input: readonly PdfOrUnknownOperation[] | EngineBatch): EngineChange {
+    const batch: EngineBatch = Array.isArray(input)
+      ? { stateId: this.#batches + 1, operations: input }
+      : (input as EngineBatch);
+    const { stateId, operations } = batch;
     const createdIds: string[] = [];
+    const createdByOperation: string[][] = [];
+    const removedIds: string[] = [];
     const changedPages = new Set<number>();
     const warnings: EngineChange["warnings"][number][] = [];
     // The first change of a signed file is the point where the signatures
     // stop covering what is shown; the incremental save keeps them valid for
     // the original revision.
-    if (batch === 1 && this.#signatures > 0)
+    if (this.#batches === 0 && this.#signatures > 0)
       warnings.push({
         code: "fidelity-degraded",
         message: `The document carries ${this.#signatures} digital signature${this.#signatures === 1 ? "" : "s"} that will not cover the edited revision`,
         details: { signatures: this.#signatures },
       });
-    operations.forEach((operation, operationIndex) => {
-      const handler = handlers[operation.op as PdfOperation["op"]];
+    operations.forEach((raw, operationIndex) => {
+      const handler = handlers[raw.op as PdfOperation["op"]];
       if (!handler)
-        throw new ViewerError(
-          "internal",
-          `Unknown pdf operation ${operation.op}`,
-        );
-      const result = handler.apply(
-        operation as PdfOperation,
-        this.#context(batch, operationIndex),
+        throw new ViewerError("internal", `Unknown pdf operation ${raw.op}`);
+      const context = this.#context(stateId, operationIndex);
+      const operation = this.#resolveReference(
+        raw as PdfOperation,
+        operationIndex,
+        createdByOperation,
+        handler,
+        context,
       );
+      const result = handler.apply(operation, context);
       createdIds.push(...result.createdIds);
+      createdByOperation[operationIndex] = [...result.createdIds];
+      removedIds.push(...(result.removedIds ?? []));
       for (const pageIndex of result.changedPages) changedPages.add(pageIndex);
       warnings.push(...result.warnings);
     });
-    this.#batches = batch;
+    this.#batches += 1;
     return {
       createdIds,
-      removedIds: [],
+      removedIds,
       changedPages: [...changedPages].sort((a, b) => a - b),
       pageCount: this.pageCount,
       warnings,
     };
   }
 
-  /** The original bytes while nothing changed, else an incremental update. */
+  /**
+   * Turns a `"$<n>"` target into the id operation `n` created, then runs the
+   * handler's own checks on the resolved operation: a reference that lands
+   * on an element the operation cannot act on fails the batch the same way
+   * validation would have.
+   */
+  #resolveReference(
+    operation: PdfOperation,
+    operationIndex: number,
+    createdByOperation: readonly (readonly string[])[],
+    handler: OperationHandler,
+    context: OperationContext,
+  ): PdfOperation {
+    const reference = referenceOf(operation);
+    if (reference === undefined) return operation;
+    const issues: OperationIssue[] = [];
+    const issue = issueCollector(operationIndex, issues);
+    const id = createdByOperation[reference]?.[0];
+    if (id === undefined) {
+      issue(
+        "/target",
+        "unknown-target",
+        `Operation ${reference} created no element for "$${reference}"`,
+      );
+      throw invalidOperationError(issues);
+    }
+    const resolved = { ...operation, target: id } as PdfOperation;
+    handler.validate(resolved, context, issue);
+    if (issues.length > 0) throw invalidOperationError(issues);
+    return resolved;
+  }
+
+  /** The base bytes while nothing changed, else an incremental update. */
   materialize(): Uint8Array {
     return this.#batches === 0
-      ? this.#original.slice()
+      ? this.#base.slice()
       : this.#document.save("incremental");
   }
 
-  restore(batches: readonly (readonly PdfOrUnknownOperation[])[]): void {
+  /**
+   * Rebuilds a state from its base (the original, or a checkpoint) and the
+   * batches after it. Plain arrays of batches, as the unit tests pass them,
+   * get state ids 1, 2, 3…
+   */
+  restore(
+    input: readonly (readonly PdfOrUnknownOperation[])[] | RestoreTarget,
+  ): void {
+    const target: RestoreTarget = Array.isArray(input)
+      ? {
+          batches: (input as readonly (readonly PdfOrUnknownOperation[])[]).map(
+            (operations, index) => ({ stateId: index + 1, operations }),
+          ),
+        }
+      : (input as RestoreTarget);
     this.#fonts.release(this.#pdfium, this.#document.handle);
     this.#document.close();
-    this.#document = this.#pdfium.openDocument(this.#original);
+    this.#base = target.base ?? this.#original;
+    this.#document = this.#pdfium.openDocument(this.#base);
     this.#measurer = new TextMeasurer(this.#pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
     this.#batches = 0;
-    for (const batch of batches) this.apply(batch);
+    for (const batch of target.batches) this.apply(batch);
   }
 
   getElements(query: ElementQuery): PdfElement[] {
@@ -294,7 +384,7 @@ export class PdfEditDocument {
     this.#document.close();
   }
 
-  #context(batch: number, operationIndex: number): OperationContext {
+  #context(stateId: number, operationIndex: number): OperationContext {
     let created = 0;
     return {
       pdfium: this.#pdfium,
@@ -312,10 +402,11 @@ export class PdfEditDocument {
           this.#withPage(pageIndex, (page) => this.#geometryOf(pageIndex, page))
         );
       },
-      // Ids name the batch, the operation and the item, so replaying the
-      // history reproduces them.
+      // Ids name the state the batch leads to, the operation and the item,
+      // so replaying the history reproduces them and an undone id is never
+      // handed out again.
       newId: (pageIndex, suffix = "") =>
-        `${this.#pages[pageIndex]!.key}:n${batch}.${operationIndex}.${created++}${suffix}`,
+        `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}${suffix}`,
       withPage: (pageIndex, use) => this.#writePage(pageIndex, use),
       appendObjects: (pageIndex, records) => {
         const page = this.#pages[pageIndex]!;
@@ -324,6 +415,8 @@ export class PdfEditDocument {
       },
       locate: (id) => this.#locate(id),
       element: (id) => this.getElement(id),
+      pageElementIds: (pageIndex) =>
+        this.#elementsOf(pageIndex).map((element) => element.id),
       pageSize: (pageIndex) =>
         displayedSize(
           this.#withPage(pageIndex, (page) =>
@@ -331,7 +424,7 @@ export class PdfEditDocument {
           ),
         ),
       insertPageRecord: (index) => {
-        const key = `q${batch}.${operationIndex}`;
+        const key = `q${stateId}.${operationIndex}`;
         this.#pages.splice(index, 0, { key });
         this.#forgetElements();
         return key;

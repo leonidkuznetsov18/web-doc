@@ -3,8 +3,10 @@ import { before, describe, it } from "node:test";
 
 import { createPdfEditHandler } from "../src/edit/pdf/engine/handler.js";
 import { jpegSize, pngSize } from "../src/edit/pdf/engine/images.js";
-import { loadPdfEditEngine } from "../src/edit/pdf/provider.js";
-import type { EditEngine } from "../src/edit/engine.js";
+import {
+  loadPdfEditEngine,
+  type PdfEditEngineClient,
+} from "../src/edit/pdf/provider.js";
 import type { PageRect, PdfOperation } from "../src/index.js";
 import { defaultResourceLimits, ViewerError } from "../src/index.js";
 import { loopbackWorker } from "./fixtures/loopback-worker.js";
@@ -18,7 +20,7 @@ const op = <T extends PdfOperation>(operation: T): T => operation;
 async function engineFor(
   original: Uint8Array,
   limits = defaultResourceLimits,
-): Promise<EditEngine> {
+): Promise<PdfEditEngineClient> {
   const pair = loopbackWorker(
     createPdfEditHandler({
       loadPdfium: () => fixturePdfium(),

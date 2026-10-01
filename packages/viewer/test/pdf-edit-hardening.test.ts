@@ -15,6 +15,7 @@ import type {
   EditSessionBase,
   OperationIssue,
   PdfEditSession,
+  PdfOperation,
 } from "../src/index.js";
 import { defaultResourceLimits, ViewerError } from "../src/index.js";
 import { loopbackWorker } from "./fixtures/loopback-worker.js";
@@ -305,6 +306,138 @@ describe("PDF sessions", () => {
         [{ operationIndex: 0, path: "/target", code: "unknown-target" }],
       );
       assert.equal(session.state.revision, 15, "rejections change nothing");
+    } finally {
+      await end();
+    }
+  });
+});
+
+describe("ids and references (revision 2)", () => {
+  let original: Uint8Array;
+
+  before(async () => {
+    original = await buildPdf(["One", "Two"]);
+  });
+
+  const box = (text: string) => ({
+    pageIndex: 0,
+    rect: { x: 72, y: 72, width: 200, height: 40 },
+    text,
+  });
+
+  it("never hands out an undone id again", async () => {
+    const { session, end } = await pdfSession(original);
+    try {
+      const first = await session.insertTextBox(box("first"));
+      assert.deepEqual(first.createdIds, ["p0:n1.0.0"]);
+      await session.undo();
+      const second = await session.insertTextBox(box("second"));
+      assert.deepEqual(second.createdIds, ["p0:n2.0.0"]);
+      assert.equal(await session.getElement("p0:n1.0.0"), undefined);
+      assert.equal((await session.getElement("p0:n2.0.0"))?.text, "second");
+      // A dry run names the ids the real apply then uses.
+      const dry = await session.insertTextBox(box("third"), { dryRun: true });
+      const real = await session.insertTextBox(box("third"));
+      assert.deepEqual(real.createdIds, dry.createdIds);
+      assert.deepEqual(real.createdIds, ["p0:n3.0.0"]);
+    } finally {
+      await end();
+    }
+  });
+
+  it("reports what a batch, an undo, a redo and a reset removed", async () => {
+    const { session, end } = await pdfSession(original);
+    try {
+      const inserted = await session.apply([
+        { op: "insertTextBox", ...box("a") },
+        {
+          op: "insertShape",
+          pageIndex: 0,
+          shape: "rectangle",
+          rect: { x: 10, y: 10, width: 20, height: 20 },
+          fill: { color: "#000000" },
+        },
+      ]);
+      const [boxId, shapeId] = inserted.createdIds as [string, string];
+      assert.deepEqual(inserted.removedIds, []);
+      const deleted = await session.deleteElement({ target: shapeId });
+      assert.deepEqual(deleted.removedIds, [shapeId]);
+      const undone = await session.undo();
+      assert.deepEqual(undone.removedIds, []);
+      assert.equal((await session.getElement(shapeId))?.kind, "shape");
+      const redone = await session.redo();
+      assert.deepEqual(redone.removedIds, [shapeId]);
+      const page = await session.deletePage({ pageIndex: 0 });
+      assert.deepEqual(page.removedIds, ["p0:o0", boxId]);
+      assert.equal(session.state.pageCount, 1);
+      const undonePage = await session.undo();
+      assert.deepEqual(undonePage.removedIds, []);
+      const reset = await session.reset();
+      assert.deepEqual(reset.removedIds, [boxId, shapeId]);
+    } finally {
+      await end();
+    }
+  });
+
+  it("resolves $n references while applying and rejects the batch when one misses", async () => {
+    const { session, end } = await pdfSession(original);
+    try {
+      const receipt = await session.apply([
+        {
+          op: "insertTable",
+          pageIndex: 0,
+          at: { x: 72, y: 200 },
+          width: 200,
+          rows: [["a", "b"]],
+        },
+        { op: "setTableCell", target: "$0", row: 0, column: 1, text: "c" },
+        { op: "moveElement", target: "$0", by: { dx: 5, dy: 5 } },
+      ]);
+      assert.deepEqual(receipt.createdIds, ["p0:n1.0.0"]);
+      assert.deepEqual((await session.getElement("p0:n1.0.0"))?.table?.rows, [
+        ["a", "c"],
+      ]);
+
+      const issuesOf = async (operations: readonly PdfOperation[]) => {
+        try {
+          await session.apply(operations);
+        } catch (error) {
+          assert.ok(error instanceof ViewerError, String(error));
+          assert.equal(error.code, "invalid-operation");
+          return (error.details?.issues as readonly OperationIssue[]).map(
+            (issue) => `${issue.operationIndex}${issue.path}:${issue.code}`,
+          );
+        }
+        assert.fail("expected a rejection");
+      };
+      // Wrong kind of element: found while applying, document unchanged.
+      assert.deepEqual(
+        await issuesOf([
+          { op: "insertTextBox", ...box("not a table") },
+          { op: "setTableCell", target: "$0", row: 0, column: 0, text: "x" },
+        ]),
+        ["1/target:unsupported-target"],
+      );
+      assert.equal(session.state.revision, 1);
+      assert.equal(
+        (await session.getElements({ pageIndex: 0 })).length,
+        2,
+        "nothing from the rejected batch remains",
+      );
+      // References must point backwards, at an operation that creates something.
+      assert.deepEqual(
+        await issuesOf([
+          { op: "setTableCell", target: "$0", row: 0, column: 0, text: "x" },
+        ]),
+        ["0/target:unknown-target"],
+      );
+      assert.deepEqual(
+        await issuesOf([
+          { op: "rotatePage", pageIndex: 0, rotation: 90 },
+          { op: "deleteElement", target: "$0" },
+        ]),
+        ["1/target:unknown-target"],
+      );
     } finally {
       await end();
     }

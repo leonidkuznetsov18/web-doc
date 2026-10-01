@@ -1,8 +1,13 @@
+import type { EngineBatch } from "./engine.js";
 import type { EditOperation } from "./types.js";
 
 export interface HistoryEntry {
   readonly operations: readonly EditOperation[];
   readonly label?: string;
+  /** Ids the batch created; an undo removes them again. */
+  readonly createdIds: readonly string[];
+  /** Ids the batch removed; a redo removes them again. */
+  readonly removedIds: readonly string[];
   /** Page indexes the batch changed, in the document after it. */
   readonly changedPages: readonly number[];
   readonly pageCountBefore: number;
@@ -43,6 +48,11 @@ export class EditHistory {
     return this.#folded.length === 0 && this.#entries.length === 0;
   }
 
+  /** The id the next pushed entry will get; engines derive created ids from it. */
+  get nextStateId(): number {
+    return this.#nextStateId;
+  }
+
   /** Content id of the current state; 0 is the original document. */
   get stateId(): number {
     return this.#position > 0
@@ -67,15 +77,21 @@ export class EditHistory {
   }
 
   /** Batches applied to the original in the current state. */
-  applied(): readonly (readonly EditOperation[])[] {
+  applied(): readonly EngineBatch[] {
     return this.batchesAt(this.#position);
   }
 
   /** Batches applied to the original when `position` undoable entries are applied. */
-  batchesAt(position: number): readonly (readonly EditOperation[])[] {
-    return [...this.#folded, ...this.#entries.slice(0, position)].map(
-      (entry) => entry.operations,
-    );
+  batchesAt(position: number): readonly EngineBatch[] {
+    return this.entriesAt(position).map((entry) => ({
+      stateId: entry.stateId,
+      operations: entry.operations,
+    }));
+  }
+
+  /** Entries applied when `position` undoable entries are applied, folded ones first. */
+  entriesAt(position: number): readonly HistoryEntry[] {
+    return [...this.#folded, ...this.#entries.slice(0, position)];
   }
 
   get position(): number {

@@ -6,6 +6,7 @@ import type {
   EditWorkerOpenResult,
   WorkerOperation,
 } from "../../../worker-protocol.js";
+import type { EngineBatch } from "../../engine.js";
 import type {
   EditFindOptions,
   EditOperation,
@@ -77,22 +78,25 @@ export function createPdfEditHandler(
         return engine().validate(operations);
       }
       case "edit-apply": {
-        const { operations } = payload as {
-          readonly operations: readonly EditOperation[];
-        };
-        await fonts.prepare(engine().fontRequests(operations));
-        await engine().images.prepare(operations, host.decodeImage);
-        return engine().apply(operations);
+        const { batch } = payload as { readonly batch: EngineBatch };
+        await fonts.prepare(engine().fontRequests(batch.operations));
+        await engine().images.prepare(batch.operations, host.decodeImage);
+        return engine().apply(batch);
       }
       case "edit-materialize":
         return engine().materialize().buffer;
       case "edit-restore": {
-        const { batches } = payload as {
-          readonly batches: readonly (readonly EditOperation[])[];
+        const { batches, base } = payload as {
+          readonly batches: readonly EngineBatch[];
+          readonly base?: ArrayBuffer;
         };
-        await fonts.prepare(engine().fontRequests(batches.flat()));
-        await engine().images.prepare(batches.flat(), host.decodeImage);
-        engine().restore(batches);
+        const operations = batches.flatMap((batch) => batch.operations);
+        await fonts.prepare(engine().fontRequests(operations));
+        await engine().images.prepare(operations, host.decodeImage);
+        engine().restore({
+          batches,
+          ...(base ? { base: new Uint8Array(base) } : {}),
+        });
         return undefined;
       }
       case "edit-elements":

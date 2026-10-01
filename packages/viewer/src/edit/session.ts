@@ -5,13 +5,14 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
-import type { EditEngine, EngineChange } from "./engine.js";
+import type { EditEngine, EngineBatch, EngineChange } from "./engine.js";
 import { EditHistory, type HistoryEntry } from "./history.js";
 import {
   assertBatchSize,
   checkOperations,
   freezeOperations,
   invalidOperationError,
+  parseReference,
 } from "./operations.js";
 import type {
   ApplyOptions,
@@ -25,6 +26,7 @@ import type {
   EditState,
   ElementQuery,
   HistoryOptions,
+  OperationIssue,
   OperationSchemaSet,
   PagePoint,
   SavedDocument,
@@ -144,15 +146,27 @@ export class EditSessionController implements EditSessionBase<
       assertBatchSize(batch, this.#host.limits.maxEditOperations);
       const shapeIssues = checkOperations(batch, this.schemas);
       if (shapeIssues.length > 0) throw invalidOperationError(shapeIssues);
+      const referenceIssues = checkBatchReferences(batch);
+      if (referenceIssues.length > 0)
+        throw invalidOperationError(referenceIssues);
       const engineIssues = await this.#engine.validate(batch, signal);
       throwIfAborted(signal);
       if (engineIssues.length > 0) throw invalidOperationError(engineIssues);
+      // The id the history will give this state; a dry run uses the same one,
+      // so its receipt names the ids a real apply would.
+      const engineBatch: EngineBatch = {
+        stateId: this.#history.nextStateId,
+        operations: batch,
+      };
 
       if (options.dryRun) {
         const change = await this.#transaction(signal, "apply", async () => {
-          const result = await this.#engine.apply(batch, signal);
+          const result = await this.#engine.apply(engineBatch, signal);
           // Nothing moves, so the working copy goes back to the current state.
-          await this.#engine.restore(this.#history.applied(), signal);
+          await this.#engine.restore(
+            { batches: this.#history.applied() },
+            signal,
+          );
           return result;
         });
         return this.#receipt(true, batch.length, change.createdIds, {
@@ -166,7 +180,7 @@ export class EditSessionController implements EditSessionBase<
         signal,
         "apply",
         async () => {
-          const result = await this.#engine.apply(batch, signal);
+          const result = await this.#engine.apply(engineBatch, signal);
           return {
             change: result,
             shown: await this.#show(signal, result.changedPages),
@@ -176,6 +190,8 @@ export class EditSessionController implements EditSessionBase<
       this.#history.push({
         operations: batch,
         ...(options.label === undefined ? {} : { label: options.label }),
+        createdIds: change.createdIds,
+        removedIds: change.removedIds,
         changedPages: change.changedPages,
         pageCountBefore: before,
         pageCountAfter: shown.pageCount,
@@ -203,6 +219,7 @@ export class EditSessionController implements EditSessionBase<
       this.#history.undo();
       this.#commit("undo", changedPages, shown);
       return this.#receipt(false, entry.operations.length, [], {
+        removedIds: entry.createdIds,
         changedPages,
         pageCount: shown.pageCount,
         warnings: [],
@@ -223,7 +240,8 @@ export class EditSessionController implements EditSessionBase<
       );
       this.#history.redo();
       this.#commit("redo", changedPages, shown);
-      return this.#receipt(false, entry.operations.length, [], {
+      return this.#receipt(false, entry.operations.length, entry.createdIds, {
+        removedIds: entry.removedIds,
         changedPages,
         pageCount: shown.pageCount,
         warnings: [],
@@ -234,23 +252,28 @@ export class EditSessionController implements EditSessionBase<
   reset(options: HistoryOptions = {}): Promise<EditReceipt> {
     return this.#enqueue(options.signal, async (signal) => {
       this.#assertRevision(options);
-      const applied = this.#history.applied();
+      const applied = this.#history.entriesAt(this.#history.position);
       if (this.#history.stateId === 0 && this.#history.isPristine)
         return this.#noop();
       const changedPages = allPages(
         Math.max(this.#originalPageCount, this.#history.pageCount),
       );
       const shown = await this.#transaction(signal, "apply", async () => {
-        await this.#engine.restore([], signal);
+        await this.#engine.restore({ batches: [] }, signal);
         return this.#show(signal, changedPages);
       });
       this.#history.clear();
       this.#commit("reset", changedPages, shown);
       return this.#receipt(
         false,
-        applied.reduce((count, batch) => count + batch.length, 0),
+        applied.reduce((count, entry) => count + entry.operations.length, 0),
         [],
-        { changedPages, pageCount: shown.pageCount, warnings: [] },
+        {
+          removedIds: applied.flatMap((entry) => entry.createdIds),
+          changedPages,
+          pageCount: shown.pageCount,
+          warnings: [],
+        },
       );
     });
   }
@@ -418,7 +441,10 @@ export class EditSessionController implements EditSessionBase<
         failedStage = (error.details?.stage as FailureStage) ?? stage;
       await this.#rollback();
       if (signal.aborted) throw abortError();
-      if (error instanceof ViewerError && error.code === "edit-failed")
+      if (
+        error instanceof ViewerError &&
+        (error.code === "edit-failed" || error.code === "invalid-operation")
+      )
         throw error;
       throw new ViewerError(
         "edit-failed",
@@ -467,7 +493,10 @@ export class EditSessionController implements EditSessionBase<
     signal: AbortSignal,
   ): Promise<Shown> {
     return this.#transaction(signal, "apply", async () => {
-      await this.#engine.restore(this.#history.batchesAt(position), signal);
+      await this.#engine.restore(
+        { batches: this.#history.batchesAt(position) },
+        signal,
+      );
       return this.#show(signal, changedPages);
     });
   }
@@ -481,7 +510,10 @@ export class EditSessionController implements EditSessionBase<
       this.#host.limits.maxOperationMs,
     );
     try {
-      await this.#engine.restore(this.#history.applied(), controller.signal);
+      await this.#engine.restore(
+        { batches: this.#history.applied() },
+        controller.signal,
+      );
     } catch {
       this.#broken = true;
     } finally {
@@ -655,6 +687,31 @@ function pagesTouched(entry: HistoryEntry, pageCount: number): number[] {
 
 function allPages(pageCount: number): number[] {
   return Array.from({ length: pageCount }, (_, index) => index);
+}
+
+/**
+ * Same-batch references: `"$<n>"` names the first element created by
+ * operation `n` of the batch, which must come earlier. The engine resolves
+ * them while applying; here only the form is checked.
+ */
+function checkBatchReferences(
+  operations: readonly EditOperation[],
+): OperationIssue[] {
+  const issues: OperationIssue[] = [];
+  operations.forEach((operation, operationIndex) => {
+    const target = (operation as { readonly target?: unknown }).target;
+    const reference =
+      typeof target === "string" ? parseReference(target) : undefined;
+    if (reference === undefined) return;
+    if (reference >= operationIndex)
+      issues.push({
+        operationIndex,
+        path: "/target",
+        code: "unknown-target",
+        message: `"$${reference}" must name an earlier operation of the batch`,
+      });
+  });
+  return issues;
 }
 
 /** The renderer owns the page count; an engine that disagrees is reported, not trusted. */

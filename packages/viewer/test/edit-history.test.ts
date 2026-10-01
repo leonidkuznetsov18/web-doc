@@ -7,6 +7,8 @@ function entry(label: string, pageCountAfter = 1) {
   return {
     operations: [{ op: label }],
     label,
+    createdIds: [],
+    removedIds: [],
     changedPages: [0],
     pageCountBefore: 1,
     pageCountAfter,
@@ -21,7 +23,7 @@ describe("EditHistory", () => {
     history.push(entry("a"));
     history.push(entry("b"));
     assert.deepEqual(
-      history.applied().map((batch) => batch[0]?.op),
+      history.applied().map((batch) => batch.operations[0]?.op),
       ["a", "b"],
     );
     history.undo();
@@ -30,7 +32,7 @@ describe("EditHistory", () => {
     history.push(entry("c"));
     assert.equal(history.canRedo, false);
     assert.deepEqual(
-      history.applied().map((batch) => batch[0]?.op),
+      history.applied().map((batch) => batch.operations[0]?.op),
       ["a", "c"],
     );
     assert.equal(history.stateId, 3);
@@ -54,13 +56,27 @@ describe("EditHistory", () => {
     assert.equal(history.canUndo, false);
     // "a" stays applied: it can no longer be undone.
     assert.deepEqual(
-      history.applied().map((batch) => batch[0]?.op),
+      history.applied().map((batch) => batch.operations[0]?.op),
       ["a"],
     );
     assert.notEqual(history.stateId, 0);
     history.clear();
     assert.equal(history.stateId, 0);
     assert.equal(history.isPristine, true);
+  });
+
+  it("hands out state ids that are never reused, even after an undo", () => {
+    const history = new EditHistory(10, 1);
+    assert.equal(history.nextStateId, 1);
+    const a = history.push(entry("a"));
+    history.undo();
+    const b = history.push(entry("b"));
+    assert.notEqual(a.stateId, b.stateId);
+    assert.deepEqual(
+      history.applied().map((batch) => batch.stateId),
+      [b.stateId],
+    );
+    assert.equal(history.nextStateId, b.stateId + 1);
   });
 
   it("reports the page count of the current state", () => {

@@ -28,6 +28,8 @@ export interface OperationContext {
   locate(id: string): ElementLocation | undefined;
   /** The element as a query would return it. */
   element(id: string): PdfElement | undefined;
+  /** Ids of every element on a page, for what a page deletion removes. */
+  pageElementIds(pageIndex: number): readonly string[];
   /** Displayed size of a page in points. */
   pageSize(pageIndex: number): {
     readonly width: number;
@@ -57,6 +59,8 @@ export interface ElementLocation {
 
 export interface OperationResult {
   readonly createdIds: readonly string[];
+  /** Ids the operation made disappear. */
+  readonly removedIds?: readonly string[];
   readonly changedPages: readonly number[];
   readonly warnings: readonly ViewerWarning[];
 }

@@ -155,7 +155,30 @@ interface EditReceipt {
 ```
 
 An id is never reused: once an element is deleted or undone away, no later
-element gets its id in the same session.
+element gets its id in the same session. Ids of created elements derive from
+the history state the batch leads to, so a dry run names the ids the real
+apply then uses, and a replay of the same history reproduces them.
+`removedIds` lists what a call made disappear: the deleted elements of a batch
+(every element of a deleted page included), the created elements of an undone
+batch, and the deleted elements of a redone one.
+
+### Same-batch references
+
+A target of the form `"$<n>"` names the first element created by operation
+`n` of the same batch, which must come earlier and must be an operation that
+creates elements:
+
+```ts
+await session.apply([
+  { op: "insertTable", pageIndex: 0, at, width, rows },
+  { op: "setTableCell", target: "$0", row: 0, column: 1, text: "Q2" },
+]);
+```
+
+References are resolved while the batch is applied. One that lands on an
+element the operation cannot act on rejects the whole batch with
+`invalid-operation`, like any other issue, and leaves the document unchanged.
+Receipts report the final ids in `createdIds`.
 
 ## History and saving
 

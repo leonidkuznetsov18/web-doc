@@ -143,7 +143,10 @@ export const deleteElement: OperationHandler<DeleteElementOperation> = {
   apply(operation, context) {
     const { location } = anyTarget(operation.target, context)!;
     removeObjects(context, location);
-    return changed(location, { overflow: false });
+    return {
+      ...changed(location, { overflow: false }),
+      removedIds: [operation.target],
+    };
   },
 };
 

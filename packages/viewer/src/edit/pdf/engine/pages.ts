@@ -48,10 +48,12 @@ export const deletePage: OperationHandler<DeletePageOperation> = {
       issue("/pageIndex", "last-page", "The last page cannot be deleted");
   },
   apply(operation, context) {
+    const removedIds = context.pageElementIds(operation.pageIndex);
     context.pdfium.lib.FPDFPage_Delete(context.document, operation.pageIndex);
     context.removePageRecord(operation.pageIndex);
     return {
       createdIds: [],
+      removedIds,
       changedPages: fromIndex(operation.pageIndex, context.pageCount - 1),
       warnings: [],
     };

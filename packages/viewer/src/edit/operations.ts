@@ -93,6 +93,12 @@ export function decodeBinary(data: BinaryData): Uint8Array {
 }
 
 /** Deep copy of a validated batch, so later caller mutations cannot reach the history. */
+/** The operation index a `"$<n>"` same-batch target names, if it is one. */
+export function parseReference(target: string): number | undefined {
+  const match = /^\$(\d{1,4})$/.exec(target);
+  return match ? Number(match[1]) : undefined;
+}
+
 export function freezeOperations<T>(operations: readonly T[]): readonly T[] {
   return Object.freeze(operations.map((operation) => deepCopy(operation) as T));
 }

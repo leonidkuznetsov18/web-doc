@@ -8,7 +8,13 @@ import type {
   EditWorkerOpenResult,
   EditWorkerOperation,
 } from "../../worker-protocol.js";
-import type { EditEngine, EditEngineContext, EngineChange } from "../engine.js";
+import type {
+  EditEngine,
+  EditEngineContext,
+  EngineBatch,
+  EngineChange,
+  RestoreTarget,
+} from "../engine.js";
 import type {
   EditElement,
   EditFindOptions,
@@ -40,7 +46,7 @@ export async function loadPdfEditEngine(
   original: Uint8Array,
   context: EditEngineContext,
   options: PdfEditProviderOptions = {},
-): Promise<EditEngine> {
+): Promise<PdfEditEngineClient> {
   const worker = options.createWorker
     ? options.createWorker()
     : createPackagedWorker(options, context);
@@ -55,10 +61,12 @@ export async function loadPdfEditEngine(
   }
 }
 
-class PdfEditEngineClient implements EditEngine {
+export class PdfEditEngineClient implements EditEngine {
   readonly schemas = pdfOperationSchemas;
   readonly #rpc: WorkerRpcClient;
   readonly #context: EditEngineContext;
+  /** Highest state id seen, for batches passed as plain arrays. */
+  #stateId = 0;
 
   constructor(rpc: WorkerRpcClient, context: EditEngineContext) {
     this.#rpc = rpc;
@@ -117,11 +125,16 @@ class PdfEditEngineClient implements EditEngine {
     return this.#request("edit-validate", { operations }, signal);
   }
 
+  /** Plain operation arrays, as the unit tests pass them, become the next batch. */
   apply(
-    operations: readonly EditOperation[],
+    input: EngineBatch | readonly EditOperation[],
     signal: AbortSignal,
   ): Promise<EngineChange> {
-    return this.#request("edit-apply", { operations }, signal);
+    const batch: EngineBatch = Array.isArray(input)
+      ? { stateId: ++this.#stateId, operations: input }
+      : (input as EngineBatch);
+    this.#stateId = Math.max(this.#stateId, batch.stateId);
+    return this.#request("edit-apply", { batch }, signal);
   }
 
   async materialize(signal: AbortSignal): Promise<Uint8Array> {
@@ -134,10 +147,23 @@ class PdfEditEngineClient implements EditEngine {
   }
 
   restore(
-    batches: readonly (readonly EditOperation[])[],
+    input: RestoreTarget | readonly (readonly EditOperation[])[],
     signal: AbortSignal,
   ): Promise<void> {
-    return this.#request("edit-restore", { batches }, signal);
+    const target: RestoreTarget = Array.isArray(input)
+      ? {
+          batches: (input as readonly (readonly EditOperation[])[]).map(
+            (operations, index) => ({ stateId: index + 1, operations }),
+          ),
+        }
+      : (input as RestoreTarget);
+    const base = target.base?.slice().buffer;
+    return this.#request(
+      "edit-restore",
+      { batches: target.batches, ...(base ? { base } : {}) },
+      signal,
+      base ? [base] : undefined,
+    );
   }
 
   getElements(

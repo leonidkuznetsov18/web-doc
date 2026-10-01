@@ -44,6 +44,19 @@ export interface EditEngineProvider {
   createSession(core: EditSessionCore): EditSession;
 }
 
+/** A batch with the identity the core assigned to the state after it. */
+export interface EngineBatch {
+  /** Unique within the session and never reused; engines derive created ids from it. */
+  readonly stateId: number;
+  readonly operations: readonly EditOperation[];
+}
+
+/** What `restore` rebuilds: a base document (a checkpoint, else the original) plus batches. */
+export interface RestoreTarget {
+  readonly base?: Uint8Array;
+  readonly batches: readonly EngineBatch[];
+}
+
 export interface EngineChange {
   readonly createdIds: readonly string[];
   /** Ids that no longer exist after the batch, including every element of a deleted page. */
@@ -68,21 +81,20 @@ export interface EditEngine {
     operations: readonly EditOperation[],
     signal: AbortSignal,
   ): Promise<readonly OperationIssue[]>;
-  /** Applies an already validated batch to the working copy. */
-  apply(
-    operations: readonly EditOperation[],
-    signal: AbortSignal,
-  ): Promise<EngineChange>;
+  /**
+   * Applies an already validated batch to the working copy. Same-batch
+   * references (`"$<n>"` targets) are resolved here; one that resolves to an
+   * element the operation cannot act on rejects with `invalid-operation`.
+   */
+  apply(batch: EngineBatch, signal: AbortSignal): Promise<EngineChange>;
   /** Bytes of the current state; the original bytes when nothing changed. */
   materialize(signal: AbortSignal): Promise<Uint8Array>;
   /**
-   * Rebuilds the state for a history prefix: the original document with these
-   * batches applied in order. Used by undo, redo, reset, dry runs and recovery.
+   * Rebuilds a state: the base document (a checkpoint, else the original)
+   * with the batches applied in order. Used by undo, redo, reset, dry runs
+   * and recovery.
    */
-  restore(
-    batches: readonly (readonly EditOperation[])[],
-    signal: AbortSignal,
-  ): Promise<void>;
+  restore(target: RestoreTarget, signal: AbortSignal): Promise<void>;
   getElements(
     query: ElementQuery,
     signal: AbortSignal,
