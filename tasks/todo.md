@@ -823,13 +823,13 @@ resolved while applying; `applyJson`; read envelopes with `AbortSignal`.
 
 **Acceptance criteria:**
 
-- [ ] Ids after undo differ from the undone ones; `removedIds` lists deleted
+- [x] Ids after undo differ from the undone ones; `removedIds` lists deleted
       elements and the elements of deleted pages; `$n` resolves and fails as
       specified; every read carries `sessionId` and `revision`.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc`, `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 24
 

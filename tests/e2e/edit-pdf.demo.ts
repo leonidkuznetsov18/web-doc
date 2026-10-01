@@ -163,7 +163,7 @@ test("pdf editing walk-through", async ({ page }) => {
 
   await page.evaluate(async () => {
     const session = await window.__demo.viewer.edit();
-    const found = await session.findText("Costs stayed flat.");
+    const { items: found } = await session.findText("Costs stayed flat.");
     await session.replaceText({
       target: found[0].elementIds[0],
       text: "Costs fell 3% on lower cloud spend.",
@@ -250,11 +250,11 @@ test("pdf editing walk-through", async ({ page }) => {
 
   await page.evaluate(async () => {
     const session = await window.__demo.viewer.edit();
-    const shapes = await session.getElements({
+    const { items: shapes } = await session.getElements({
       pageIndex: 0,
       kinds: ["shape"],
     });
-    const boxes = await session.getElements({
+    const { items: boxes } = await session.getElements({
       pageIndex: 0,
       kinds: ["textBox"],
     });

@@ -218,10 +218,24 @@ emitted the event. When a session ends, calls still queued reject with
 Host UIs need to know what is on a page before they let the user touch it:
 
 ```ts
-const elements = await session.getElements({ pageIndex: 0, kinds: ["text"] });
-const hit = await session.elementsAt(0, { x: 120, y: 80 });
-const targets = await session.findText("Total", { pageRange: [0, 2] });
+const { items: elements, revision } = await session.getElements({
+  pageIndex: 0,
+  kinds: ["text"],
+});
+const { items: hit } = await session.elementsAt(0, { x: 120, y: 80 });
+const { items: targets } = await session.findText("Total", {
+  pageRange: [0, 2],
+});
+const { item } = await session.getElement(elements[0].id);
 ```
+
+Every read returns an envelope — `{ sessionId, revision, items }` for lists,
+`{ sessionId, revision, item }` for `getElement()` — naming the state it
+describes: reads run in the same queue as changes, so a read queued behind an
+`apply()` describes the document after it. A client that wants to act on what
+it read passes both values back as `expectedSessionId` and `expectedRevision`.
+Reads accept a `signal` (`findText()` takes it in its options) so a hover
+query can be dropped when a long change overtakes it.
 
 Every element carries a stable `id`, a format-specific `kind`, `pageIndex`,
 `bounds` in page space, optional `rotation`, `text` and `parentId`, and the

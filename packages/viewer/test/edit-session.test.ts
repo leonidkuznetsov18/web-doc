@@ -269,10 +269,15 @@ describe("EditSessionController", () => {
       edit.undo(),
     ]);
     assert.equal((results[0] as { revision: number }).revision, 1);
+    const read = results[1] as {
+      revision: number;
+      items: readonly { text?: string }[];
+    };
     assert.deepEqual(
-      (results[1] as readonly { text?: string }[]).map((e) => e.text),
+      read.items.map((e) => e.text),
       ["a"],
     );
+    assert.equal(read.revision, 1, "stamped with the state it ran at");
     assert.equal((results[2] as { revision: number }).revision, 2);
     assert.equal((results[3] as { revision: number }).revision, 3);
     assert.deepEqual(host.current, ["a", "two", "three"]);
@@ -454,21 +459,46 @@ describe("EditSessionController", () => {
   it("answers element and text queries through the engine", async () => {
     const { session: edit, apply } = session();
     await apply([{ op: "setText", pageIndex: 0, text: "alpha beta" }]);
+    const elements = await edit.getElements({ pageIndex: 0 });
     assert.deepEqual(
-      (await edit.getElements({ pageIndex: 0 })).map((element) => element.text),
+      elements.items.map((element) => element.text),
       ["alpha", "beta"],
     );
-    assert.equal((await edit.getElement("p0w1"))?.text, "beta");
-    assert.equal(await edit.getElement("missing"), undefined);
+    // Every read says which state it describes.
+    assert.equal(elements.sessionId, edit.sessionId);
+    assert.equal(elements.revision, 1);
+    assert.equal((await edit.getElement("p0w1")).item?.text, "beta");
+    assert.equal((await edit.getElement("missing")).item, undefined);
     assert.deepEqual(
-      (await edit.elementsAt(0, { x: 15, y: 1 })).map((element) => element.id),
+      (await edit.elementsAt(0, { x: 15, y: 1 })).items.map(
+        (element) => element.id,
+      ),
       ["p0w1"],
     );
     assert.deepEqual(
-      (await edit.findText("BETA")).map((target) => target.pageIndex),
+      (await edit.findText("BETA")).items.map((target) => target.pageIndex),
       [0],
     );
-    assert.deepEqual(await edit.findText("BETA", { caseSensitive: true }), []);
+    assert.deepEqual(
+      (await edit.findText("BETA", { caseSensitive: true })).items,
+      [],
+    );
+    // A read queued behind a change describes the state after it.
+    const [, queued] = await Promise.all([
+      apply([{ op: "setText", pageIndex: 0, text: "gamma" }]),
+      edit.getElements({ pageIndex: 0 }),
+    ]);
+    assert.equal(queued.revision, 2);
+    assert.deepEqual(
+      queued.items.map((element) => element.text),
+      ["gamma"],
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      edit.findText("x", { signal: controller.signal }),
+      rejectsWith("aborted"),
+    );
   });
 
   it("ends: pending calls abort, later calls fail, the engine is disposed", async () => {

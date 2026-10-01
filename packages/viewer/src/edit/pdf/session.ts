@@ -9,6 +9,9 @@ import type {
   HistoryOptions,
   OperationSchemaSet,
   PagePoint,
+  ReadItem,
+  ReadOptions,
+  ReadResult,
   SavedDocument,
   SaveOptions,
   TextTarget,
@@ -94,27 +97,33 @@ export class PdfSession implements PdfEditSession {
     this.#core.markSaved(stateToken);
   }
 
-  getElements(query?: ElementQuery): Promise<readonly PdfElement[]> {
-    return this.#core.getElements(query) as Promise<readonly PdfElement[]>;
+  getElements(
+    query?: ElementQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<PdfElement>> {
+    return this.#core.getElements(query, options) as Promise<
+      ReadResult<PdfElement>
+    >;
   }
 
-  getElement(id: string): Promise<PdfElement | undefined> {
-    return this.#core.getElement(id) as Promise<PdfElement | undefined>;
+  getElement(id: string, options?: ReadOptions): Promise<ReadItem<PdfElement>> {
+    return this.#core.getElement(id, options) as Promise<ReadItem<PdfElement>>;
   }
 
   elementsAt(
     pageIndex: number,
     point: PagePoint,
-  ): Promise<readonly PdfElement[]> {
-    return this.#core.elementsAt(pageIndex, point) as Promise<
-      readonly PdfElement[]
+    options?: ReadOptions,
+  ): Promise<ReadResult<PdfElement>> {
+    return this.#core.elementsAt(pageIndex, point, options) as Promise<
+      ReadResult<PdfElement>
     >;
   }
 
   findText(
     query: string,
     options?: EditFindOptions,
-  ): Promise<readonly TextTarget[]> {
+  ): Promise<ReadResult<TextTarget>> {
     return this.#core.findText(query, options);
   }
 

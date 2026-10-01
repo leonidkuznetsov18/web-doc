@@ -129,7 +129,9 @@ test("inserts and edits a text box, re-renders, saves and reloads it", async ({
     await fresh.load(saved, { fileName: "saved.pdf" });
     const freshText: string = await fresh.getPageText(0);
     const freshSession = await fresh.edit();
-    const elements = await freshSession.getElements({ pageIndex: 0 });
+    const { items: elements } = await freshSession.getElements({
+      pageIndex: 0,
+    });
     return {
       revision: session.state.revision,
       darker: afterInsert > before,
@@ -172,12 +174,12 @@ test("moves and deletes elements through the session", async ({ page }) => {
   const result = await page.evaluate(async () => {
     const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
     const session = await viewer.edit();
-    const before = await session.getElement("p0:o1");
+    const { item: before } = await session.getElement("p0:o1");
     await session.moveElement({ target: "p0:o1", by: { dx: 20, dy: 30 } });
-    const moved = await session.getElement("p0:o1");
-    const hits = await session.findText("Anchor");
+    const { item: moved } = await session.getElement("p0:o1");
+    const { items: hits } = await session.findText("Anchor");
     await session.deleteElement({ target: "p0:o0" });
-    const remaining = await session.getElements({ pageIndex: 0 });
+    const { items: remaining } = await session.getElements({ pageIndex: 0 });
     const text: string = await viewer.getPageText(0);
     return {
       before: before.bounds,
@@ -279,7 +281,7 @@ test("edits text that already exists in the file", async ({ page }) => {
       target: "p0:o0",
       style: { color: "#ff0000", fontSize: 30 },
     });
-    const styled = await session.getElement("p0:o0");
+    const { item: styled } = await session.getElement("p0:o0");
     return {
       warnings: inPlace.warnings.length,
       afterReplace,
@@ -322,7 +324,7 @@ test("draws shapes that render on the page", async ({ page }) => {
       fill: { color: "#000000" },
     });
     const after = await darkPixels();
-    const element = await session.getElement(receipt.createdIds[0]);
+    const { item: element } = await session.getElement(receipt.createdIds[0]);
     return { before, after, kind: element.kind, bounds: element.bounds };
   });
   expect(result.before).toBe(0);
@@ -366,7 +368,7 @@ test("inserts a PNG decoded in the worker", async ({ page }) => {
       mimeType: "image/png",
     });
     const after = await darkPixels();
-    const element = await session.getElement(receipt.createdIds[0]);
+    const { item: element } = await session.getElement(receipt.createdIds[0]);
     return { before, after, kind: element.kind, bounds: element.bounds };
   });
   expect(result.before).toBe(0);
@@ -393,8 +395,8 @@ test("inserts a table and edits a cell", async ({ page }) => {
     });
     const id = receipt.createdIds[0];
     await session.setTableCell({ target: id, row: 1, column: 1, text: "4.80" });
-    const element = await session.getElement(id);
-    const found = await session.findText("4.80");
+    const { item: element } = await session.getElement(id);
+    const { items: found } = await session.findText("4.80");
     const canvas = document.createElement("canvas");
     await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
     const pixels = canvas

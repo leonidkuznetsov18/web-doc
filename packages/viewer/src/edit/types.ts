@@ -280,13 +280,20 @@ export interface EditSessionBase<
   /** Tells the session the host has persisted the state named by `stateToken`. */
   markSaved(stateToken: string): void;
 
-  getElements(query?: ElementQuery): Promise<readonly TElement[]>;
-  getElement(id: string): Promise<TElement | undefined>;
-  elementsAt(pageIndex: number, point: PagePoint): Promise<readonly TElement[]>;
+  getElements(
+    query?: ElementQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TElement>>;
+  getElement(id: string, options?: ReadOptions): Promise<ReadItem<TElement>>;
+  elementsAt(
+    pageIndex: number,
+    point: PagePoint,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TElement>>;
   findText(
     query: string,
     options?: EditFindOptions,
-  ): Promise<readonly TextTarget[]>;
+  ): Promise<ReadResult<TextTarget>>;
 }
 
 export interface EditStateChange extends EditState {

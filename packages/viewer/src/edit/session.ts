@@ -27,6 +27,9 @@ import type {
   ElementQuery,
   HistoryOptions,
   OperationIssue,
+  ReadItem,
+  ReadOptions,
+  ReadResult,
   OperationSchemaSet,
   PagePoint,
   SavedDocument,
@@ -320,38 +323,61 @@ export class EditSessionController implements EditSessionBase<
     if (wasDirty !== this.#state.dirty) this.#emitState();
   }
 
-  getElements(query: ElementQuery = {}): Promise<readonly EditElement[]> {
-    return this.#enqueue(undefined, (signal) =>
-      this.#engine.getElements(query, signal),
+  getElements(
+    query: ElementQuery = {},
+    options: ReadOptions = {},
+  ): Promise<ReadResult<EditElement>> {
+    return this.#enqueue(options.signal, async (signal) =>
+      this.#items(await this.#engine.getElements(query, signal)),
     );
   }
 
-  getElement(id: string): Promise<EditElement | undefined> {
-    return this.#enqueue(undefined, async (signal) =>
-      this.#engine.getElement
-        ? this.#engine.getElement(id, signal)
+  getElement(
+    id: string,
+    options: ReadOptions = {},
+  ): Promise<ReadItem<EditElement>> {
+    return this.#enqueue(options.signal, async (signal) => {
+      const item = this.#engine.getElement
+        ? await this.#engine.getElement(id, signal)
         : (await this.#engine.getElements({}, signal)).find(
             (element) => element.id === id,
-          ),
-    );
+          );
+      return Object.freeze({
+        sessionId: this.sessionId,
+        revision: this.#revision,
+        item,
+      });
+    });
   }
 
   elementsAt(
     pageIndex: number,
     point: PagePoint,
-  ): Promise<readonly EditElement[]> {
-    return this.#enqueue(undefined, (signal) =>
-      this.#engine.elementsAt(pageIndex, point, signal),
+    options: ReadOptions = {},
+  ): Promise<ReadResult<EditElement>> {
+    return this.#enqueue(options.signal, async (signal) =>
+      this.#items(await this.#engine.elementsAt(pageIndex, point, signal)),
     );
   }
 
   findText(
     query: string,
     options: EditFindOptions = {},
-  ): Promise<readonly TextTarget[]> {
-    return this.#enqueue(undefined, (signal) =>
-      this.#engine.findText(query, options, signal),
+  ): Promise<ReadResult<TextTarget>> {
+    // The signal stays on this side; the rest may cross to a worker.
+    const { signal: own, ...engineOptions } = options;
+    return this.#enqueue(own, async (signal) =>
+      this.#items(await this.#engine.findText(query, engineOptions, signal)),
     );
+  }
+
+  /** Stamps a read with the state it describes: the revision at its queue position. */
+  #items<T>(items: readonly T[]): ReadResult<T> {
+    return Object.freeze({
+      sessionId: this.sessionId,
+      revision: this.#revision,
+      items: Object.freeze([...items]),
+    });
   }
 
   /**

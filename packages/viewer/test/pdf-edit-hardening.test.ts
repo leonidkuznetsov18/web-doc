@@ -148,7 +148,7 @@ describe("PDF sessions", () => {
       assert.equal(session.state.revision, 0);
       assert.equal(session.state.dirty, false);
       assert.equal(
-        (await session.getElements({ kinds: ["textBox"] })).length,
+        (await session.getElements({ kinds: ["textBox"] })).items.length,
         0,
       );
       assert.deepEqual((await session.save()).bytes, original);
@@ -156,7 +156,7 @@ describe("PDF sessions", () => {
       const real = await session.insertTextBox(fields);
       assert.deepEqual(real, { ...dry, revision: 1, dryRun: false });
       assert.equal(session.state.revision, 1);
-      assert.equal((await session.getElement("p0:n1.0.0"))?.text, "Maybe");
+      assert.equal((await session.getElement("p0:n1.0.0")).item?.text, "Maybe");
     } finally {
       await end();
     }
@@ -275,7 +275,7 @@ describe("PDF sessions", () => {
       const last = await run({ op: "deletePage", pageIndex: 0 });
       assert.equal(last.revision, 15);
       assert.equal(last.pageCount, 2);
-      const kinds = (await client.getElements({ pageIndex: 0 })).map(
+      const kinds = (await client.getElements({ pageIndex: 0 })).items.map(
         (element) => element.kind,
       );
       assert.deepEqual(kinds, ["text", "textBox", "shape", "table"]);
@@ -333,8 +333,11 @@ describe("ids and references (revision 2)", () => {
       await session.undo();
       const second = await session.insertTextBox(box("second"));
       assert.deepEqual(second.createdIds, ["p0:n2.0.0"]);
-      assert.equal(await session.getElement("p0:n1.0.0"), undefined);
-      assert.equal((await session.getElement("p0:n2.0.0"))?.text, "second");
+      assert.equal((await session.getElement("p0:n1.0.0")).item, undefined);
+      assert.equal(
+        (await session.getElement("p0:n2.0.0")).item?.text,
+        "second",
+      );
       // A dry run names the ids the real apply then uses.
       const dry = await session.insertTextBox(box("third"), { dryRun: true });
       const real = await session.insertTextBox(box("third"));
@@ -364,7 +367,7 @@ describe("ids and references (revision 2)", () => {
       assert.deepEqual(deleted.removedIds, [shapeId]);
       const undone = await session.undo();
       assert.deepEqual(undone.removedIds, []);
-      assert.equal((await session.getElement(shapeId))?.kind, "shape");
+      assert.equal((await session.getElement(shapeId)).item?.kind, "shape");
       const redone = await session.redo();
       assert.deepEqual(redone.removedIds, [shapeId]);
       const page = await session.deletePage({ pageIndex: 0 });
@@ -394,9 +397,10 @@ describe("ids and references (revision 2)", () => {
         { op: "moveElement", target: "$0", by: { dx: 5, dy: 5 } },
       ]);
       assert.deepEqual(receipt.createdIds, ["p0:n1.0.0"]);
-      assert.deepEqual((await session.getElement("p0:n1.0.0"))?.table?.rows, [
-        ["a", "c"],
-      ]);
+      assert.deepEqual(
+        (await session.getElement("p0:n1.0.0")).item?.table?.rows,
+        [["a", "c"]],
+      );
 
       const issuesOf = async (operations: readonly PdfOperation[]) => {
         try {
@@ -420,7 +424,7 @@ describe("ids and references (revision 2)", () => {
       );
       assert.equal(session.state.revision, 1);
       assert.equal(
-        (await session.getElements({ pageIndex: 0 })).length,
+        (await session.getElements({ pageIndex: 0 })).items.length,
         2,
         "nothing from the rejected batch remains",
       );
