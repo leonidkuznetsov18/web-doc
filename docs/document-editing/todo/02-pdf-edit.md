@@ -523,3 +523,14 @@ Resolved on 2026-10-01 together with the approval of this spec:
   lists the top-most element first.
 - Deferred, as listed under out of scope: annotations, paragraph reflow, bold
   or italic on existing text, font subsetting, right-to-left text.
+
+### Revision 2 (ACTION-821)
+
+- Latency of one `insertTextBox` through `apply()` — engine, incremental
+  save, PDF.js reopen and the page-count update — on fixture PDFs with one
+  text object per page, headless Chromium (Playwright) on an Apple M4 Pro,
+  2026-10-01: 10 pages 46 ms; 100 pages 130 ms for the first apply and 40 ms
+  for the second; 500 pages 72 ms and 56 ms. The first apply on a document
+  pays for PDF.js parsing it again from scratch; the steady state is well
+  inside the 1 s target and the 3 s ceiling the browser suite asserts.
+  (`tests/e2e/edit-pdf.spec.ts`, "measures apply() latency on a …-page PDF".)

@@ -494,5 +494,47 @@ test("applies one operation on a ten-page PDF within three seconds", async ({
     type: "apply-ms",
     description: elapsed.toFixed(0),
   });
+  console.log(`apply latency 10 pages: ${elapsed.toFixed(0)} ms`);
   expect(elapsed).toBeLessThan(3000);
 });
+
+/*
+ * Latency of one apply() — engine, incremental save, PDF.js reopen — on
+ * larger files. The first apply on a document pays for PDF.js parsing it
+ * again from scratch; the second shows the steady state. Numbers go into the
+ * PDF spec; only a loose ceiling is asserted so the run stays stable on slow
+ * machines.
+ */
+for (const pages of [100, 500]) {
+  test(`measures apply() latency on a ${pages}-page PDF`, async ({ page }) => {
+    test.setTimeout(120_000);
+    const original = await buildPdf(
+      Array.from({ length: pages }, (_, index) => `Page ${index + 1}`),
+    );
+    await loadPdf(page, original);
+    const timings = await page.evaluate(async () => {
+      const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+      const session = await viewer.edit();
+      const time = async (index: number) => {
+        const started = performance.now();
+        await session.insertTextBox({
+          pageIndex: index,
+          rect: { x: 72, y: 72, width: 200, height: 40 },
+          text: `Timed ${index}`,
+        });
+        return Math.round(performance.now() - started);
+      };
+      const first = await time(0);
+      const second = await time(1);
+      return { first, second, bytes: (await session.save()).bytes.length };
+    });
+    test.info().annotations.push({
+      type: `apply-ms-${pages}`,
+      description: `first ${timings.first}, second ${timings.second}, saved ${timings.bytes} bytes`,
+    });
+    console.log(
+      `apply latency ${pages} pages: first ${timings.first} ms, second ${timings.second} ms`,
+    );
+    expect(timings.second).toBeLessThan(10_000);
+  });
+}

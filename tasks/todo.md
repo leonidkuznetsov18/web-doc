@@ -896,11 +896,11 @@ PDF spec's Actual result.
 
 **Acceptance criteria:**
 
-- [ ] The three numbers are in the spec with the machine they were measured on.
+- [x] The three numbers are in the spec with the machine they were measured on.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 28
 

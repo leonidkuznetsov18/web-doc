@@ -586,9 +586,11 @@ outside the page, a bad row or column, ragged rows, too few or too many rows),
 
 ### Performance
 
-Each `apply()` saves the working copy and reopens it in PDF.js. One operation
-on a ten-page document resolves well inside a second on a developer machine;
-the browser suite fails above three seconds. Batch operations that belong
+Each `apply()` saves the working copy and reopens it in PDF.js. Measured in
+headless Chromium on an Apple M4 Pro with one text object per page: one
+`insertTextBox` takes about 46 ms on 10 pages, 130 ms then 40 ms on 100 pages
+and 72 ms then 56 ms on 500 pages (the first apply on a document pays for
+PDF.js parsing it again); the browser suite fails above three seconds. Batch operations that belong
 together, and keep `getElements()` queries to the pages you need — the engine
 loads a page only when an operation or a query touches it.
 
