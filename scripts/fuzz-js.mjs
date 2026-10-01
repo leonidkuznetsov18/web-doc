@@ -9,12 +9,16 @@ import {
   parseDelimitedBytes,
   sanitizeSvg,
 } from "../packages/viewer/dist/index.js";
+import { compactPdf } from "../packages/viewer/dist/edit/pdf/engine/compact.js";
 
 const root = resolve(import.meta.dirname, "..");
 const iterations = Number(process.env.FUZZ_ITERATIONS ?? 2_000);
 const maxCaseMs = Number(process.env.FUZZ_CASE_MS ?? 100);
 const seeds = [
   bytes("%PDF-1.7\n1 0 obj<<>>endobj"),
+  bytes(
+    "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 5 0 R >>\nstream\nBT (x) Tj ET\nendstream\nendobj\n5 0 obj\n12\nendobj\n6 0 obj\n<< /Orphan (endobj stream) >>\nendobj\nxref\n0 7\n0000000000 65535 f \ntrailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n9\n%%EOF\n",
+  ),
   Uint8Array.of(0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0),
   Uint8Array.of(0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1),
   bytes('<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>'),
@@ -48,7 +52,12 @@ const report = {
   failures,
   elapsedMs: Number((performance.now() - startedAt).toFixed(2)),
   slowestCaseMs: Number(slowestMs.toFixed(2)),
-  targets: ["detection/ZIP/CFB", "SVG sanitizer", "CSV/TSV parser"],
+  targets: [
+    "detection/ZIP/CFB",
+    "SVG sanitizer",
+    "CSV/TSV parser",
+    "PDF full-save compaction",
+  ],
 };
 await mkdir(resolve(root, "artifacts"), { recursive: true });
 await writeFile(
@@ -75,6 +84,10 @@ function exercise(sample) {
     try {
       parseDelimitedBytes(sample, format, 10_000);
     } catch {}
+  // The compaction pass of a full PDF save must refuse or finish, never hang.
+  try {
+    compactPdf(sample);
+  } catch {}
 }
 
 function mutate(seed) {

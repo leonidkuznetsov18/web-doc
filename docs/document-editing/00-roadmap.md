@@ -362,5 +362,11 @@ Stated so that hosts plan around them rather than discover them:
 
 ## Open questions
 
-None at the moment. New questions are recorded in the spec of the module that
-raises them.
+New questions are recorded in the spec of the module that raises them. Open
+now:
+
+- [02-pdf-edit.md § Open questions](todo/02-pdf-edit.md#open-questions): what
+  a full save does when the compaction pass cannot read PDFium's output
+  (currently it fails closed), and whether the viewer's reopen after a change
+  should switch from the incremental form, which PDFium makes about twice the
+  file size after any change, to the full form.

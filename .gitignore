@@ -13,5 +13,7 @@ test-results/
 docs/.vitepress/cache/
 artifacts/*.tgz
 artifacts/*.png
+# Proof screenshots and demo frames for Linear tickets; attached there, not committed.
+artifacts/proofs/
 artifacts/SHA256SUMS
 artifacts/release/

@@ -265,13 +265,18 @@ Which operations an element accepts is listed in its `operations` field:
   the original bytes, keeps earlier signed revisions intact, and leaves the
   old content recoverable; the docs say so. Without changes either mode
   returns the original bytes without calling PDFium.
-- The viewer's reopen after a change (`materialize("show")`) always uses the
-  incremental form, which is cheaper to produce and read; the content is the
-  same.
-- PDFium's incremental section also repeats every object it has parsed, not
-  only the changed ones (see [Spike results](#spike-results)). The engine
-  therefore loads only the pages an operation or a query needs, and **R2**
-  the docs state that an incremental save after many queries is larger; a
+- The viewer's reopen after a change (`materialize("show")`) uses the
+  incremental form; the content is the same as the full form's. Whether it
+  should use the full form instead is [open question 1](#open-questions).
+- PDFium's incremental section repeats every object it has parsed, not only
+  the changed ones (see [Spike results](#spike-results)), and
+  `FPDFPage_GenerateContent` — the call that rewrites a changed page — parses
+  every object of the document while checking whether the page's resources
+  are shared (`IsPageResourceShared` in `cpdf_pagecontentgenerator.cpp`). So
+  after any change an incremental save is the original file plus a copy of
+  every object, about twice the original size, whatever pages were read
+  (measured 2026-10-01, see [Compaction hardening](#compaction-hardening)).
+  The engine still loads only the pages an operation or a query needs; a
   test proves a full save is identical with and without prior queries.
 - Output is deterministic; a test guards it (see
   [Spike results](#spike-results)). **R2** A restore from a checkpoint (the
@@ -474,6 +479,28 @@ Resolved on 2026-10-01 together with the approval of this spec:
    based (the embedded font's `cmap`; CFF subsets always fall back) rather
    than GenOffice's ASCII-only rule; a subset fixture proves it.
 
+## Open questions
+
+1. **Reopen form after a change.** `materialize("show")` uses PDFium's
+   incremental save, which after any change is the original bytes plus a copy
+   of every object (about 2× the file; 103 MB for a 52 MB scan, in the same
+   time as a full save: 857 ms against 825 ms). The full form with the
+   compaction pass is the original size and renumbers objects, which nothing
+   in the session depends on (ids live in marks). Keep the incremental form
+   for the reopen, or switch to the full form? Raised by the peer review of
+   2026-10-01; Leonid's call.
+2. **Compaction failure behaviour.** When the compaction pass cannot read
+   PDFium's full-save output (a cross-reference stream, a malformed object
+   header, an unterminated stream), `save()` now fails closed with
+   `edit-failed` and `details.reason: "pdf-compaction"`, and the session keeps
+   its last committed bytes. The alternative is to return PDFium's
+   uncompacted output with a warning, which keeps the save working but leaves
+   deleted content recoverable in the file — the privacy property the full
+   save exists for. PDFium's full save has produced only classic objects with
+   a `trailer` in every run so far (corpus, fixtures, fuzz loop), so the
+   branch is untaken in practice. Fail closed, or fall back with a warning?
+   Raised by the peer review of 2026-10-01; Leonid's call.
+
 ## Actual result
 
 - PDFium 2.15.1 runs in `dist/workers/pdf-edit-worker.js` with
@@ -539,6 +566,51 @@ Resolved on 2026-10-01 together with the approval of this spec:
   reachable from the trailer and rewrites the xref, so deleted content is
   gone and the bytes do not depend on which pages were read; incremental
   stays the default for signed files. The viewer reopens the incremental form.
+- <a id="compaction-hardening"></a>**Compaction hardening (peer review,
+  2026-10-01).** The pass is a byte-level PDF lexer (comments, literal and
+  hex strings, names, numbers, keywords, delimiters) over PDFium's output: it
+  delimits each object through its dictionary and stream — a direct
+  `/Length`, an indirect one defined earlier in the file, or a measured
+  `endstream` when the length is missing or wrong — collects `n g R`
+  references, keeps the objects reachable from the trailer dictionary, and
+  writes a fresh cross-reference table with one subsection per run of object
+  numbers. Anything else (a cross-reference stream, a malformed header, an
+  unterminated object) raises `PdfCompactionError` (`edit-failed`,
+  `details.reason: "pdf-compaction"`); see open question 2. Proven by
+  `test/pdf-edit-compact.test.ts`: hand-written files whose names, strings
+  and comments spell `endobj` and `stream`, a reference split over lines, an
+  indirect length defined after its stream, a bare `null` object, an orphan
+  stream whose data says `endstream`; every public corpus PDF (two of them —
+  `hello.pdf`, `pdfjs-cff-cid.pdf` — use object and cross-reference streams,
+  which PDFium's full save turns into classic objects) edited, saved in full
+  and reopened in PDFium (page count and per-page text equal to the original,
+  the new box present) and in PDF.js 6.2.108 under Node (page count and
+  first-page text); idempotence (compacting the output changes nothing); and
+  `compactPdf` as a target of `scripts/fuzz-js.mjs` (2,000 mutations of a
+  classic PDF seed among others, slowest case 1.4 ms, no hang). The corpus
+  run found and fixed one fault: offsets that pointed at the whitespace before
+  each object (byte 0 for the first), which PDFium repaired by rebuilding the
+  table and, on `pdfjs-arabic-cid-truetype.pdf`, lost the page content on the
+  way. Sizes and times, Node 22 on an Apple M4 Pro, one `insertTextBox` then
+  a save, PDFium's save and the compaction pass timed separately:
+
+  | File                          | Original | Show (incremental) | Full save | + compaction | PDFium + pass |
+  | ----------------------------- | -------: | -----------------: | --------: | -----------: | ------------: |
+  | hello.pdf                     |  3,560 B |            7,759 B |   4,520 B |      4,157 B |  0.2 + 0.5 ms |
+  | pdfjs-arabic-cid-truetype.pdf | 39,370 B |           78,412 B |  38,713 B |     38,667 B |  0.3 + 0.9 ms |
+  | pdfjs-cff-cid.pdf             | 17,022 B |           34,134 B |  17,435 B |     17,078 B |  0.1 + 0.2 ms |
+  | pdfjs-complex-truetype.pdf    | 57,178 B |           90,498 B |  31,377 B |     31,353 B |  0.8 + 0.2 ms |
+  | pdfjs-mmtype1.pdf             |  8,044 B |           16,392 B |   8,246 B |      8,225 B |  0.1 + 0.2 ms |
+  | pdfjs-noembed-jis7.pdf        | 15,306 B |           31,418 B |  15,589 B |     15,567 B |  0.1 + 0.4 ms |
+  | pdfjs-standard-fonts.pdf      | 94,800 B |          191,863 B |  93,211 B |     93,155 B |  0.6 + 1.2 ms |
+  | 200 pages of raw RGB images   |  51.6 MB |  103.2 MB (825 ms) |   51.6 MB |      51.6 MB |    821 + 7 ms |
+
+  Every corpus file saves in full, compaction included, in under 2 ms; the
+  compaction pass costs 7 ms on the 51.6 MB file against 821 ms for PDFium's
+  own save (and 825 ms for the incremental one). PDFium's full save is not
+  always smaller than the original: it writes classic objects for files that
+  used object streams (`hello.pdf`, `pdfjs-cff-cid.pdf`).
+
 - The first-change warning names signatures, a DocMDP certification, a
   tagged structure (raw `/MarkInfo` or a structure tree on the first page)
   and a PDF/A claim (`pdfaid:part` in the uncompressed XMP) in

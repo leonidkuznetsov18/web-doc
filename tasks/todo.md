@@ -930,6 +930,36 @@ ACTION-821 proofs attached.
 
 **Estimated scope:** Small
 
+### Task 31: Compaction hardening (peer review)
+
+**Description:** The full-save compaction pass reads PDFium's output with a
+PDF lexer instead of string searches; the corpus, the adversarial fuzz loop
+and a 50 MB image-only file prove it; PDFium and PDF.js reopen every output;
+the failure behaviour and the show-time save mode are recorded as open
+questions for Leonid.
+
+**Acceptance criteria:**
+
+- [x] Hand-written edge cases (keywords inside names, strings and comments;
+      split references; indirect lengths defined later; `null` objects) keep
+      the reachable objects and drop the rest; the output is idempotent.
+- [x] Every corpus PDF edited, saved in full and reopened in PDFium (page
+      count, per-page text) and PDF.js 6.2.108 (page count, first-page text).
+- [x] `compactPdf` is a fuzz target; a 51.6 MB 200-page raw-image PDF saves
+      in full under a second; numbers in the PDF spec, compaction separately.
+- [x] Open questions recorded in the PDF spec and the roadmap.
+
+**Verification:**
+
+- [x] `npm run test --workspace web-doc`, `npm run fuzz:js`, `npm run check`
+
+**Dependencies:** Task 28
+
+**Files likely touched:** `src/edit/pdf/engine/compact.ts`,
+`test/pdf-edit-compact.test.ts`, `scripts/fuzz-js.mjs`, docs
+
+**Estimated scope:** Small
+
 ### Checkpoint F: revision 2 done
 
 - [x] Every R2 item of both definitions of done is checked
