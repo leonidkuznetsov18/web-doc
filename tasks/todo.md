@@ -1340,11 +1340,11 @@ paragraph; `npm run check` and the matrix; Linear proofs; ACTION-810 Done.
 
 **Acceptance criteria:**
 
-- [ ] The definition of done of `03-ooxml-package.md` is met in full.
+- [x] The definition of done of `03-ooxml-package.md` is met in full.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/ooxml-package.spec.ts`,
+- [x] `npm run test:e2e -- tests/e2e/ooxml-package.spec.ts`,
       `npm run test:e2e:matrix`, `npm run check`
 
 **Dependencies:** Task 42
@@ -1355,4 +1355,4 @@ paragraph; `npm run check` and the matrix; Linear proofs; ACTION-810 Done.
 
 ### Checkpoint H: package layer done
 
-- [ ] ACTION-810 Done with proofs; ACTION-812 and ACTION-813 unblocked
+- [x] ACTION-810 Done with proofs; ACTION-812 and ACTION-813 unblocked

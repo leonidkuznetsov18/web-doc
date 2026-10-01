@@ -94,6 +94,16 @@ DocumentViewer ── adapter.reopen/open ──► new handle, caches dropped,
 AdaptiveViewport repaints mounted pages (content revision in the render key)
 ```
 
+PPTX and DOCX engines share the OOXML package layer (`src/edit/ooxml/`,
+module 03 of the editing package): a ZIP container read in place whose
+untouched entries are copied byte for byte on save, parts inflated on demand
+through the platform `DecompressionStream`, an offset-preserving XML scanner,
+range patches verified by re-scan and read-back, and transactions that keep
+`[Content_Types].xml` and relationship parts consistent while writing them as
+patches too. Changed entries are stored, not deflated, so a saved package is
+byte-identical across engines. The layer is thread-agnostic; the format engine
+decides where it runs.
+
 Each format supplies its engine behind the internal `EditEngine` interface;
 the engine may live in a worker, and the core never assumes shared memory.
 After a change the viewer reopens the edited bytes through the regular adapter

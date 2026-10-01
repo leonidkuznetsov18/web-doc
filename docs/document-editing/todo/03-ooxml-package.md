@@ -1,8 +1,8 @@
 # Module 03. `ooxml-package` — the shared OOXML package layer
 
-**Status:** ✅ Approved by Leonid on 2026-10-02 with `store` as the default
-compression and `warn` for dangling relationship targets (Linear
-ACTION-810). Tasks T38–T43 in `tasks/todo.md` Phase 7.
+**Status:** ✅ Done 2026-10-02 (T38–T43, Linear ACTION-810). Approved by
+Leonid on 2026-10-02 with `store` as the default compression and `warn` for
+dangling relationship targets.
 
 ## Goal
 
@@ -725,4 +725,73 @@ Task 38, 2026-10-02, Node 22.23 on an Apple M4 Pro
 
 ## Actual result
 
-To be filled as the tasks land.
+Implemented 2026-10-02 in `packages/viewer/src/edit/ooxml/` (`zip.ts`,
+`writer.ts`, `names.ts`, `opc.ts`, `xml.ts`, `patch.ts`, `transaction.ts`,
+`package.ts`), tasks 38–43 of `tasks/todo.md`:
+
+- **Container.** `parseZip` reads the end record and the central directory;
+  local records are located on first use and checked against the directory
+  (data descriptors included); `inflateEntry` meters the platform
+  `DecompressionStream` against the declared size and checks the CRC-32.
+  `writeZip` copies untouched entries' local and central records byte for
+  byte (the offset rewritten), writes changed entries stored — deflated on
+  request — with their name, extra field, time and attributes kept, appends
+  new entries with the fixed 1980 time, drops removed ones, keeps the
+  comment, and refuses ZIP64 output before writing.
+- **Package.** `OoxmlPackage` holds the original, lazily inflated parts, an
+  overlay of replaced, added and removed parts, O(1) snapshots, scanned
+  parts cached per overlay revision, content types and relationships as
+  models, and `save()` that returns the original bytes without changes.
+- **Scanner.** A hand-written tokenizer over the decoded text; every element
+  carries the exact range of its tags, content and attributes; namespaces
+  are resolved in scope; declaration, comments, PIs, CDATA and DOCTYPE are
+  opaque ranges; predefined and numeric entities are decoded; non-UTF-8
+  parts are `unsupported-part`, unparsable ones `malformed-xml` with the
+  offset.
+- **Patches.** Builders for content, element, insertion, append and
+  attribute changes; patches apply from the end, the part is re-scanned and
+  every expectation checked by element positions mapped through the
+  preceding patches (a refinement of the draft's tree paths: an insertion
+  before an ancestor in the same transaction must not break the check).
+- **Transactions.** Part patches, replaced, added and removed parts,
+  relationship adds and removes (`rId` allocation fills the smallest gap),
+  content-type Overrides and Defaults, media stored once per SHA-256 and
+  related from the source part, unique part names; everything is computed
+  and verified in memory, then committed to the overlay at once; a removed
+  part takes its own `.rels` part and Override along; relationships still
+  pointing at a removed part come back as `fidelity-degraded` warnings with
+  `details.reason: "dangling-relationship"` (decision 9). A transaction
+  older than the package's revision is an `edit-conflict`.
+- **Differences from the draft API**, all recorded in the API section:
+  `addRelationship` and `addMedia` return promises (they read the
+  relationships part); patch expectations use positions, not paths;
+  `CommittedChange.warnings` carries the dangling-target warnings.
+- **Tests** (`ooxml-zip`, `ooxml-writer`, `ooxml-xml`, `ooxml-opc`,
+  `ooxml-patch`, `ooxml-package`; 29 tests): every accepted and refused
+  archive shape; no-change rebuild byte-identical for hand-built archives
+  and every corpus package; one changed part leaves every other entry's
+  local and central records untouched; every XML part of every corpus
+  package scans with ranges that reproduce the source; every builder's
+  read-back; overlapping, stale, malformed and mismatching patches;
+  content types and relationships written as patches that keep their bytes;
+  media deduplication; snapshots; a transaction whose last part fails; a
+  macro-enabled package whose `vbaProject.bin` survives untouched and is
+  never read; the full cycle on every corpus and fixture package;
+  `tests/e2e/ooxml-package.spec.ts` loads packages patched by the layer into
+  the viewer, renders them, finds the edit in the extracted text and parses
+  every changed part with the browser's `DOMParser`. The ZIP reader and the
+  scanner are `fuzz:js` targets. Five cases joined the adversarial manifest.
+- **Performance**, Node 22 on an Apple M4 Pro, one text replaced in one
+  part:
+
+  | Package                     |      Size |   Open |        Scan of the part | Commit |   Save |
+  | --------------------------- | --------: | -----: | ----------------------: | -----: | -----: |
+  | sample.docx (19 parts)      |  14,860 B | 0.5 ms |   `document.xml` 5.1 ms | 1.1 ms | 0.5 ms |
+  | sample.pptx (46 parts)      |  39,083 B | 0.1 ms |     `slide1.xml` 0.3 ms | 0.5 ms | 0.1 ms |
+  | chart-point-colors.pptx     |  41,693 B | 0.1 ms |   `slide1.xml` < 0.1 ms | 0.4 ms | 0.1 ms |
+  | oversized-inline-image.docx |  37,126 B | 0.1 ms | `document.xml` < 0.1 ms | 0.3 ms | 0.1 ms |
+  | synthetic 500-slide deck    | 364,496 B | 1.0 ms |   `slide250.xml` 0.9 ms | 1.2 ms | 1.4 ms |
+
+  The largest corpus part, the 438 KB `stylesWithEffects.xml` of the image
+  DOCX, scans in 7.6 ms. A saved package grows by the stored size of the
+  parts an edit touched (decision 2): 1.5–2 KB on these files.
