@@ -67,3 +67,36 @@ All input is untrusted. The runtime will enforce source size, decompression, ent
 - The TypeScript/Rust boundary stays coarse-grained; page buffers and text maps cross it, not individual glyph calls.
 - Upstream upgrades require corpus, browser, size, license, and API qualification before changing a pin.
 - The public entry point is `ViewerClient.create`; one client owns shared policy and one or more independently disposable viewer instances.
+
+## Editing layer
+
+Status: added with the document-editing package on 2026-10-01.
+
+Editing is a session layered over the same adapters, not a second rendering
+path. `DocumentViewer.edit()` asks the loaded document's adapter for an edit
+engine provider, starts the engine lazily with a copy of the original bytes, and
+wraps it in a format-independent session (`src/edit/`): JSON operations checked
+against exported schemas, a linear history over the immutable original,
+revisions for optimistic concurrency, atomic batches with rollback, and
+`save()`.
+
+```text
+Host UI / AI agent
+        │ JSON operations, typed methods, expectedRevision
+        ▼
+EditSessionController ── validate → engine.apply → engine.materialize
+        │                                   │
+        │ replaceDocument(bytes)            │ edited bytes
+        ▼                                   ▼
+DocumentViewer ── adapter.reopen/open ──► new handle, caches dropped,
+        │                                 view state kept, events
+        ▼
+AdaptiveViewport repaints mounted pages (content revision in the render key)
+```
+
+Each format supplies its engine behind the internal `EditEngine` interface;
+the engine may live in a worker, and the core never assumes shared memory.
+After a change the viewer reopens the edited bytes through the regular adapter
+and swaps handles, so every read API and the canvas show the file `save()`
+would return. The host draws its own controls, using `pageToClient` and
+`clientToPage` to place them over the painted pages.

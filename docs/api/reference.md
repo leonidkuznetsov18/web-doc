@@ -77,7 +77,7 @@ interface ViewerState {
 
 `viewer.state` is replaced, not mutated. `getDocumentInfo()` returns format,
 render unit, count, optional sheet geometry/warnings, and capabilities
-(`textSelection`, `cellSelection`, `search`, and `thumbnails`). Page-oriented
+(`textSelection`, `cellSelection`, `search`, `thumbnails`, and `editing`). Page-oriented
 backends may also return `pageSizes`, an ordered `{ width, height }[]` in natural
 CSS pixels at zoom 1; the managed viewport uses it for mixed-size PDF and Office
 documents instead of coercing every page to A4. The image adapter reports the
@@ -126,15 +126,15 @@ The optional controls, shortcuts, localization, and CSS variables are documented
 
 `fuzzy` enables a fallback that runs only when the exact search finds nothing. [Fuse.js](https://www.fusejs.io/) selects candidate pages and a whole-query edit alignment locates one contiguous passage: the query is compared to each page's text with a bounded edit budget, so spacing, line breaks, list bullets, table separators and typographic punctuation may differ from the source, and every hit is mapped back to the verbatim page text so highlights land on the original. Pages are compared nearest to `nearPage` first, a batch at a time, and the scan stops at the first batch that holds the passage. `true` uses the viewer's defaults (`ViewerOptions.search.fuzzy`, so an integration can turn it on once at `createViewer`), an object enables it and overrides them, `false` disables it for one call:
 
-| Option              | Default | Meaning                                                                                                               |
-| ------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| `threshold`         | `0.3`   | Fuse.js edit budget per 32-character chunk of the query, `0` exact to `1` anything.                                   |
-| `maxScore`          | `0.4`   | Highest Fuse.js score and whole-passage edit ratio allowed (`0` perfect); raise it to accept a passage that spans a page break.   |
-| `maxQueryLength`    | `600`   | Query characters considered; the matcher's cost grows with the query and a passage is identified well before its end. |
-| `maxPageTextLength` | `20000` | Characters of each page's text considered.                                                                            |
-| `pagesPerBatch`     | `2`     | Main-thread fallback only: pages compared per batch, yielding to the event loop between batches.                      |
-| `pageWindow`        | `12`    | With `nearPage`, how many pages nearest to the hint are scanned before giving up; without a hint every page is.       |
-| `worker`            | `true`  | Match in a Web Worker that keeps the document's Fuse.js index; falls back to the main thread when unavailable.        |
+| Option              | Default | Meaning                                                                                                                         |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `threshold`         | `0.3`   | Fuse.js edit budget per 32-character chunk of the query, `0` exact to `1` anything.                                             |
+| `maxScore`          | `0.4`   | Highest Fuse.js score and whole-passage edit ratio allowed (`0` perfect); raise it to accept a passage that spans a page break. |
+| `maxQueryLength`    | `600`   | Query characters considered; the matcher's cost grows with the query and a passage is identified well before its end.           |
+| `maxPageTextLength` | `20000` | Characters of each page's text considered.                                                                                      |
+| `pagesPerBatch`     | `2`     | Main-thread fallback only: pages compared per batch, yielding to the event loop between batches.                                |
+| `pageWindow`        | `12`    | With `nearPage`, how many pages nearest to the hint are scanned before giving up; without a hint every page is.                 |
+| `worker`            | `true`  | Match in a Web Worker that keeps the document's Fuse.js index; falls back to the main thread when unavailable.                  |
 
 With `worker` on, the first fuzzy search of a document ships its page texts to `workers/fuzzy-search-worker.js` (served next to the other worker assets), which builds one Fuse.js index and answers every later search off the main thread — a citation lookup tries several anchors in a row, and a long document never blocks the page while they run. A worker that cannot start (no `Worker`, a missing asset) is logged through `ViewerLogger.warn` and the main-thread matcher takes over for the rest of the document's life.
 
@@ -179,6 +179,19 @@ with code `aborted`. See [headless rendering](./headless.md).
 
 `getOriginalBytes()` returns a defensive copy while a document is open. `downloadOriginal(fileName?)` returns a `Blob` containing the exact original bytes and, in a browser document, also starts a download. Legacy Office conversion output is never substituted for the original.
 
+## Editing
+
+| Method                           | Effect                                                                                                                       |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `edit(options?)`                 | Start editing the loaded document, or return the session already started. Rejects with `edit-unsupported` without an engine. |
+| `getEditSession()`               | The active session, or `undefined`.                                                                                          |
+| `pageToClient(pageIndex, rect)`  | Client-space rectangle of a page-space rectangle; `undefined` when the page is not mounted.                                  |
+| `clientToPage(clientX, clientY)` | Page under a client-space point and the point in page space; `undefined` outside pages.                                      |
+
+The session API — operations, schemas, history, saving, inspection, events and
+errors — is described in the [editing API](./editing.md). The limits
+`maxEditOperations` (500) and `maxEditHistory` (200) join `ResourceLimits`.
+
 ## Events
 
 `viewer.on(type, listener)` returns an unsubscribe function.
@@ -195,9 +208,11 @@ with code `aborted`. See [headless rendering](./headless.md).
 | `selectionchange` | `TextSelection \| CellRange \| null`.                                 |
 | `warning`         | Non-fatal `ViewerWarning`.                                            |
 | `error`           | Serializable `ViewerErrorData`. Promise-returning calls still reject. |
+| `editstatechange` | `EditState` plus `active` and `format`; see the editing API.          |
+| `documentchange`  | `{ revision, reason, changedPages, pageCount }` after an edit.        |
 
 ## Errors and warnings
 
-Catch `ViewerError` and branch on its stable `code`: `unsupported-format`, `fidelity-unsupported`, `invalid-file`, `encrypted-document`, `resource-limit`, `network-error`, `aborted`, `font-unavailable`, `render-failed`, `worker-crashed`, `lifecycle-error`, or `internal`. `fidelity-unsupported` remains available for a recognized format/revision that no qualified backend can render without inventing or losing material structure. Qualified Word 97–2003 DOC uses the structured conversion path; older or malformed revisions fail typed conversion instead of falling back to plain text.
+Catch `ViewerError` and branch on its stable `code`: `unsupported-format`, `fidelity-unsupported`, `invalid-file`, `encrypted-document`, `resource-limit`, `network-error`, `aborted`, `font-unavailable`, `render-failed`, `worker-crashed`, `lifecycle-error`, `edit-unsupported`, `invalid-operation`, `edit-conflict`, `edit-failed`, or `internal`. `fidelity-unsupported` remains available for a recognized format/revision that no qualified backend can render without inventing or losing material structure. Qualified Word 97–2003 DOC uses the structured conversion path; older or malformed revisions fail typed conversion instead of falling back to plain text.
 
 Warnings use `format-hint-mismatch`, `unsupported-feature`, `font-substitution`, `external-resource-blocked`, or `fidelity-degraded`. Warnings report explicit degradation and do not silently enable active content.

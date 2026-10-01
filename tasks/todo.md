@@ -256,13 +256,13 @@ page to the documentation sidebar.
 
 **Acceptance criteria:**
 
-- [ ] Every public type, method, event, error code, limit and flag of the core
+- [x] Every public type, method, event, error code, limit and flag of the core
       is documented.
-- [ ] The documentation site builds.
+- [x] The documentation site builds.
 
 **Verification:**
 
-- [ ] `npm run pages:build`
+- [x] `npm run pages:build`
 
 **Dependencies:** Task 7
 
