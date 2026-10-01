@@ -55,9 +55,3 @@ export function issueCollector(
   return (path, code, message) =>
     issues.push({ operationIndex, path, code, message });
 }
-
-/** Handlers by operation name; tasks add theirs as they ship. */
-export const pptxHandlers: ReadonlyMap<string, PptxOperationHandler> = new Map<
-  string,
-  PptxOperationHandler
->([]);

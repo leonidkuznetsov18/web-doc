@@ -1408,15 +1408,15 @@ scale dropping, `invalid-text` and `invalid-range`.
 
 **Acceptance criteria:**
 
-- [ ] Whole and ranged replacements keep untouched runs' bytes and the
+- [x] Whole and ranged replacements keep untouched runs' bytes and the
       first run's `a:rPr`; `\n` splits paragraphs and `\v` becomes `a:br`.
-- [ ] `setTextStyle` writes only the given properties; theme colours round
+- [x] `setTextStyle` writes only the given properties; theme colours round
       trip as `{ theme, mods }`.
-- [ ] Both operations render in the viewer and survive save and reload.
+- [x] Both operations render in the viewer and survive save and reload.
 
 **Verification:**
 
-- [ ] `node --test .test-dist/test/pptx-edit-text.test.js`; the e2e spec
+- [x] `node --test .test-dist/test/pptx-edit-text.test.js`; the e2e spec
 
 **Dependencies:** Task 44
 

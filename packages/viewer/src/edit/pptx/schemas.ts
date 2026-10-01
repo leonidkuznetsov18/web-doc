@@ -248,7 +248,10 @@ const all: Readonly<Record<string, JsonSchema>> = {
 };
 
 /** Operations with an engine handler; grows as the tasks land. */
-export const IMPLEMENTED_OPERATIONS: readonly string[] = [];
+export const IMPLEMENTED_OPERATIONS: readonly string[] = [
+  "replaceText",
+  "setTextStyle",
+];
 
 export const pptxOperationSchemas: OperationSchemaSet = Object.freeze({
   format: "pptx",

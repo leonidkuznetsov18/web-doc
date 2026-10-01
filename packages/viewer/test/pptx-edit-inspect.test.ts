@@ -591,8 +591,8 @@ describe("PPTX inspection (pptx-edit)", () => {
       assert.deepEqual(saved.bytes, deck);
       assert.equal(saved.revision, 0);
       const unknown: EditOperation = {
-        op: "replaceText",
-        ...{ target: "sld1:2", text: "x" },
+        op: "nope",
+        ...{ target: "sld1:2" },
       };
       await assert.rejects(session.applyJson([unknown]), {
         code: "invalid-operation",

@@ -222,6 +222,108 @@ test("reads the elements of a built deck like the renderer: rotation, groups and
   }
 });
 
+/** Dark pixels inside a slide-space rectangle of the first page's canvas. */
+async function darkPixelsIn(
+  page: Page,
+  pageIndex: number,
+  rect: { x: number; y: number; width: number; height: number },
+): Promise<number> {
+  return page.evaluate(
+    async ({ pageIndex, rect }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(pageIndex, canvas, {
+        zoom: 1,
+        devicePixelRatio: 1,
+      });
+      const context = canvas.getContext("2d")!;
+      const x = Math.max(0, Math.floor(rect.x));
+      const y = Math.max(0, Math.floor(rect.y));
+      const width = Math.min(canvas.width - x, Math.ceil(rect.width));
+      const height = Math.min(canvas.height - y, Math.ceil(rect.height));
+      const { data } = context.getImageData(x, y, width, height);
+      let dark = 0;
+      for (let offset = 0; offset < data.length; offset += 4)
+        if (data[offset]! + data[offset + 1]! + data[offset + 2]! < 384)
+          dark += 1;
+      return dark;
+    },
+    { pageIndex, rect },
+  );
+}
+
+test("replaces and restyles text so the renderer shows it, and the edit survives save and reload", async ({
+  page,
+}) => {
+  const original = new Uint8Array(
+    await readFile(new URL("sample.pptx", CORPUS)),
+  );
+  await loadDeck(page, original, "sample.pptx");
+  const before = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __viewer: any }).__viewer;
+    const session = await viewer.edit();
+    const title = (await session.getElement("sld1:2")).item;
+    return { bounds: title.bounds, text: await viewer.getPageText(0) };
+  });
+  expect(before.text).toContain("Title of the first slide");
+  const darkBefore = await darkPixelsIn(page, 0, before.bounds);
+
+  const after = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __viewer: any }).__viewer;
+    const session = viewer.getEditSession();
+    const receipt = await session.replaceText({
+      target: "sld1:2",
+      text: "Patched by web-doc",
+    });
+    const styled = await session.setTextStyle({
+      target: "sld1:2",
+      style: { bold: true, color: "#FF0000", fontSize: 60 },
+    });
+    const title = (await session.getElement("sld1:2")).item;
+    const saved = await session.save();
+    return {
+      revision: styled.revision,
+      changedPages: receipt.changedPages,
+      text: await viewer.getPageText(0),
+      title,
+      saved: Array.from(saved.bytes as Uint8Array),
+      dirty: session.state.dirty,
+    };
+  });
+  expect(after.revision).toBe(2);
+  expect(after.changedPages).toEqual([0]);
+  expect(after.dirty).toBe(true);
+  expect(after.text).toContain("Patched by web-doc");
+  expect(after.text).not.toContain("Title of the first slide");
+  expect(after.title.text).toBe("Patched by web-doc");
+  expect(after.title.textStyle).toMatchObject({
+    bold: true,
+    color: "#FF0000",
+    fontSize: 60,
+  });
+  const darkAfter = await darkPixelsIn(page, 0, before.bounds);
+  expect(darkAfter).toBeGreaterThan(50);
+  expect(darkAfter).not.toBe(darkBefore);
+
+  // The saved bytes reopen with the edit; nothing else of the deck changed.
+  const reloaded = await page.evaluate(async (data) => {
+    const viewer = (window as unknown as { __viewer: any }).__viewer;
+    await viewer.load(new Uint8Array(data), { fileName: "edited.pptx" });
+    const session = await viewer.edit();
+    const title = (await session.getElement("sld1:2")).item;
+    return {
+      text: await viewer.getPageText(0),
+      pageCount: viewer.state.pageCount,
+      bold: title.textStyle.bold,
+      second: await viewer.getPageText(1),
+    };
+  }, after.saved);
+  expect(reloaded.pageCount).toBe(2);
+  expect(reloaded.text).toContain("Patched by web-doc");
+  expect(reloaded.bold).toBe(true);
+  expect(reloaded.second).toContain("This is the second slide");
+});
+
 test("spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout", async ({
   page,
 }) => {

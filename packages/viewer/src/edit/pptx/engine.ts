@@ -29,11 +29,8 @@ import {
 } from "./elements.js";
 import { frameContains, rectsIntersect } from "./geometry.js";
 import { DeckModel, type SlideRecord } from "./model.js";
-import {
-  issueCollector,
-  pptxHandlers,
-  type PptxOperationContext,
-} from "./operations.js";
+import { pptxHandlers } from "./handlers.js";
+import { issueCollector, type PptxOperationContext } from "./operations.js";
 import { pptxOperationSchemas } from "./schemas.js";
 import type {
   PptxElement,
