@@ -373,6 +373,15 @@ export interface PdfEditSession extends EditSessionBase<
     options?: ReadOptions,
   ): Promise<ReadResult<TextRange>>;
   /**
+   * Elements under a point from the session's main-thread geometry cache,
+   * without waiting: the last `getElements({ pageIndex })` result of the
+   * page, refreshed after every committed change. A page never read answers
+   * no items; `cachedPages` says which pages answer.
+   */
+  elementsAtSync(pageIndex: number, point: PagePoint): ReadResult<PdfElement>;
+  /** Pages whose geometry the cache holds. */
+  readonly cachedPages: readonly number[];
+  /**
    * Where a range taken at `fromRevision` is now, after the batches, undos,
    * redos and resets of this session since then; none when its element is
    * gone or the revision is older than the session remembers.

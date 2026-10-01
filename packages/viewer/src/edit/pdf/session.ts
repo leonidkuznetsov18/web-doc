@@ -1,6 +1,8 @@
 import type { TextSelection } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
+import { reportError } from "../session.js";
+import { rectContains } from "./engine/geometry.js";
 import { mapRangeThrough, type MutationRecord } from "./range-map.js";
 import { resolveSelection } from "./selection.js";
 import type {
@@ -64,6 +66,11 @@ export class PdfSession implements PdfEditSession {
   /** Batches applied and not undone, and those undone and not redone. */
   #applied: (readonly EditOperation[])[] = [];
   #undone: (readonly EditOperation[])[] = [];
+  /** The last elements read per page, with the revision they describe. */
+  readonly #geometry = new Map<
+    number,
+    { readonly revision: number; readonly elements: readonly PdfElement[] }
+  >();
 
   constructor(core: EditSessionCore) {
     this.#core = core;
@@ -126,6 +133,7 @@ export class PdfSession implements PdfEditSession {
     const last = this.#log.at(-1)?.revision ?? 0;
     // A dry run or a no-op leaves the revision alone and changes nothing.
     if (receipt.dryRun || receipt.revision === last) return;
+    this.#refreshGeometry(receipt);
     let involved: readonly EditOperation[] = operations;
     switch (kind) {
       case "apply":
@@ -167,13 +175,65 @@ export class PdfSession implements PdfEditSession {
     return this.#core.addAsset(data, options);
   }
 
-  getElements(
+  async getElements(
     query?: ElementQuery,
     options?: ReadOptions,
   ): Promise<ReadResult<PdfElement>> {
-    return this.#core.getElements(query, options) as Promise<
-      ReadResult<PdfElement>
-    >;
+    const result = (await this.#core.getElements(
+      query,
+      options,
+    )) as ReadResult<PdfElement>;
+    // A whole page's elements feed the geometry cache.
+    if (
+      query?.pageIndex !== undefined &&
+      query.kinds === undefined &&
+      query.intersects === undefined
+    )
+      this.#remember(query.pageIndex, result);
+    return result;
+  }
+
+  elementsAtSync(pageIndex: number, point: PagePoint): ReadResult<PdfElement> {
+    const cached = this.#geometry.get(pageIndex);
+    return Object.freeze({
+      sessionId: this.sessionId,
+      revision: cached?.revision ?? this.state.revision,
+      items: Object.freeze(
+        (cached?.elements ?? [])
+          .filter((element) => rectContains(element.bounds, point))
+          .reverse(),
+      ),
+    });
+  }
+
+  get cachedPages(): readonly number[] {
+    return [...this.#geometry.keys()].sort((a, b) => a - b);
+  }
+
+  #remember(pageIndex: number, result: ReadResult<PdfElement>): void {
+    const cached = this.#geometry.get(pageIndex);
+    if (cached && cached.revision > result.revision) return;
+    this.#geometry.set(pageIndex, {
+      revision: result.revision,
+      elements: result.items,
+    });
+  }
+
+  /**
+   * After a committed change the changed pages' entries are stale: they are
+   * dropped and, while the page still exists, read again in the background
+   * so the next hover answers from the new revision.
+   */
+  #refreshGeometry(receipt: EditReceipt): void {
+    for (const pageIndex of [...this.#geometry.keys()]) {
+      const changed =
+        pageIndex >= receipt.pageCount ||
+        receipt.changedPages.includes(pageIndex);
+      if (!changed) continue;
+      this.#geometry.delete(pageIndex);
+      if (pageIndex < receipt.pageCount)
+        this.getElements({ pageIndex }).catch(reportError);
+    }
   }
 
   getElement(id: string, options?: ReadOptions): Promise<ReadItem<PdfElement>> {

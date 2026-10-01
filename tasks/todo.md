@@ -1131,14 +1131,14 @@ it.
 
 **Acceptance criteria:**
 
-- [ ] After `getElements({ pageIndex: 0 })`, `elementsAtSync(0, point)`
+- [x] After `getElements({ pageIndex: 0 })`, `elementsAtSync(0, point)`
       returns the same elements as `elementsAt` without awaiting; while an
       `apply()` is queued it still answers from the previous revision and
       reports that revision; after the receipt the changed page is refreshed.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/pdf-edit-session.test.ts`)
+- [x] `npm run test --workspace web-doc` (`test/pdf-edit-session.test.ts`)
 
 **Dependencies:** Task 32
 

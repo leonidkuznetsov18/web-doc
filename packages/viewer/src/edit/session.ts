@@ -923,7 +923,7 @@ function newSessionId(): string {
 }
 
 /** Surfaces a listener's exception without failing the call that emitted the event. */
-function reportError(error: unknown): void {
+export function reportError(error: unknown): void {
   const report = (globalThis as { reportError?: (error: unknown) => void })
     .reportError;
   if (report) report(error);
