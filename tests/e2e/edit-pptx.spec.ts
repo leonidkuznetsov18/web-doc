@@ -324,6 +324,134 @@ test("replaces and restyles text so the renderer shows it, and the edit survives
   expect(reloaded.second).toContain("This is the second slide");
 });
 
+test("recolours, moves, resizes, deletes and inserts shapes that the renderer draws where the engine says", async ({
+  page,
+}) => {
+  const original = new Uint8Array(
+    await readFile(new URL("sample.pptx", CORPUS)),
+  );
+  await loadDeck(page, original, "sample.pptx");
+  const result = await page.evaluate(
+    async ({ renderer }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const title = (await session.getElement("sld1:2")).item;
+      const receipt = await session.apply([
+        {
+          op: "setShapeStyle",
+          target: "sld1:2",
+          fill: "#FF0000",
+          line: "none",
+        },
+        { op: "moveElement", target: "sld1:3", by: { dx: 40, dy: 60 } },
+        {
+          op: "resizeElement",
+          target: "sld1:3",
+          rect: { x: 200, y: 400, width: 300, height: 80 },
+        },
+        {
+          op: "insertTextBox",
+          pageIndex: 1,
+          rect: { x: 100, y: 500, width: 400, height: 60 },
+          text: "Inserted by web-doc",
+          style: { fontSize: 32, bold: true },
+        },
+        { op: "deleteElement", target: "sld2:3" },
+      ]);
+      const elements = (await session.getElements()).items as {
+        id: string;
+        pageIndex: number;
+        frame: {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          rotation: number;
+        };
+      }[];
+      const saved = await session.save();
+      const { PptxPresentation } = (await import(renderer)) as any;
+      const presentation = await PptxPresentation.load(
+        (saved.bytes as Uint8Array).slice().buffer,
+        { useGoogleFonts: false, mode: "main" },
+      );
+      const oracle: Record<
+        string,
+        { x: number; y: number; width: number; height: number }
+      > = {};
+      for (let slide = 0; slide < presentation.slideCount; slide += 1) {
+        const ids = elements
+          .filter((element) => element.pageIndex === slide)
+          .map((element) => element.id.split(":")[1]!);
+        for (const item of await presentation.getElementBoundsByIds(slide, ids))
+          oracle[`sld${slide + 1}:${item.elementId}`] = {
+            x: item.bounds.x / 9525,
+            y: item.bounds.y / 9525,
+            width: item.bounds.width / 9525,
+            height: item.bounds.height / 9525,
+          };
+      }
+      presentation.destroy();
+      return {
+        titleBounds: title.bounds,
+        createdIds: receipt.createdIds,
+        removedIds: receipt.removedIds,
+        changedPages: receipt.changedPages,
+        elements,
+        oracle,
+        firstText: await viewer.getPageText(0),
+        secondText: await viewer.getPageText(1),
+      };
+    },
+    { renderer: RENDERER },
+  );
+  expect(result.createdIds).toEqual(["sld2:4"]);
+  expect(result.removedIds).toEqual(["sld2:3"]);
+  expect(result.changedPages).toEqual([0, 1]);
+  expect(result.elements.map((element) => element.id)).toEqual([
+    "sld1:2",
+    "sld1:3",
+    "sld2:2",
+    "sld2:4",
+  ]);
+  expect(result.secondText).toContain("Inserted by web-doc");
+  expect(result.secondText).not.toContain("bullet points");
+  expect(result.firstText).toContain("Subtitle of the first slide");
+  for (const element of result.elements) {
+    const expected = result.oracle[element.id]!;
+    expect(
+      expected,
+      `${element.id} known to the renderer after the edit`,
+    ).toBeDefined();
+    expect(Math.abs(element.frame.x - expected.x)).toBeLessThan(1);
+    expect(Math.abs(element.frame.y - expected.y)).toBeLessThan(1);
+    expect(Math.abs(element.frame.width - expected.width)).toBeLessThan(1);
+    expect(Math.abs(element.frame.height - expected.height)).toBeLessThan(1);
+  }
+  const moved = result.elements.find((element) => element.id === "sld1:3")!;
+  expect(moved.frame).toMatchObject({ x: 200, y: 400, width: 300, height: 80 });
+
+  // The title's box is now red where it used to be white.
+  const red = await page.evaluate(async (bounds) => {
+    const viewer = (window as unknown as { __viewer: any }).__viewer;
+    const canvas = document.createElement("canvas");
+    await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+    const { data } = canvas
+      .getContext("2d")!
+      .getImageData(Math.floor(bounds.x) + 2, Math.floor(bounds.y) + 2, 20, 20);
+    let count = 0;
+    for (let offset = 0; offset < data.length; offset += 4)
+      if (
+        data[offset]! > 200 &&
+        data[offset + 1]! < 60 &&
+        data[offset + 2]! < 60
+      )
+        count += 1;
+    return count;
+  }, result.titleBounds);
+  expect(red).toBe(400);
+});
+
 test("spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout", async ({
   page,
 }) => {

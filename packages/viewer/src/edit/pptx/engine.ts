@@ -148,10 +148,30 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
         });
         continue;
       }
+      // A same-batch reference names an element that does not exist yet:
+      // its target is checked when the batch is applied, the rest now.
+      const target = (operation as { readonly target?: unknown }).target;
+      const reference =
+        typeof target === "string" ? parseReference(target) : undefined;
+      if (reference !== undefined && reference >= index) {
+        issues.push({
+          operationIndex: index,
+          path: "/target",
+          code: "unknown-target",
+          message: `"${target}" must refer to an earlier operation`,
+        });
+        continue;
+      }
+      const collect = issueCollector(index, issues);
       await handler.validate(
         operation as PptxOperation,
         { ...context, operationIndex: index },
-        issueCollector(index, issues),
+        reference === undefined
+          ? collect
+          : (path, code, message) => {
+              if (!path.startsWith("/target") && !path.startsWith("/range"))
+                collect(path, code, message);
+            },
       );
     }
     return issues;

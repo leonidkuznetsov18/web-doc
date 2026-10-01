@@ -251,6 +251,11 @@ const all: Readonly<Record<string, JsonSchema>> = {
 export const IMPLEMENTED_OPERATIONS: readonly string[] = [
   "replaceText",
   "setTextStyle",
+  "setShapeStyle",
+  "moveElement",
+  "resizeElement",
+  "deleteElement",
+  "insertTextBox",
 ];
 
 export const pptxOperationSchemas: OperationSchemaSet = Object.freeze({

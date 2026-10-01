@@ -1434,13 +1434,13 @@ relationships, groups), `insertTextBox`.
 
 **Acceptance criteria:**
 
-- [ ] Every operation reads back through `getElements` with the expected
+- [x] Every operation reads back through `getElements` with the expected
       frame or style and renders in the viewer.
-- [ ] Deleting a picture removes its relationship and leaves the media part.
+- [x] Deleting a picture removes its relationship and leaves the media part.
 
 **Verification:**
 
-- [ ] `node --test .test-dist/test/pptx-edit-shapes.test.js`; the e2e spec
+- [x] `node --test .test-dist/test/pptx-edit-shapes.test.js`; the e2e spec
 
 **Dependencies:** Task 45
 
