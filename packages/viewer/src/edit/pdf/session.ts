@@ -1,6 +1,7 @@
 import type { EditSessionCore } from "../engine.js";
 import type {
   ApplyOptions,
+  AssetOptions,
   EditFindOptions,
   EditOperation,
   EditReceipt,
@@ -95,6 +96,10 @@ export class PdfSession implements PdfEditSession {
 
   markSaved(stateToken: string): void {
     this.#core.markSaved(stateToken);
+  }
+
+  addAsset(data: Uint8Array, options?: AssetOptions): Promise<string> {
+    return this.#core.addAsset(data, options);
   }
 
   getElements(

@@ -621,7 +621,10 @@ nothing; after it, the call completes as if it had not been aborted.
   the original. Undo, redo, dry run and recovery therefore replay at most a
   quarter of the undoable history, and payloads are referenced from the asset
   store, never cloned. Checkpoints are an optimization: they never change the
-  bytes a state produces.
+  content of a state. (Found in T27: the bytes can differ in layout, because
+  PDFium's save also writes objects a regenerated page no longer references,
+  and how many a document carries depends on where it was opened from; the
+  determinism rule is therefore stated per sequence of calls.)
 - **R2 — Ids.** Every history entry carries a `stateId`, unique within the
   session and never reused, including after undo. Engines derive the ids of
   elements a batch creates from that `stateId`, so an id can never name two
@@ -630,8 +633,9 @@ nothing; after it, the call completes as if it had not been aborted.
   or a redo made disappear.
 - `dirty` is true while the content differs from the state last given to
   `markSaved()`, or from the original before the first `markSaved()`.
-- Determinism: the same original and the same history always produce
-  byte-identical output. Undoing back to revision 0 produces the original bytes.
+- Determinism: the same original and the same sequence of calls always
+  produce byte-identical output. Undoing back to revision 0 produces the
+  original bytes.
 
 ### Saving
 
@@ -780,7 +784,7 @@ interface EngineChange {
 - Engines must be deterministic: no timestamps, random ids or
   environment-dependent output in materialized bytes. **R2** Ids of created
   elements derive from the batch's `stateId`; a `restore` from a checkpoint
-  must yield the same ids and bytes as a restore from the original.
+  must yield the same ids and content as a restore from the original.
 - Engines may run in a worker; the core never assumes they share the main
   thread's memory. **R2** The session union is not visible to the engine layer.
 - **R2** The host side of the viewer offers the session a two-phase reopen:

@@ -7,13 +7,13 @@ because `CanvasImageSource` objects are browser resources.
 
 ## Capability matrix
 
-| Input | Units | Backend | Selectable map | Important limits |
-|---|---|---|---|---|
-| PDF | pages | pinned `pdfjs-dist` display API + module worker | positioned text items with PDF.js font/transform metadata | no passwords; render pixel budget; scripting/XFA disabled |
-| PNG, JPEG, WebP, GIF, BMP | one image | `createImageBitmap`, then `<img>` fallback | none | dimensions checked before decode; EXIF orientation requested from browser |
-| TIFF | IFD pages | project `image-wasm` worker using pinned `tiff`/`image` crates | none | aggregate decoded page pixels bounded; supported Gray/GrayA/RGB/RGBA 8/16-bit and CMYK(A) 8-bit |
-| SVG | one image | sanitized SVG, then browser decoder | none | active/external content removed before decode |
-| CSV, TSV | one sheet | dependency-free parser worker | cell strings with 1-based row/column coordinates | input bytes plus default 1,000,000-cell cap |
+| Input                     | Units     | Backend                                                        | Selectable map                                            | Important limits                                                                                |
+| ------------------------- | --------- | -------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| PDF                       | pages     | pinned `pdfjs-dist` display API + module worker                | positioned text items with PDF.js font/transform metadata | no passwords; render pixel budget; scripting/XFA disabled                                       |
+| PNG, JPEG, WebP, GIF, BMP | one image | `createImageBitmap`, then `<img>` fallback                     | none                                                      | dimensions checked before decode; EXIF orientation requested from browser                       |
+| TIFF                      | IFD pages | project `image-wasm` worker using pinned `tiff`/`image` crates | none                                                      | aggregate decoded page pixels bounded; supported Gray/GrayA/RGB/RGBA 8/16-bit and CMYK(A) 8-bit |
+| SVG                       | one image | sanitized SVG, then browser decoder                            | none                                                      | active/external content removed before decode                                                   |
+| CSV, TSV                  | one sheet | dependency-free parser worker                                  | cell strings with 1-based row/column coordinates          | input bytes plus default 1,000,000-cell cap                                                     |
 
 All document/page indices are 0-based. Spreadsheet cell coordinates and `RenderViewport.sheetRange` are 1-based to match the Office sheet contract.
 

@@ -166,6 +166,13 @@ export class PdfEditEngineClient implements EditEngine {
     );
   }
 
+  putAsset(id: string, data: Uint8Array, signal: AbortSignal): Promise<void> {
+    const buffer = data.slice().buffer;
+    return this.#request("edit-put-asset", { id, data: buffer }, signal, [
+      buffer,
+    ]);
+  }
+
   getElements(
     query: ElementQuery,
     signal: AbortSignal,

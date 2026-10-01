@@ -66,6 +66,11 @@ export class EditHistory {
       : (this.#folded.at(-1)?.pageCountAfter ?? this.#originalPageCount);
   }
 
+  /** State ids of every entry still in the history, folded and redo tail included. */
+  get stateIds(): readonly number[] {
+    return [...this.#folded, ...this.#entries].map((entry) => entry.stateId);
+  }
+
   /** The entry `undo()` would revert, if any. */
   get undoEntry(): HistoryEntry | undefined {
     return this.#position > 0 ? this.#entries[this.#position - 1] : undefined;

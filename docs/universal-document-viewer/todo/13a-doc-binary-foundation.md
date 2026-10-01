@@ -67,12 +67,12 @@
 
 ## Поддерживаемые revisions и text policy
 
-| `nFib` | Семейство | Gate |
-| --- | --- | --- |
-| `0x00C1` | Word 97 | public corpus |
-| `0x00D9` | Word 2000 | public corpus |
-| `0x0101` | Word 2002 | public corpus |
-| `0x010C` | Word 2003 | public corpus |
+| `nFib`   | Семейство          | Gate                               |
+| -------- | ------------------ | ---------------------------------- |
+| `0x00C1` | Word 97            | public corpus                      |
+| `0x00D9` | Word 2000          | public corpus                      |
+| `0x0101` | Word 2002          | public corpus                      |
+| `0x010C` | Word 2003          | public corpus                      |
 | `0x0112` | поздний binary DOC | принимается и покрыт public corpus |
 
 Word 6/95 не проходит этот gate и возвращает `UnsupportedVersion`. Для
@@ -83,17 +83,17 @@ compressed pieces используется определённая MS-DOC 8-bit
 
 ## Typed error matrix
 
-| Класс входа | Ошибка |
-| --- | --- |
-| oversized input/stream | `InputTooLarge` / `StreamTooLarge` |
-| отсутствующий CFB stream | `MissingStream` |
-| повреждённый CFB | `CompoundFile` |
-| invalid FIB/counts/table selection | `InvalidFib` |
-| Word 6/95 или неизвестная revision | `UnsupportedVersion` |
-| encrypted/obfuscated DOC | `PasswordProtected` |
-| invalid CLX/Pcdt/PlcPcd | `InvalidPieceTable` |
-| offset за границей stream | `OutOfBounds` |
-| превышенный count/CP budget | `ResourceLimit` |
+| Класс входа                        | Ошибка                             |
+| ---------------------------------- | ---------------------------------- |
+| oversized input/stream             | `InputTooLarge` / `StreamTooLarge` |
+| отсутствующий CFB stream           | `MissingStream`                    |
+| повреждённый CFB                   | `CompoundFile`                     |
+| invalid FIB/counts/table selection | `InvalidFib`                       |
+| Word 6/95 или неизвестная revision | `UnsupportedVersion`               |
+| encrypted/obfuscated DOC           | `PasswordProtected`                |
+| invalid CLX/Pcdt/PlcPcd            | `InvalidPieceTable`                |
+| offset за границей stream          | `OutOfBounds`                      |
+| превышенный count/CP budget        | `ResourceLimit`                    |
 
 ## Corpus provenance
 

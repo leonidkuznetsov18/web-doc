@@ -46,6 +46,12 @@ export type FakeOperation =
     }
   | { readonly op: "insertPage"; readonly index: number; readonly text: string }
   | { readonly op: "deletePage"; readonly pageIndex: number }
+  /** Appends the byte length of a binary payload to a page's text. */
+  | {
+      readonly op: "stamp";
+      readonly pageIndex: number;
+      readonly data: Uint8Array | string;
+    }
   /** Passes validation, fails in `apply`. */
   | { readonly op: "fail" }
   /** Passes validation, waits until the signal aborts. */
@@ -82,6 +88,16 @@ export const fakeSchemas: OperationSchemaSet = {
       properties: {
         op: { const: "deletePage" },
         pageIndex: { type: "integer", minimum: 0 },
+      },
+    },
+    stamp: {
+      type: "object",
+      required: ["op", "pageIndex", "data"],
+      additionalProperties: false,
+      properties: {
+        op: { const: "stamp" },
+        pageIndex: { type: "integer", minimum: 0 },
+        data: { "x-binary": true, type: "string", contentEncoding: "base64" },
       },
     },
     fail: { type: "object", properties: { op: { const: "fail" } } },
@@ -175,6 +191,18 @@ export class FakeEditEngine implements EditEngine {
           )
             changed.add(index);
           break;
+        case "stamp": {
+          // Payloads arrive as asset references once the core interned them.
+          const bytes =
+            typeof operation.data === "string"
+              ? this.assets.get(operation.data)
+              : operation.data;
+          if (!bytes)
+            throw new Error(`unknown asset ${String(operation.data)}`);
+          this.pages[operation.pageIndex] += `+${bytes.byteLength}`;
+          changed.add(operation.pageIndex);
+          break;
+        }
         case "fail":
           // Half-applied on purpose: the core must roll this back.
           this.pages[0] = "CORRUPT";
@@ -205,12 +233,22 @@ export class FakeEditEngine implements EditEngine {
     return encodePages(this.pages);
   }
 
+  /** Bases the last restore started from, decoded; undefined means the original. */
+  readonly restoreBases: (string[] | undefined)[] = [];
+  readonly assets = new Map<string, Uint8Array>();
+
   async restore(target: RestoreTarget): Promise<void> {
     this.calls.push(`restore:${target.batches.length}`);
     if (this.options.failRestore) throw new Error("restore failed");
-    this.pages = [...this.original];
+    this.restoreBases.push(target.base ? decodePages(target.base) : undefined);
+    this.pages = target.base ? decodePages(target.base) : [...this.original];
     for (const batch of target.batches)
       await this.apply(batch, new AbortController().signal);
+  }
+
+  async putAsset(id: string, data: Uint8Array): Promise<void> {
+    this.calls.push(`putAsset:${id.slice(0, 12)}`);
+    this.assets.set(id, data);
   }
 
   async getElements(query: ElementQuery): Promise<readonly EditElement[]> {

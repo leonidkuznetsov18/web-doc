@@ -91,8 +91,21 @@ on the session union without narrowing by `format` first.
 
 Operation values are limited to JSON types (strings, finite numbers, booleans,
 `null`, arrays and plain objects). Binary payloads such as images are declared
-as `BinaryData`: a `Uint8Array` in-process, or a base64 string over a pure-JSON
-transport.
+as `BinaryData`: a `Uint8Array` in-process, a base64 string over a pure-JSON
+transport, or an asset reference.
+
+### Assets
+
+`session.addAsset(bytes)` stores binary data once, under its content id, and
+returns a reference of the form `asset:<sha-256 hex>` that any `BinaryData`
+field accepts (base64 never contains a colon, so the two forms cannot be
+confused). Inline payloads are accepted as before, but the session interns
+them: before a batch enters the history its bytes are hashed, stored once and
+replaced by references, so undo, redo, dry runs and recovery never copy image
+data again, and an AI client can register an image once and refer to it in
+several batches. An unknown reference is an `invalid-operation` issue coded
+`unknown-asset`. Assets live as long as the session and count against
+`maxInputBytes` once, when registered.
 
 ### Schemas
 
@@ -195,8 +208,14 @@ The history keeps `maxEditHistory` batches (default 200); older ones are folded
 into the starting point — still applied, no longer undoable — while `reset()`
 always returns to the original.
 
-The same original and the same history always produce byte-identical output,
-and undoing back to revision 0 produces the original bytes.
+The same original and the same sequence of calls always produce byte-identical
+output, and undoing back to revision 0 produces the original bytes. Behind the scenes
+the session retains the bytes of some committed states — every
+`maxEditHistory / 4`-th change, within `maxEditCheckpointBytes` — and rebuilds
+a state from the nearest such checkpoint instead of replaying everything from
+the original. Checkpoints never change the content of a state; the saved
+bytes of a state reached through a checkpoint can differ in layout from a
+straight replay, which is why the guarantee is stated per sequence of calls.
 `getOriginalBytes()` and `downloadOriginal()` keep returning the original file
 for the whole session; saving is the host's job:
 

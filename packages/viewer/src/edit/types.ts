@@ -279,6 +279,8 @@ export interface EditSessionBase<
   save(options?: SaveOptions): Promise<SavedDocument>;
   /** Tells the session the host has persisted the state named by `stateToken`. */
   markSaved(stateToken: string): void;
+  /** Registers binary data once; returns an `asset:` reference usable in operations. */
+  addAsset(data: Uint8Array, options?: AssetOptions): Promise<string>;
 
   getElements(
     query?: ElementQuery,

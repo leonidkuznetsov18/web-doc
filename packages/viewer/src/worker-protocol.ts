@@ -25,6 +25,7 @@ export type EditWorkerOperation =
   | "edit-apply"
   | "edit-materialize"
   | "edit-restore"
+  | "edit-put-asset"
   | "edit-elements"
   | "edit-element"
   | "edit-elements-at"

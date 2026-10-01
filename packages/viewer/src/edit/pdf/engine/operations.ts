@@ -1,4 +1,5 @@
 import type { ResourceLimits, ViewerWarning } from "../../../contracts.js";
+import type { AssetSource } from "../../assets.js";
 import type { ImageCache } from "./images.js";
 import type { OperationIssue } from "../../types.js";
 import type { PdfElement, PdfOperation } from "../types.js";
@@ -15,6 +16,8 @@ export interface OperationContext {
   readonly fonts: FontLibrary;
   readonly images: ImageCache;
   readonly limits: ResourceLimits;
+  /** Bytes behind `asset:` references. */
+  readonly assets: AssetSource;
   readonly pageCount: number;
   /** Geometry of a page; loads it if needed. */
   geometry(pageIndex: number): PageGeometry;

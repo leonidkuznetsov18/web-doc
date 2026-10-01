@@ -847,13 +847,14 @@ resolved while applying; `applyJson`; read envelopes with `AbortSignal`.
 
 **Acceptance criteria:**
 
-- [ ] A checkpoint restore yields the same bytes and ids as a replay from the
-      original; an interned payload crosses to the worker once; undo after 50
-      image insertions replays at most a quarter of the history.
+- [x] A checkpoint restore yields the same ids and content as a replay from
+      the original (bytes differ in layout, see the spec); an interned payload
+      crosses to the worker once; an undo replays at most a quarter of the
+      history.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc`
+- [x] `npm run test --workspace web-doc`
 
 **Dependencies:** Task 26
 

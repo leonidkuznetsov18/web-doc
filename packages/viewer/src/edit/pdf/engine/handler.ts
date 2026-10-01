@@ -15,6 +15,7 @@ import type {
 } from "../../types.js";
 import { pdfOperationSchemas } from "../schemas.js";
 import { PdfEditDocument } from "./document.js";
+import { AssetStore } from "../../assets.js";
 import { FontLibrary } from "./fonts.js";
 import type { ImageDecoder } from "./images.js";
 import type { Pdfium } from "./pdfium.js";
@@ -39,6 +40,7 @@ export function createPdfEditHandler(
   let pdfium: Pdfium | undefined;
   let state: PdfEditDocument | undefined;
   const fonts = new FontLibrary((url) => host.fetchBytes(url));
+  const assets = new AssetStore();
 
   const engine = (): PdfEditDocument => {
     if (!state)
@@ -65,6 +67,7 @@ export function createPdfEditHandler(
           new Uint8Array(open.data),
           fonts,
           open.limits,
+          assets,
         );
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
         return result;
@@ -74,14 +77,26 @@ export function createPdfEditHandler(
           readonly operations: readonly EditOperation[];
         };
         await fonts.prepare(engine().fontRequests(operations));
-        await engine().images.prepare(operations, host.decodeImage);
+        await engine().images.prepare(operations, host.decodeImage, assets);
         return engine().validate(operations);
       }
       case "edit-apply": {
         const { batch } = payload as { readonly batch: EngineBatch };
         await fonts.prepare(engine().fontRequests(batch.operations));
-        await engine().images.prepare(batch.operations, host.decodeImage);
+        await engine().images.prepare(
+          batch.operations,
+          host.decodeImage,
+          assets,
+        );
         return engine().apply(batch);
+      }
+      case "edit-put-asset": {
+        const { id, data } = payload as {
+          readonly id: string;
+          readonly data: ArrayBuffer;
+        };
+        assets.set(id, new Uint8Array(data));
+        return undefined;
       }
       case "edit-materialize":
         return engine().materialize().buffer;
@@ -92,7 +107,7 @@ export function createPdfEditHandler(
         };
         const operations = batches.flatMap((batch) => batch.operations);
         await fonts.prepare(engine().fontRequests(operations));
-        await engine().images.prepare(operations, host.decodeImage);
+        await engine().images.prepare(operations, host.decodeImage, assets);
         engine().restore({
           batches,
           ...(base ? { base: new Uint8Array(base) } : {}),

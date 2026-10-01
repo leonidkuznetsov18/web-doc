@@ -29,9 +29,7 @@ subdirectory. That directory owns a local `manifest.json`:
 ```json
 {
   "schemaVersion": 1,
-  "cases": [
-    { "id": "local-case-a", "family": "pdf", "file": "input.bin" }
-  ]
+  "cases": [{ "id": "local-case-a", "family": "pdf", "file": "input.bin" }]
 }
 ```
 

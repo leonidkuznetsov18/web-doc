@@ -95,6 +95,8 @@ export interface EditEngine {
    * and recovery.
    */
   restore(target: RestoreTarget, signal: AbortSignal): Promise<void>;
+  /** Keeps asset bytes for the session; operations refer to them by id. */
+  putAsset(id: string, data: Uint8Array, signal: AbortSignal): Promise<void>;
   getElements(
     query: ElementQuery,
     signal: AbortSignal,

@@ -19,7 +19,11 @@ import type {
 } from "../src/index.js";
 import { defaultResourceLimits, ViewerError } from "../src/index.js";
 import { loopbackWorker } from "./fixtures/loopback-worker.js";
-import { buildPdf, fixturePdfium } from "./fixtures/pdf-builder.js";
+import {
+  buildPdf,
+  extractPageText,
+  fixturePdfium,
+} from "./fixtures/pdf-builder.js";
 import { signedPdf } from "./fixtures/signed-pdf.js";
 import { tinyJpeg } from "./fixtures/tiny-jpeg.js";
 
@@ -444,6 +448,47 @@ describe("ids and references (revision 2)", () => {
       );
     } finally {
       await end();
+    }
+  });
+});
+
+describe("checkpoints (revision 2)", () => {
+  it("restores the same ids and content from a checkpoint as from the original", async () => {
+    const pdfium = await fixturePdfium();
+    const original = await buildPdf(["One", "Two"]);
+    const batches = [1, 2, 3, 4].map((index) => ({
+      stateId: index,
+      operations: [
+        {
+          op: "insertTextBox" as const,
+          pageIndex: 0,
+          rect: { x: 72, y: 60 * index, width: 200, height: 40 },
+          text: `Box ${index}`,
+        },
+      ],
+    }));
+    const straight = new PdfEditDocument(pdfium, original);
+    const viaCheckpoint = new PdfEditDocument(pdfium, original);
+    try {
+      straight.restore({ batches: batches.slice(0, 2) });
+      const checkpoint = straight.materialize();
+      straight.restore({ batches });
+      viaCheckpoint.restore({ base: checkpoint, batches: batches.slice(2) });
+      const ids = (model: PdfEditDocument) =>
+        model
+          .getElements({ pageIndex: 0 })
+          .map((element) => [element.id, element.text, element.bounds]);
+      assert.deepEqual(ids(viaCheckpoint), ids(straight));
+      // Bytes are not compared: PDFium's save also writes objects a
+      // regenerated page no longer references, and how many of those a
+      // document carries depends on where it was opened from.
+      assert.equal(
+        await extractPageText(viaCheckpoint.materialize("full"), 0),
+        await extractPageText(straight.materialize("full"), 0),
+      );
+    } finally {
+      straight.dispose();
+      viaCheckpoint.dispose();
     }
   });
 });

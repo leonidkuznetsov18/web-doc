@@ -711,3 +711,117 @@ describe("two-phase reopen (revision 2)", () => {
     assert.equal(change.pageCount, 9);
   });
 });
+
+describe("checkpoints and assets (revision 2)", () => {
+  const text = (index: number) => ({
+    op: "setText" as const,
+    pageIndex: 0,
+    text: `s${index}`,
+  });
+  /** The batch count of the engine's latest restore. */
+  const lastRestore = (calls: readonly string[]) =>
+    calls.filter((call) => call.startsWith("restore:")).at(-1);
+
+  it("restores from the newest checkpoint at or before the target", async () => {
+    // maxEditHistory 8 keeps a checkpoint every second commit.
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { limits: { maxEditHistory: 8 } });
+    for (let index = 1; index <= 6; index += 1) await apply([text(index)]);
+    await edit.undo();
+    assert.equal(lastRestore(engine.calls), "restore:1", "one batch after 4");
+    assert.deepEqual(engine.restoreBases.at(-1), ["s4", "two", "three"]);
+    assert.deepEqual(host.current, ["s5", "two", "three"]);
+    await edit.undo();
+    assert.deepEqual(engine.restoreBases.at(-1), ["s4", "two", "three"]);
+    assert.equal(lastRestore(engine.calls), "restore:0", "state 4 itself");
+    await edit.redo();
+    assert.deepEqual(host.current, ["s5", "two", "three"]);
+    // Three undos back to state 2 use that checkpoint, never the original.
+    await edit.undo();
+    await edit.undo();
+    await edit.undo();
+    assert.deepEqual(engine.restoreBases.at(-1), ["s2", "two", "three"]);
+    assert.deepEqual(host.current, ["s2", "two", "three"]);
+  });
+
+  it("falls back to the original when the budget allows no checkpoint", async () => {
+    const {
+      session: edit,
+      engine,
+      apply,
+    } = session(
+      {},
+      { limits: { maxEditHistory: 8, maxEditCheckpointBytes: 1 } },
+    );
+    for (let index = 1; index <= 4; index += 1) await apply([text(index)]);
+    await edit.undo();
+    assert.equal(engine.restoreBases.at(-1), undefined);
+    assert.equal(lastRestore(engine.calls), "restore:3");
+  });
+
+  it("forgets checkpoints a new change after an undo made unreachable", async () => {
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { limits: { maxEditHistory: 8 } });
+    for (let index = 1; index <= 4; index += 1) await apply([text(index)]);
+    await edit.undo();
+    await edit.undo();
+    await apply([text(9)]);
+    await edit.undo();
+    assert.deepEqual(engine.restoreBases.at(-1), ["s2", "two", "three"]);
+    assert.deepEqual(host.current, ["s2", "two", "three"]);
+    await edit.reset();
+    assert.deepEqual(engine.restoreBases.at(-1), undefined);
+    assert.deepEqual(host.current, ["one", "two", "three"]);
+  });
+
+  it("interns binary payloads once and replays references", async () => {
+    const { session: edit, engine, host, apply } = session();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    await apply([{ op: "stamp", pageIndex: 0, data: bytes }]);
+    assert.deepEqual(host.current, ["one+5", "two", "three"]);
+    const puts = () =>
+      engine.calls.filter((call) => call.startsWith("putAsset:")).length;
+    assert.equal(puts(), 1);
+    // The same bytes again, as base64 this time: known, not sent again.
+    await apply([
+      { op: "stamp", pageIndex: 1, data: btoa("\x01\x02\x03\x04\x05") },
+    ]);
+    assert.equal(puts(), 1);
+    await edit.undo();
+    await edit.redo();
+    assert.equal(puts(), 1, "replays carry references only");
+    assert.deepEqual(host.current, ["one+5", "two+5", "three"]);
+    const id = await edit.addAsset(bytes);
+    assert.match(id, /^asset:[0-9a-f]{64}$/);
+    assert.equal(puts(), 1, "already registered by the batch");
+    await apply([{ op: "stamp", pageIndex: 2, data: id }]);
+    assert.deepEqual(host.current, ["one+5", "two+5", "three+5"]);
+    await assert.rejects(
+      apply([{ op: "stamp", pageIndex: 0, data: `asset:${"0".repeat(64)}` }]),
+      rejectsWith("invalid-operation", (error) =>
+        assert.equal(
+          (error.details?.issues as OperationIssue[])[0]?.code,
+          "unknown-asset",
+        ),
+      ),
+    );
+    // apply, apply, undo, redo, apply: the rejected batch changed nothing.
+    assert.equal(edit.state.revision, 5);
+  });
+
+  it("bounds assets by maxInputBytes", async () => {
+    const { session: edit } = session({}, { limits: { maxInputBytes: 4 } });
+    await assert.rejects(
+      edit.addAsset(new Uint8Array(5)),
+      rejectsWith("resource-limit"),
+    );
+  });
+});

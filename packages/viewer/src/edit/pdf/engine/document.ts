@@ -30,6 +30,7 @@ import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import { insertShape, setShapeStyle } from "./shapes.js";
 import { ImageCache, insertImage } from "./images.js";
+import { AssetStore, type AssetSource } from "../../assets.js";
 import { insertTable, setTableCell, tableSpecOf } from "./tables.js";
 import { defaultResourceLimits } from "../../../limits.js";
 import type { ResourceLimits } from "../../../contracts.js";
@@ -101,6 +102,7 @@ export class PdfEditDocument {
   readonly #fonts: FontLibrary;
   readonly images = new ImageCache();
   readonly #limits: ResourceLimits;
+  readonly #assets: AssetSource;
   /** Signature fields in the original; an edit leaves them uncovering the new revision. */
   readonly #signatures: number;
   /** What the working copy was opened from: the original, or a checkpoint. */
@@ -117,12 +119,14 @@ export class PdfEditDocument {
       throw new Error("No font source is configured");
     }),
     limits: ResourceLimits = defaultResourceLimits,
+    assets: AssetSource = new AssetStore(),
   ) {
     this.#pdfium = pdfium;
     this.#original = original;
     this.#base = original;
     this.#fonts = fonts;
     this.#limits = limits;
+    this.#assets = assets;
     this.#document = pdfium.openDocument(original);
     this.#measurer = new TextMeasurer(pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
@@ -281,11 +285,11 @@ export class PdfEditDocument {
     return resolved;
   }
 
-  /** The base bytes while nothing changed, else an incremental update. */
-  materialize(): Uint8Array {
-    return this.#batches === 0
+  /** The base bytes while nothing changed, else the document saved in `mode`. */
+  materialize(mode: "incremental" | "full" = "incremental"): Uint8Array {
+    return this.#batches === 0 && mode === "incremental"
       ? this.#base.slice()
-      : this.#document.save("incremental");
+      : this.#document.save(mode);
   }
 
   /**
@@ -393,6 +397,7 @@ export class PdfEditDocument {
       fonts: this.#fonts,
       images: this.images,
       limits: this.#limits,
+      assets: this.#assets,
       pageCount: this.pageCount,
       geometry: (pageIndex) => {
         const record = this.#pages[pageIndex];

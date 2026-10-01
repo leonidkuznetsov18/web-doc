@@ -38,6 +38,8 @@ const SUPPORTED_KEYWORDS = new Set([
 ]);
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+/** A content-addressed reference to data registered with `addAsset()`. */
+const ASSET_REFERENCE = /^asset:[0-9a-f]{64}$/;
 
 type SchemaType =
   "object" | "array" | "string" | "number" | "integer" | "boolean" | "null";
@@ -105,12 +107,10 @@ function visit(
 
   if (schema["x-binary"] === true) {
     if (value instanceof Uint8Array) return;
-    if (
-      typeof value !== "string" ||
-      value.length % 4 !== 0 ||
-      !BASE64.test(value)
-    )
-      issue("binary", "Expected bytes or a base64 string");
+    const base64 =
+      typeof value === "string" && value.length % 4 === 0 && BASE64.test(value);
+    if (typeof value !== "string" || (!base64 && !ASSET_REFERENCE.test(value)))
+      issue("binary", "Expected bytes, a base64 string or an asset reference");
     return;
   }
 

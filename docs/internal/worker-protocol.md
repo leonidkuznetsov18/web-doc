@@ -21,4 +21,3 @@ Array buffers and `ImageBitmap`s are transferables. The worker endpoint owns one
 `WorkerRpcClient` removes the request's abort listener on settlement. Worker `error` or `messageerror` rejects all pending requests as `worker-crashed`. `destroy()` removes all worker listeners, terminates the worker exactly once, and rejects remaining requests.
 
 An adapter retains source bytes on the main side for download, so it transfers a dedicated copy to the worker. Future streaming support may transfer chunks, but it must preserve the same request/error semantics.
-

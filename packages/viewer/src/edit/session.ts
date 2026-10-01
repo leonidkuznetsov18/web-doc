@@ -5,7 +5,18 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
-import type { EditEngine, EngineBatch, EngineChange } from "./engine.js";
+import {
+  assetIdOf,
+  AssetStore,
+  binaryFields,
+  isAssetReference,
+} from "./assets.js";
+import type {
+  EditEngine,
+  EngineBatch,
+  EngineChange,
+  RestoreTarget,
+} from "./engine.js";
 import { EditHistory, type HistoryEntry } from "./history.js";
 import {
   assertBatchSize,
@@ -15,6 +26,7 @@ import {
   parseReference,
 } from "./operations.js";
 import type {
+  AssetOptions,
   ApplyOptions,
   DocumentChangeReason,
   EditableFormat,
@@ -96,6 +108,11 @@ export class EditSessionController implements EditSessionBase<
   readonly sessionId = newSessionId();
   /** Bytes of the last committed state; what the viewer shows and what a broken session saves. */
   #committedBytes: Uint8Array;
+  /** Materialized bytes of some committed states, by state id, so restores replay less. */
+  readonly #checkpoints = new Map<number, Uint8Array>();
+  #checkpointBytes = 0;
+  /** Binary payloads of this session's batches, by content id. */
+  readonly #assets = new AssetStore();
   #state: EditState;
   #queue: Promise<unknown> = Promise.resolve();
   #revision = 0;
@@ -152,24 +169,24 @@ export class EditSessionController implements EditSessionBase<
       const referenceIssues = checkBatchReferences(batch);
       if (referenceIssues.length > 0)
         throw invalidOperationError(referenceIssues);
-      const engineIssues = await this.#engine.validate(batch, signal);
+      const interned = await this.#intern(batch, signal);
+      const engineIssues = await this.#engine.validate(interned, signal);
       throwIfAborted(signal);
       if (engineIssues.length > 0) throw invalidOperationError(engineIssues);
       // The id the history will give this state; a dry run uses the same one,
       // so its receipt names the ids a real apply would.
       const engineBatch: EngineBatch = {
         stateId: this.#history.nextStateId,
-        operations: batch,
+        operations: interned,
       };
 
       if (options.dryRun) {
         const change = await this.#transaction(signal, "apply", async () => {
           const result = await this.#engine.apply(engineBatch, signal);
-          // Nothing moves, so the working copy goes back to the current state.
-          await this.#engine.restore(
-            { batches: this.#history.applied() },
-            signal,
-          );
+          // Producing the bytes catches what only saving would; then the
+          // working copy goes back to the current state.
+          await this.#engine.materialize(signal);
+          await this.#engine.restore(this.#restoreTarget(), signal);
           return result;
         });
         return this.#receipt(true, batch.length, change.createdIds, {
@@ -191,7 +208,7 @@ export class EditSessionController implements EditSessionBase<
         },
       );
       this.#history.push({
-        operations: batch,
+        operations: interned,
         ...(options.label === undefined ? {} : { label: options.label }),
         createdIds: change.createdIds,
         removedIds: change.removedIds,
@@ -519,10 +536,7 @@ export class EditSessionController implements EditSessionBase<
     signal: AbortSignal,
   ): Promise<Shown> {
     return this.#transaction(signal, "apply", async () => {
-      await this.#engine.restore(
-        { batches: this.#history.batchesAt(position) },
-        signal,
-      );
+      await this.#engine.restore(this.#restoreTarget(position), signal);
       return this.#show(signal, changedPages);
     });
   }
@@ -536,10 +550,7 @@ export class EditSessionController implements EditSessionBase<
       this.#host.limits.maxOperationMs,
     );
     try {
-      await this.#engine.restore(
-        { batches: this.#history.applied() },
-        controller.signal,
-      );
+      await this.#engine.restore(this.#restoreTarget(), controller.signal);
     } catch {
       this.#broken = true;
     } finally {
@@ -553,6 +564,8 @@ export class EditSessionController implements EditSessionBase<
     shown: Shown,
   ): void {
     this.#committedBytes = shown.bytes;
+    if (reason === "apply") this.#keepCheckpoint(shown.bytes);
+    else if (reason === "reset") this.#dropCheckpoints();
     this.#revision += 1;
     this.#state = this.#snapshot();
     this.#emitState();
@@ -575,6 +588,125 @@ export class EditSessionController implements EditSessionBase<
     } catch (error) {
       reportError(error);
     }
+  }
+
+  addAsset(data: Uint8Array, options: AssetOptions = {}): Promise<string> {
+    return this.#enqueue(options.signal, async (signal) => {
+      if (data.byteLength > this.#host.limits.maxInputBytes)
+        throw new ViewerError("resource-limit", "Asset exceeds maxInputBytes", {
+          details: {
+            actual: data.byteLength,
+            limit: this.#host.limits.maxInputBytes,
+          },
+        });
+      return this.#register(data.slice(), signal);
+    });
+  }
+
+  /** Stores bytes under their content id and hands them to the engine once. */
+  async #register(bytes: Uint8Array, signal: AbortSignal): Promise<string> {
+    const id = await assetIdOf(bytes);
+    if (!this.#assets.has(id)) {
+      this.#assets.set(id, bytes);
+      await this.#engine.putAsset(id, bytes, signal);
+    }
+    return id;
+  }
+
+  /**
+   * Replaces inline binary payloads by asset references, so the history
+   * holds references only; unknown references are reported like any issue.
+   */
+  async #intern(
+    batch: readonly EditOperation[],
+    signal: AbortSignal,
+  ): Promise<readonly EditOperation[]> {
+    const issues: OperationIssue[] = [];
+    const result: EditOperation[] = [];
+    for (const [operationIndex, operation] of batch.entries()) {
+      const fields = binaryFields(this.schemas.operations[operation.op]);
+      if (fields.length === 0) {
+        result.push(operation);
+        continue;
+      }
+      const patched: Record<string, unknown> = { ...operation };
+      for (const field of fields) {
+        const value = patched[field];
+        if (value === undefined) continue;
+        if (isAssetReference(value)) {
+          if (!this.#assets.has(value))
+            issues.push({
+              operationIndex,
+              path: `/${field}`,
+              code: "unknown-asset",
+              message: `Unknown asset ${value}`,
+            });
+          continue;
+        }
+        const bytes =
+          value instanceof Uint8Array
+            ? value
+            : Uint8Array.from(atob(value as string), (c) => c.charCodeAt(0));
+        patched[field] = await this.#register(bytes, signal);
+      }
+      result.push(Object.freeze(patched) as unknown as EditOperation);
+    }
+    if (issues.length > 0) throw invalidOperationError(issues);
+    return Object.freeze(result);
+  }
+
+  /** Keeps every stride-th committed state's bytes within the memory budget. */
+  #keepCheckpoint(bytes: Uint8Array): void {
+    const stride = Math.max(
+      1,
+      Math.floor(this.#host.limits.maxEditHistory / 4),
+    );
+    const stateId = this.#history.stateId;
+    // Entries dropped by a new change after an undo can never be restored.
+    const reachable = new Set(this.#history.stateIds);
+    for (const [id, kept] of this.#checkpoints)
+      if (!reachable.has(id)) this.#forgetCheckpoint(id, kept);
+    if (stateId % stride !== 0) return;
+    const budget = this.#host.limits.maxEditCheckpointBytes;
+    if (bytes.byteLength > budget) return;
+    const oldestFirst = [...this.#checkpoints.keys()].sort((a, b) => a - b);
+    while (
+      this.#checkpointBytes + bytes.byteLength > budget &&
+      oldestFirst.length > 0
+    ) {
+      const id = oldestFirst.shift()!;
+      this.#forgetCheckpoint(id, this.#checkpoints.get(id)!);
+    }
+    this.#checkpoints.set(stateId, bytes);
+    this.#checkpointBytes += bytes.byteLength;
+  }
+
+  #forgetCheckpoint(id: number, bytes: Uint8Array): void {
+    this.#checkpoints.delete(id);
+    this.#checkpointBytes -= bytes.byteLength;
+  }
+
+  #dropCheckpoints(): void {
+    this.#checkpoints.clear();
+    this.#checkpointBytes = 0;
+  }
+
+  /**
+   * The cheapest way to rebuild the state at `position`: the newest
+   * checkpoint at or before it, plus the batches after that checkpoint.
+   */
+  #restoreTarget(position = this.#history.position): RestoreTarget {
+    const entries = this.#history.entriesAt(position);
+    let last = entries.length - 1;
+    while (last >= 0 && !this.#checkpoints.has(entries[last]!.stateId))
+      last -= 1;
+    const batches = entries.slice(last + 1).map((entry) => ({
+      stateId: entry.stateId,
+      operations: entry.operations,
+    }));
+    return last >= 0
+      ? { base: this.#checkpoints.get(entries[last]!.stateId)!, batches }
+      : { batches };
   }
 
   #stateToken(stateId: number): string {

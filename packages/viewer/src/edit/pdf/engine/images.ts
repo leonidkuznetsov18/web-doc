@@ -1,5 +1,5 @@
 import { ViewerError } from "../../../errors.js";
-import { decodeBinary } from "../../operations.js";
+import { resolveBinary, type AssetSource } from "../../assets.js";
 import type { EditOperation } from "../../types.js";
 import type { InsertImageOperation, PdfOperation } from "../types.js";
 import { OBJECT_IMAGE } from "./elements.js";
@@ -39,12 +39,13 @@ export class ImageCache {
   async prepare(
     operations: readonly EditOperation[],
     decode: ImageDecoder,
+    assets: AssetSource,
   ): Promise<void> {
     for (const raw of operations) {
       const operation = raw as PdfOperation;
       if (operation.op !== "insertImage" || operation.mimeType !== "image/png")
         continue;
-      const bytes = decodeBinary(operation.data);
+      const bytes = resolveBinary(operation.data, assets);
       if (!isPng(bytes)) continue;
       const key = contentKey(bytes);
       if (this.#decoded.has(key)) continue;
@@ -66,7 +67,7 @@ export const insertImage: OperationHandler<InsertImageOperation> = {
       return;
     }
     validateRect(operation.rect, context.geometry(operation.pageIndex), issue);
-    const bytes = decodeBinary(operation.data);
+    const bytes = resolveBinary(operation.data, context.assets);
     if (bytes.byteLength > context.limits.maxInputBytes)
       throw new ViewerError(
         "resource-limit",
@@ -105,7 +106,7 @@ export const insertImage: OperationHandler<InsertImageOperation> = {
   apply(operation, context) {
     const { pdfium } = context;
     const { lib } = pdfium;
-    const bytes = decodeBinary(operation.data);
+    const bytes = resolveBinary(operation.data, context.assets);
     const id = context.newId(operation.pageIndex);
     const geometry = context.geometry(operation.pageIndex);
     const image = lib.FPDFPageObj_NewImageObj(context.document);
