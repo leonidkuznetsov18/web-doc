@@ -1235,15 +1235,15 @@ original bytes without changes.
 
 **Acceptance criteria:**
 
-- [ ] No-change save and rebuild-with-no-changes are byte-identical to the
+- [x] No-change save and rebuild-with-no-changes are byte-identical to the
       original for every corpus and fixture package; after one changed part
       only that entry's bytes differ, entry by entry.
-- [ ] Stored and deflated outputs reopen through the reader with matching
+- [x] Stored and deflated outputs reopen through the reader with matching
       CRCs; an output that would need ZIP64 is refused before writing.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (`test/ooxml-zip.test.ts` additions)
+- [x] `npm run test --workspace web-doc` (`test/ooxml-zip.test.ts` additions)
 
 **Dependencies:** Task 38
 

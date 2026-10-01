@@ -1,6 +1,7 @@
 import type { ResourceLimits } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { isDirectoryEntry, partKey, partNameOf } from "./names.js";
+import { writeZip, type WriteOverlay } from "./writer.js";
 import {
   inflateEntry,
   parseZip,
@@ -11,9 +12,23 @@ import {
 /*
  * An OOXML package held in memory: the original bytes, the ZIP directory,
  * and a cache of the parts that were read. Parts are inflated on first use.
- * This is the reading half (task 38); the overlay, transactions and saving
- * follow in the later tasks of the module.
+ * Changes live in an overlay — replaced, added and removed parts — that
+ * saving applies over the archive; the original is never touched.
  */
+
+export interface SaveOptions {
+  /** How changed and new entries are written; default "store". */
+  readonly compression?: "store" | "deflate";
+}
+
+/** The overlay at a point in time; opaque to callers, O(1) to take and restore. */
+export interface PackageSnapshot {
+  readonly revision: number;
+}
+
+interface Overlay extends WriteOverlay {
+  readonly revision: number;
+}
 
 export interface OpenOptions {
   readonly limits: ResourceLimits;
@@ -31,6 +46,13 @@ export class OoxmlPackage {
   readonly #limits: ResourceLimits;
   readonly #entries = new Map<string, ZipEntry>();
   readonly #parts = new Map<string, Promise<Uint8Array>>();
+  #overlay: Overlay = {
+    revision: 0,
+    changed: new Map(),
+    added: new Map(),
+    removed: new Set(),
+  };
+  readonly #snapshots = new Map<number, Overlay>();
 
   private constructor(archive: ZipArchive, limits: ResourceLimits) {
     this.original = archive.bytes;
@@ -73,8 +95,33 @@ export class OoxmlPackage {
     return this.#limits;
   }
 
+  /** Whether a part exists in the current state, overlay included. */
   has(name: string): boolean {
-    return this.#entries.has(partKey(name));
+    const key = partKey(name);
+    if (this.#overlay.removed.has(key)) return false;
+    return this.#entries.has(key) || this.#overlay.added.has(key);
+  }
+
+  /** Part names in the current state: archive order, then additions. */
+  get currentPartNames(): readonly string[] {
+    const names = this.partNames.filter((name) => this.has(name));
+    for (const [, change] of this.#overlay.added) names.push(change.name);
+    return names;
+  }
+
+  /** Names of the parts that differ from the original: changed, added and removed. */
+  get changedParts(): readonly string[] {
+    return [
+      ...[...this.#overlay.changed.values()].map((change) => change.name),
+      ...[...this.#overlay.added.values()].map((change) => change.name),
+      ...[...this.#overlay.removed]
+        .map((key) => this.#entries.get(key)?.name ?? key)
+        .map(partNameOf),
+    ];
+  }
+
+  get revision(): number {
+    return this.#overlay.revision;
   }
 
   /** The ZIP entry behind a part. */
@@ -82,16 +129,22 @@ export class OoxmlPackage {
     return this.#entries.get(partKey(name));
   }
 
-  /** The original bytes of a part, inflated once and cached. */
+  /** The current bytes of a part: the overlay's when changed, else the original's. */
   part(name: string, signal?: AbortSignal): Promise<Uint8Array> {
     const key = partKey(name);
+    if (this.#overlay.removed.has(key))
+      return Promise.reject(this.#missing(name));
+    const change =
+      this.#overlay.changed.get(key) ?? this.#overlay.added.get(key);
+    if (change) return Promise.resolve(change.bytes.slice());
+    return this.originalPart(name, signal);
+  }
+
+  /** The original bytes of a part, inflated once and cached; ignores the overlay. */
+  originalPart(name: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const key = partKey(name);
     const entry = this.#entries.get(key);
-    if (!entry)
-      return Promise.reject(
-        new ViewerError("invalid-file", `No part ${partNameOf(name)}`, {
-          details: { part: partNameOf(name) },
-        }),
-      );
+    if (!entry) return Promise.reject(this.#missing(name));
     let pending = this.#parts.get(key);
     if (!pending) {
       pending = inflateEntry(this.#archive, entry, this.#limits, signal);
@@ -99,5 +152,72 @@ export class OoxmlPackage {
       pending.catch(() => this.#parts.delete(key));
     }
     return pending.then((bytes) => bytes.slice());
+  }
+
+  /**
+   * Replaces the overlay with one that has `changes` applied: replaced parts
+   * (existing names) and added parts (new names) in `set`, and `remove`.
+   * Used by transactions; the previous overlay stays reachable through its
+   * snapshot.
+   */
+  applyOverlay(changes: {
+    readonly set: ReadonlyMap<string, Uint8Array>;
+    readonly remove: ReadonlySet<string>;
+  }): PackageSnapshot {
+    const changed = new Map(this.#overlay.changed);
+    const added = new Map(this.#overlay.added);
+    const removed = new Set(this.#overlay.removed);
+    for (const name of changes.remove) {
+      const key = partKey(name);
+      changed.delete(key);
+      added.delete(key);
+      if (this.#entries.has(key)) removed.add(key);
+    }
+    for (const [name, bytes] of changes.set) {
+      const key = partKey(name);
+      removed.delete(key);
+      const change = { name: partNameOf(name), bytes: bytes.slice() };
+      if (this.#entries.has(key)) changed.set(key, change);
+      else added.set(key, change);
+    }
+    const revision = this.#overlay.revision + 1;
+    this.#overlay = Object.freeze({ revision, changed, added, removed });
+    this.#snapshots.set(revision, this.#overlay);
+    return { revision };
+  }
+
+  /** The overlay as it is now, by reference; restore it later in O(1). */
+  snapshot(): PackageSnapshot {
+    this.#snapshots.set(this.#overlay.revision, this.#overlay);
+    return { revision: this.#overlay.revision };
+  }
+
+  restore(snapshot: PackageSnapshot): void {
+    const overlay = this.#snapshots.get(snapshot.revision);
+    if (!overlay)
+      throw new ViewerError("lifecycle-error", "Unknown package snapshot", {
+        details: { revision: snapshot.revision },
+      });
+    this.#overlay = overlay;
+  }
+
+  /** The package bytes: the original (copied) when nothing changed. */
+  async save(
+    options: SaveOptions = {},
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    const { changed, added, removed } = this.#overlay;
+    if (changed.size === 0 && added.size === 0 && removed.size === 0)
+      return this.original.slice();
+    return writeZip(this.#archive, this.#overlay, {
+      ...(options.compression ? { compression: options.compression } : {}),
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  #missing(name: string): ViewerError {
+    return new ViewerError("invalid-file", `No part ${partNameOf(name)}`, {
+      details: { part: partNameOf(name) },
+    });
   }
 }
