@@ -197,14 +197,14 @@ thumbnails on `documentchange`.
 
 **Acceptance criteria:**
 
-- [ ] In the browser, after `apply`, `undo` and `redo` through a test adapter,
+- [x] In the browser, after `apply`, `undo` and `redo` through a test adapter,
       the visible page's pixels change accordingly while zoom, fit and scroll
       are kept and search highlights disappear.
-- [ ] A change in page count updates the layout and the UI page counter.
+- [x] A change in page count updates the layout and the UI page counter.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
+- [x] `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
 
 **Dependencies:** Task 5
 
@@ -225,15 +225,15 @@ pages and spreadsheets.
 
 **Acceptance criteria:**
 
-- [ ] Results agree with the rendered canvas within 1 CSS pixel at zoom 0.5, 1
+- [x] Results agree with the rendered canvas within 1 CSS pixel at zoom 0.5, 1
       and 2, device pixel ratio 1 and 2, and after scrolling;
       `clientToPage(pageToClient(r))` round-trips.
-- [ ] Headless viewers, unmounted pages and spreadsheets return `undefined`.
+- [x] Headless viewers, unmounted pages and spreadsheets return `undefined`.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
-- [ ] `npm run test --workspace web-doc`
+- [x] `npm run test:e2e -- tests/e2e/edit-core.spec.ts`
+- [x] `npm run test --workspace web-doc`
 
 **Dependencies:** Task 6
 

@@ -901,14 +901,26 @@ export class DocumentViewer implements ViewerApi {
     return this.#session;
   }
 
-  pageToClient(_pageIndex: number, _rect: PageRect): ViewportRect | undefined {
+  pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined {
     this.#assertAlive();
-    return undefined;
+    if (
+      this.#state.status !== "ready" ||
+      !Number.isInteger(pageIndex) ||
+      ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)
+    )
+      return undefined;
+    return this.#viewport?.pageToClient(pageIndex, rect);
   }
 
-  clientToPage(_clientX: number, _clientY: number): PageHit | undefined {
+  clientToPage(clientX: number, clientY: number): PageHit | undefined {
     this.#assertAlive();
-    return undefined;
+    if (
+      this.#state.status !== "ready" ||
+      !Number.isFinite(clientX) ||
+      !Number.isFinite(clientY)
+    )
+      return undefined;
+    return this.#viewport?.clientToPage(clientX, clientY);
   }
 
   on<K extends keyof ViewerEventMap>(
@@ -1052,7 +1064,7 @@ export class DocumentViewer implements ViewerApi {
     });
     for (const warning of nextInfo.warnings ?? [])
       this.#emit("warning", warning);
-    this.#viewport?.setDocument(nextInfo);
+    this.#viewport?.replaceDocument(nextInfo);
     await adapter.close(handle);
     return nextInfo.pageCount;
   }

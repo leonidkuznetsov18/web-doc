@@ -76,6 +76,20 @@ describe("editing contracts", () => {
     const rect: PageRect = { x: 10, y: 20, width: 30, height: 40 };
     assert.equal(viewer.pageToClient(0, rect), undefined);
     assert.equal(viewer.clientToPage(15, 25), undefined);
+    // Malformed input is answered like an unmounted page, never thrown.
+    assert.equal(viewer.pageToClient(0.5, rect), undefined);
+    assert.equal(
+      viewer.pageToClient(0, { ...rect, width: Number.NaN }),
+      undefined,
+    );
+    assert.equal(viewer.clientToPage(Number.POSITIVE_INFINITY, 0), undefined);
+    await viewer.close();
+    assert.equal(viewer.pageToClient(0, rect), undefined);
+    await viewer.destroy();
+    assert.throws(
+      () => viewer.clientToPage(0, 0),
+      isViewerError("lifecycle-error"),
+    );
   });
 
   it("types the new events, receipts and issues", () => {

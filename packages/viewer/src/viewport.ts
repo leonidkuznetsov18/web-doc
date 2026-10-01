@@ -9,6 +9,7 @@ import type {
   ViewerState,
   SpreadsheetViewportRange,
 } from "./contracts.js";
+import type { PageHit, PageRect, ViewportRect } from "./edit/types.js";
 import { matchTopInPage, revealScrollTop } from "./search-reveal.js";
 import { snapGraphemeOffset } from "./interaction.js";
 import { SpreadsheetViewport } from "./spreadsheet-viewport.js";
@@ -50,6 +51,10 @@ export interface ViewportHost {
 
 interface ViewportStrategy {
   setDocument(info: DocumentInfo | undefined): void;
+  /** New content of the same document: keeps zoom and scroll, re-renders. */
+  replaceDocument(info: DocumentInfo): void;
+  pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined;
+  clientToPage(clientX: number, clientY: number): PageHit | undefined;
   update(): void;
   panBy(deltaX: number, deltaY: number): void;
   goToPage(pageIndex: number): void;
@@ -94,6 +99,20 @@ export class AdaptiveViewport implements ViewportStrategy {
           : new ViewerViewport(this.#container, this.#host, this.#options);
     }
     this.#strategy.setDocument(info);
+  }
+
+  replaceDocument(info: DocumentInfo): void {
+    const nextKind = info.unit === "sheet" ? "sheet" : "page";
+    if (nextKind !== this.#kind) this.setDocument(info);
+    else this.#strategy.replaceDocument(info);
+  }
+
+  pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined {
+    return this.#strategy.pageToClient(pageIndex, rect);
+  }
+
+  clientToPage(clientX: number, clientY: number): PageHit | undefined {
+    return this.#strategy.clientToPage(clientX, clientY);
   }
 
   update(): void {
@@ -170,6 +189,8 @@ export class ViewerViewport {
   readonly #onSelectionChange = (): void => this.#handleSelectionChange();
   readonly #pointers = new Map<number, PointerPosition>();
   #info: DocumentInfo | undefined;
+  /** Grows with every content replacement, so unchanged view state still re-renders. */
+  #revision = 0;
   #frame = 0;
   #resizeObserver: ResizeObserver | undefined;
   #destroyed = false;
@@ -254,6 +275,74 @@ export class ViewerViewport {
     this.#root.scrollTo({ left: 0, top: 0 });
     this.#clearSlots();
     this.schedule();
+  }
+
+  replaceDocument(info: DocumentInfo): void {
+    this.#info = info;
+    this.#revision += 1;
+    // Slots stay mounted and repaint in place; the browser clamps the scroll
+    // position itself once the spacer takes the new document's height.
+    this.schedule();
+  }
+
+  pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined {
+    const page = this.#mountedPage(pageIndex);
+    if (!page) return undefined;
+    return {
+      left: page.left + rect.x * page.scale,
+      top: page.top + rect.y * page.scale,
+      width: rect.width * page.scale,
+      height: rect.height * page.scale,
+    };
+  }
+
+  clientToPage(clientX: number, clientY: number): PageHit | undefined {
+    for (const pageIndex of this.#slots.keys()) {
+      const page = this.#mountedPage(pageIndex);
+      if (
+        !page ||
+        clientX < page.left ||
+        clientX >= page.left + page.width ||
+        clientY < page.top ||
+        clientY >= page.top + page.height
+      )
+        continue;
+      return {
+        pageIndex,
+        point: {
+          x: (clientX - page.left) / page.scale,
+          y: (clientY - page.top) / page.scale,
+        },
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * Client-space box of a mounted page and its page-space scale, read from
+   * the DOM so it matches what is painted rather than what is scheduled.
+   */
+  #mountedPage(pageIndex: number):
+    | {
+        readonly left: number;
+        readonly top: number;
+        readonly width: number;
+        readonly height: number;
+        readonly scale: number;
+      }
+    | undefined {
+    const slot = this.#slots.get(pageIndex);
+    if (!slot || !this.#info) return undefined;
+    const box = slot.root.getBoundingClientRect();
+    const natural = naturalPageSize(this.#info, pageIndex);
+    if (box.width <= 0 || box.height <= 0) return undefined;
+    return {
+      left: box.left,
+      top: box.top,
+      width: box.width,
+      height: box.height,
+      scale: box.width / natural.width,
+    };
   }
 
   update(): void {
@@ -414,7 +503,7 @@ export class ViewerViewport {
         .getSearchMatches(pageIndex)
         .map((match) => `${match.start}:${match.end}`)
         .join(",");
-      const renderKey = `${state.zoom}:${window.devicePixelRatio || 1}:${highlights}`;
+      const renderKey = `${this.#revision}:${state.zoom}:${window.devicePixelRatio || 1}:${highlights}`;
       if (
         slot.renderKey === undefined ||
         (!this.#zoomGestureActive && slot.renderKey !== renderKey)
