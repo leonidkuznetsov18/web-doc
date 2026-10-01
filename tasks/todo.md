@@ -1377,16 +1377,16 @@ on synthetic 10-, 100- and 500-slide decks with and without
 
 **Acceptance criteria:**
 
-- [ ] `viewer.edit()` on `sample.pptx` returns a `PptxEditSession` whose
+- [x] `viewer.edit()` on `sample.pptx` returns a `PptxEditSession` whose
       `getElements` lists every slide-level element with bounds within one CSS
       pixel of the renderer's `getElementBoundsByIds`, with the worker fetched
       only on `edit()`.
-- [ ] `save()` without changes returns identical bytes; `restore` replays.
-- [ ] Spike results recorded in the spec.
+- [x] `save()` without changes returns identical bytes; `restore` replays.
+- [x] Spike results recorded in the spec.
 
 **Verification:**
 
-- [ ] `node --test .test-dist/test/pptx-edit-inspect.test.js`;
+- [x] `node --test .test-dist/test/pptx-edit-inspect.test.js`;
       `npm run test:e2e -- tests/e2e/edit-pptx.spec.ts`
 
 **Dependencies:** Task 43

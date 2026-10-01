@@ -21,6 +21,10 @@ await copyFile(
 await cp(officeDist, resolve(outdir, "vendor/ooxml"), {
   recursive: true,
 });
+// The PPTX renderer on its own, so browser tests can ask it for geometry.
+await cp(pptxDist, resolve(outdir, "vendor/ooxml-pptx"), {
+  recursive: true,
+});
 for (const [directory, wasm] of [
   [officeDist, "docx_parser_bg.wasm"],
   [officeDist, "xlsx_parser_bg.wasm"],

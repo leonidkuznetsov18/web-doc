@@ -7,6 +7,7 @@ import type {
   ViewerProgress,
   ViewerWarning,
 } from "./contracts.js";
+import type { EditableFormat } from "./edit/types.js";
 
 export type DocumentWorkerOperation =
   | "init"
@@ -35,6 +36,8 @@ export type EditWorkerOperation =
   | "edit-range-rects"
   | "edit-render-without"
   | "edit-page-layout"
+  | "edit-pptx-slides"
+  | "edit-pptx-layouts"
   | "edit-dispose";
 
 export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;
@@ -112,6 +115,8 @@ export interface EditWorkerFont {
 export interface EditWorkerOpenPayload {
   readonly data: ArrayBuffer;
   readonly limits: ResourceLimits;
+  /** The session format; a worker that serves several formats picks its engine by it. */
+  readonly format?: EditableFormat;
   readonly fileName?: string;
   readonly fonts?: readonly EditWorkerFont[];
 }

@@ -1,4 +1,5 @@
 import type {
+  DocumentFormat,
   RegisteredFont,
   ResourceLimits,
   ViewerWarning,
@@ -57,7 +58,8 @@ export interface EditSessionCore extends EditSessionBase<
 
 /** Advertised by a `DocumentAdapter` that can edit some of its formats. */
 export interface EditEngineProvider {
-  readonly formats: readonly EditableFormat[];
+  /** Document formats the provider edits; variants map to a session format (pptm → pptx). */
+  readonly formats: readonly DocumentFormat[];
   load(original: Uint8Array, context: EditEngineContext): Promise<EditEngine>;
   /** Adds the format's typed methods on top of the core session. */
   createSession(core: EditSessionCore): EditSession;

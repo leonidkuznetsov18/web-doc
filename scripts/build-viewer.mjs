@@ -34,6 +34,8 @@ for (const [entry, outfile] of [
   ["src/fuzzy-search-worker.ts", "workers/fuzzy-search-worker.js"],
   // Bundles the PDFium JavaScript glue; the WASM itself is fetched at runtime.
   ["src/pdf-edit-worker.ts", "workers/pdf-edit-worker.js"],
+  // The OOXML package layer for PPTX (and later DOCX) editing; no WebAssembly.
+  ["src/ooxml-edit-worker.ts", "workers/ooxml-edit-worker.js"],
 ])
   await build({
     entryPoints: [resolve(packageRoot, entry)],

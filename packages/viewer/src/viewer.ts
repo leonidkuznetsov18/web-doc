@@ -1384,13 +1384,23 @@ interface PreparedViewerDocument extends PreparedDocument {
 }
 
 /** The edit format of `format` when `adapter` can edit it. */
+/** The session format of a document format the adapter's provider edits. */
 function editableFormat(
   adapter: DocumentAdapter,
   format: DocumentFormat,
 ): EditableFormat | undefined {
   const formats: readonly string[] = adapter.edit?.formats ?? [];
-  return formats.includes(format) ? (format as EditableFormat) : undefined;
+  return formats.includes(format) ? SESSION_FORMATS[format] : undefined;
 }
+
+const SESSION_FORMATS: Partial<Record<DocumentFormat, EditableFormat>> = {
+  pdf: "pdf",
+  pptx: "pptx",
+  pptm: "pptx",
+  ppsx: "pptx",
+  docx: "docx",
+  docm: "docx",
+};
 
 /** Validates backend info and freezes it with the viewer's capability flags. */
 function describeDocument(

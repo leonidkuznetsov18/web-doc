@@ -10,6 +10,9 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
+import type { EditEngineProvider } from "../edit/engine.js";
+import type { PptxEditProviderOptions } from "../edit/pptx/provider.js";
+import { PptxSession } from "../edit/pptx/session.js";
 import { fitInlineImagesToPage, type DocxModelLike } from "./docx-images.js";
 import { enforceContainerLimits } from "../limits.js";
 
@@ -229,6 +232,8 @@ export interface LegacyConversionOptions {
 export interface OfficeAdapterOptions {
   readonly engines?: OfficeEngineLoaders;
   readonly legacy?: LegacyConversionOptions;
+  /** Where the OOXML edit worker is served from; the package's own by default. */
+  readonly edit?: PptxEditProviderOptions;
 }
 
 interface DocumentHandle {
@@ -258,6 +263,20 @@ type OfficeHandle = DocumentHandle | PresentationHandle | SpreadsheetHandle;
 
 export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   readonly id = "office";
+  /**
+   * PPTX editing on the OOXML package layer. The worker and the engine
+   * client are imported on the first `edit()`; viewing never loads them.
+   */
+  readonly edit: EditEngineProvider = {
+    formats: ["pptx", "pptm", "ppsx"],
+    load: async (original, context) =>
+      (await import("../edit/pptx/provider.js")).loadPptxEditEngine(
+        original,
+        context,
+        this.#options.edit ?? {},
+      ),
+    createSession: (core) => new PptxSession(core),
+  };
   readonly formats = [...MODERN_FORMATS, ...LEGACY_FORMATS] as const;
   readonly #options: OfficeAdapterOptions;
 
