@@ -1,4 +1,5 @@
 export * from "./contracts.js";
+export * from "./edit/types.js";
 export * from "./client.js";
 export * from "./detect.js";
 export * from "./errors.js";

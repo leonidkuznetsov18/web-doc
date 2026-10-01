@@ -64,16 +64,16 @@ re-exported), the new `ViewerApi` members (temporarily rejecting with
 
 **Acceptance criteria:**
 
-- [ ] All spec names are exported from `web-doc` and `web-doc/headless`; the
+- [x] All spec names are exported from `web-doc` and `web-doc/headless`; the
       engine interface is not.
-- [ ] `resolveLimits` validates the new limits; defaults are 500 and 200.
-- [ ] Existing unit tests pass unchanged; `edit()` on any document rejects with
+- [x] `resolveLimits` validates the new limits; defaults are 500 and 200.
+- [x] Existing unit tests pass unchanged; `edit()` on any document rejects with
       `edit-unsupported`.
 
 **Verification:**
 
-- [ ] `npm run typecheck --workspace web-doc`
-- [ ] `npm run test --workspace web-doc` (new `edit-contracts.test.ts`)
+- [x] `npm run typecheck --workspace web-doc`
+- [x] `npm run test --workspace web-doc` (new `edit-contracts.test.ts`)
 
 **Dependencies:** None
 

@@ -329,7 +329,8 @@ against `maxOperationMs`.
 
 ### Session lifecycle
 
-- `edit()` requires a document in the `ready` state whose
+- `edit()` requires a document in the `ready` state — like every other
+  document method it rejects with `lifecycle-error` when none is — whose
   `capabilities.editing` is true; otherwise it rejects with `edit-unsupported`.
   In the MVP that means `pdf`, `pptx` and `docx` loaded from their own formats,
   not converted from DOC, XLS or PPT.

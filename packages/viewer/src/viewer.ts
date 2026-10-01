@@ -25,6 +25,13 @@ import type {
   ViewerOptions,
   ViewerState,
 } from "./contracts.js";
+import type {
+  EditOptions,
+  EditSession,
+  PageHit,
+  PageRect,
+  ViewportRect,
+} from "./edit/types.js";
 import { linkedAbortController } from "./abort.js";
 import { detectFormat } from "./detect.js";
 import { abortError, normalizeError, ViewerError } from "./errors.js";
@@ -249,6 +256,7 @@ export class DocumentViewer implements ViewerApi {
           cellSelection: backendInfo.unit === "sheet",
           search: Boolean(adapter.getTextMap),
           thumbnails: backendInfo.unit !== "sheet",
+          editing: false,
         },
       });
       this.#adapter = adapter;
@@ -872,6 +880,30 @@ export class DocumentViewer implements ViewerApi {
       queueMicrotask(() => URL.revokeObjectURL(url));
     }
     return blob;
+  }
+
+  async edit(_options: EditOptions = {}): Promise<EditSession> {
+    const { info } = this.#assertReady();
+    throw new ViewerError(
+      "edit-unsupported",
+      "Editing is not available for this document",
+      { details: { format: info.format, reason: "no-engine" } },
+    );
+  }
+
+  getEditSession(): EditSession | undefined {
+    this.#assertAlive();
+    return undefined;
+  }
+
+  pageToClient(_pageIndex: number, _rect: PageRect): ViewportRect | undefined {
+    this.#assertAlive();
+    return undefined;
+  }
+
+  clientToPage(_clientX: number, _clientY: number): PageHit | undefined {
+    this.#assertAlive();
+    return undefined;
   }
 
   on<K extends keyof ViewerEventMap>(
