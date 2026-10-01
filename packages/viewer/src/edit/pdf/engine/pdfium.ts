@@ -213,6 +213,25 @@ export interface PdfiumFunctions {
     image: number,
     fileAccess: number,
   ): boolean;
+  FPDFImageObj_SetBitmap(
+    pages: number,
+    count: number,
+    image: number,
+    bitmap: number,
+  ): boolean;
+  FPDFBitmap_CreateEx(
+    width: number,
+    height: number,
+    format: number,
+    buffer: number,
+    stride: number,
+  ): number;
+  FPDFBitmap_Destroy(bitmap: number): void;
+  FPDFImageObj_GetImagePixelSize(
+    image: number,
+    width: number,
+    height: number,
+  ): boolean;
   FPDFImageObj_SetMatrix(
     image: number,
     a: number,

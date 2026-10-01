@@ -25,6 +25,9 @@ import { buildPdf, fixturePdfium } from "./fixtures/pdf-builder.js";
 function workerPair() {
   const handler = createPdfEditHandler({
     loadPdfium: () => fixturePdfium(),
+    decodeImage: async () => {
+      throw new Error("no images");
+    },
     fetchBytes: async (url) => {
       throw new Error(`No font at ${url}`);
     },

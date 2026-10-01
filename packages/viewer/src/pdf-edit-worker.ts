@@ -20,5 +20,28 @@ attachWorkerEndpoint(
   createPdfEditHandler({
     loadPdfium: async (wasmUrl) => Pdfium.load(await fetchBytes(wasmUrl)),
     fetchBytes,
+    decodeImage: async (bytes, mimeType) => {
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(bytes)], { type: mimeType }),
+      );
+      try {
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        const { data } = context.getImageData(
+          0,
+          0,
+          bitmap.width,
+          bitmap.height,
+        );
+        return {
+          width: bitmap.width,
+          height: bitmap.height,
+          rgba: new Uint8Array(data.buffer),
+        };
+      } finally {
+        bitmap.close();
+      }
+    },
   }),
 );

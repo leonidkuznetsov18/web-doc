@@ -52,6 +52,9 @@ async function engineFor(
   const fetched: string[] = [];
   const handler = createPdfEditHandler({
     loadPdfium: () => fixturePdfium(),
+    decodeImage: async () => {
+      throw new Error("no images");
+    },
     fetchBytes: async (url) => {
       fetched.push(url);
       if (url === FALLBACK_URL) return ttf;

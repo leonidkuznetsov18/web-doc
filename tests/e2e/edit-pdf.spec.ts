@@ -329,3 +329,47 @@ test("draws shapes that render on the page", async ({ page }) => {
   expect(result.kind).toBe("shape");
   expect(result.bounds).toEqual({ x: 50, y: 50, width: 100, height: 100 });
 });
+
+test("inserts a PNG decoded in the worker", async ({ page }) => {
+  const original = await buildPdf([{ width: 300, height: 300 }]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const source = document.createElement("canvas");
+    source.width = 40;
+    source.height = 20;
+    const context = source.getContext("2d")!;
+    context.fillStyle = "#000000";
+    context.fillRect(0, 0, 40, 20);
+    const blob: Blob = await new Promise((resolve) =>
+      source.toBlob((value) => resolve(value!), "image/png"),
+    );
+    const data = new Uint8Array(await blob.arrayBuffer());
+    const darkPixels = async () => {
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const pixels = canvas
+        .getContext("2d")!
+        .getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let offset = 0; offset < pixels.length; offset += 4)
+        if (pixels[offset]! < 64) count += 1;
+      return count;
+    };
+    const before = await darkPixels();
+    const session = await viewer.edit();
+    const receipt = await session.insertImage({
+      pageIndex: 0,
+      rect: { x: 50, y: 50, width: 120, height: 60 },
+      data,
+      mimeType: "image/png",
+    });
+    const after = await darkPixels();
+    const element = await session.getElement(receipt.createdIds[0]);
+    return { before, after, kind: element.kind, bounds: element.bounds };
+  });
+  expect(result.before).toBe(0);
+  expect(result.after).toBeGreaterThan(6500);
+  expect(result.kind).toBe("image");
+  expect(result.bounds).toEqual({ x: 50, y: 50, width: 120, height: 60 });
+});

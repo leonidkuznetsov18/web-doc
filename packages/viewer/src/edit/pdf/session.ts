@@ -15,6 +15,7 @@ import type {
   DeleteElementOperation,
   DeletePageOperation,
   Fields,
+  InsertImageOperation,
   InsertPageOperation,
   InsertShapeOperation,
   InsertTextBoxOperation,
@@ -183,5 +184,12 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.apply([{ op: "setShapeStyle", ...fields }], options);
+  }
+
+  insertImage(
+    fields: Fields<InsertImageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "insertImage", ...fields }], options);
   }
 }

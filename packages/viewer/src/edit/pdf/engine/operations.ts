@@ -1,4 +1,5 @@
-import type { ViewerWarning } from "../../../contracts.js";
+import type { ResourceLimits, ViewerWarning } from "../../../contracts.js";
+import type { ImageCache } from "./images.js";
 import type { OperationIssue } from "../../types.js";
 import type { PdfElement, PdfOperation } from "../types.js";
 import type { PageGeometry } from "./geometry.js";
@@ -12,6 +13,8 @@ export interface OperationContext {
   readonly document: number;
   readonly measurer: TextMeasurer;
   readonly fonts: FontLibrary;
+  readonly images: ImageCache;
+  readonly limits: ResourceLimits;
   readonly pageCount: number;
   /** Geometry of a page; loads it if needed. */
   geometry(pageIndex: number): PageGeometry;

@@ -27,6 +27,9 @@ async function engineFor(original: Uint8Array): Promise<EditEngine> {
   const pair = loopbackWorker(
     createPdfEditHandler({
       loadPdfium: () => fixturePdfium(),
+      decodeImage: async () => {
+        throw new Error("no images");
+      },
       fetchBytes: async (url) => {
         if (url === FALLBACK_URL) return ttf;
         throw new Error(`No font at ${url}`);

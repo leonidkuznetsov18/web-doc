@@ -28,6 +28,9 @@ import { replaceText, setTextStyle } from "./existing-text.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import { insertShape, setShapeStyle } from "./shapes.js";
+import { ImageCache, insertImage } from "./images.js";
+import { defaultResourceLimits } from "../../../limits.js";
+import type { ResourceLimits } from "../../../contracts.js";
 import {
   displayedSize,
   rectContains,
@@ -72,12 +75,15 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   rotatePage: rotatePage as OperationHandler,
   insertShape: insertShape as OperationHandler,
   setShapeStyle: setShapeStyle as OperationHandler,
+  insertImage: insertImage as OperationHandler,
 };
 
 export class PdfEditDocument {
   readonly #pdfium: Pdfium;
   readonly #original: Uint8Array;
   readonly #fonts: FontLibrary;
+  readonly images = new ImageCache();
+  readonly #limits: ResourceLimits;
   #document: PdfiumDocument;
   #measurer: TextMeasurer;
   #pages: PageRecord[];
@@ -89,10 +95,12 @@ export class PdfEditDocument {
     fonts: FontLibrary = new FontLibrary(async () => {
       throw new Error("No font source is configured");
     }),
+    limits: ResourceLimits = defaultResourceLimits,
   ) {
     this.#pdfium = pdfium;
     this.#original = original;
     this.#fonts = fonts;
+    this.#limits = limits;
     this.#document = pdfium.openDocument(original);
     this.#measurer = new TextMeasurer(pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
@@ -272,6 +280,8 @@ export class PdfEditDocument {
       document: this.#document.handle,
       measurer: this.#measurer,
       fonts: this.#fonts,
+      images: this.images,
+      limits: this.#limits,
       pageCount: this.pageCount,
       geometry: (pageIndex) => {
         const record = this.#pages[pageIndex];

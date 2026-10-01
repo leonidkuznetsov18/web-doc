@@ -202,6 +202,16 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       },
       ["target"],
     ),
+    insertImage: operation(
+      "insertImage",
+      {
+        pageIndex: { type: "integer", minimum: 0 },
+        rect: { $ref: "#/$defs/rect" },
+        data: { "x-binary": true, type: "string", contentEncoding: "base64" },
+        mimeType: { enum: ["image/png", "image/jpeg"] },
+      },
+      ["pageIndex", "rect", "data", "mimeType"],
+    ),
   }),
 });
 

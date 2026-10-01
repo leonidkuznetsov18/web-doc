@@ -1,5 +1,6 @@
 import type {
   ApplyOptions,
+  BinaryData,
   EditElement,
   EditReceipt,
   EditSessionBase,
@@ -151,6 +152,15 @@ export type InsertShapeOperation =
       readonly stroke?: PdfStroke;
     };
 
+export interface InsertImageOperation {
+  readonly op: "insertImage";
+  readonly pageIndex: number;
+  readonly rect: PageRect;
+  /** PNG or JPEG bytes; base64 over pure-JSON transports. */
+  readonly data: BinaryData;
+  readonly mimeType: "image/png" | "image/jpeg";
+}
+
 export interface SetShapeStyleOperation {
   readonly op: "setShapeStyle";
   readonly target: string;
@@ -180,7 +190,8 @@ export type PdfOperation =
   | MovePageOperation
   | RotatePageOperation
   | InsertShapeOperation
-  | SetShapeStyleOperation;
+  | SetShapeStyleOperation
+  | InsertImageOperation;
 
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type Fields<T extends PdfOperation> = Omit<T, "op">;
@@ -248,6 +259,11 @@ export interface PdfEditSession extends EditSessionBase<
   /** Changes or removes a shape's stroke and fill. */
   setShapeStyle(
     fields: Fields<SetShapeStyleOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Places a PNG or JPEG inside `rect`; JPEG data is embedded as it is. */
+  insertImage(
+    fields: Fields<InsertImageOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
 }

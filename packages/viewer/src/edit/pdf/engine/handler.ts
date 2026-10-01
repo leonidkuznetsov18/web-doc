@@ -15,6 +15,7 @@ import type {
 import { pdfOperationSchemas } from "../schemas.js";
 import { PdfEditDocument } from "./document.js";
 import { FontLibrary } from "./fonts.js";
+import type { ImageDecoder } from "./images.js";
 import type { Pdfium } from "./pdfium.js";
 
 export interface PdfEditHost {
@@ -22,6 +23,8 @@ export interface PdfEditHost {
   loadPdfium(wasmUrl: string): Promise<Pdfium>;
   /** Fetches font bytes for a URL. */
   fetchBytes(url: string): Promise<Uint8Array>;
+  /** Decodes an image into RGBA pixels. */
+  decodeImage: ImageDecoder;
 }
 
 /**
@@ -56,7 +59,12 @@ export function createPdfEditHandler(
         const open = payload as EditWorkerOpenPayload;
         state?.dispose();
         fonts.register(open.fonts ?? []);
-        state = new PdfEditDocument(pdfium, new Uint8Array(open.data), fonts);
+        state = new PdfEditDocument(
+          pdfium,
+          new Uint8Array(open.data),
+          fonts,
+          open.limits,
+        );
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
         return result;
       }
@@ -65,6 +73,7 @@ export function createPdfEditHandler(
           readonly operations: readonly EditOperation[];
         };
         await fonts.prepare(engine().fontRequests(operations));
+        await engine().images.prepare(operations, host.decodeImage);
         return engine().validate(operations);
       }
       case "edit-apply": {
@@ -72,6 +81,7 @@ export function createPdfEditHandler(
           readonly operations: readonly EditOperation[];
         };
         await fonts.prepare(engine().fontRequests(operations));
+        await engine().images.prepare(operations, host.decodeImage);
         return engine().apply(operations);
       }
       case "edit-materialize":
@@ -81,6 +91,7 @@ export function createPdfEditHandler(
           readonly batches: readonly (readonly EditOperation[])[];
         };
         await fonts.prepare(engine().fontRequests(batches.flat()));
+        await engine().images.prepare(batches.flat(), host.decodeImage);
         engine().restore(batches);
         return undefined;
       }
