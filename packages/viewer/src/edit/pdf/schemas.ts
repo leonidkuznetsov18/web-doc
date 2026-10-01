@@ -113,6 +113,43 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       { target: { $ref: "#/$defs/target" } },
       ["target"],
     ),
+    insertPage: operation(
+      "insertPage",
+      {
+        index: { type: "integer", minimum: 0 },
+        size: {
+          type: "object",
+          required: ["width", "height"],
+          additionalProperties: false,
+          properties: {
+            width: { type: "number", minimum: 3, maximum: 14400 },
+            height: { type: "number", minimum: 3, maximum: 14400 },
+          },
+        },
+      },
+      ["index"],
+    ),
+    deletePage: operation(
+      "deletePage",
+      { pageIndex: { type: "integer", minimum: 0 } },
+      ["pageIndex"],
+    ),
+    movePage: operation(
+      "movePage",
+      {
+        from: { type: "integer", minimum: 0 },
+        to: { type: "integer", minimum: 0 },
+      },
+      ["from", "to"],
+    ),
+    rotatePage: operation(
+      "rotatePage",
+      {
+        pageIndex: { type: "integer", minimum: 0 },
+        rotation: { enum: [0, 90, 180, 270] },
+      },
+      ["pageIndex", "rotation"],
+    ),
   }),
 });
 

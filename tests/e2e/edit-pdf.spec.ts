@@ -192,3 +192,35 @@ test("moves and deletes elements through the session", async ({ page }) => {
   expect(result.remaining).toEqual(["p0:o1"]);
   expect(result.text).not.toContain("Anchor");
 });
+
+test("changes the page structure and the viewer follows", async ({ page }) => {
+  const original = await buildPdf(["One", "Two"]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    await session.insertPage({ index: 1, size: { width: 300, height: 200 } });
+    const afterInsert = {
+      count: viewer.state.pageCount,
+      sizes: viewer.getDocumentInfo().pageSizes,
+    };
+    await session.rotatePage({ pageIndex: 0, rotation: 90 });
+    const afterRotate = viewer.getDocumentInfo().pageSizes[0];
+    await session.movePage({ from: 2, to: 0 });
+    const firstText: string = await viewer.getPageText(0);
+    await session.deletePage({ pageIndex: 1 });
+    return {
+      afterInsert,
+      afterRotate,
+      firstText,
+      finalCount: viewer.state.pageCount,
+      revision: session.state.revision,
+    };
+  });
+  expect(result.afterInsert.count).toBe(3);
+  expect(result.afterInsert.sizes[1]).toEqual({ width: 300, height: 200 });
+  expect(result.afterRotate).toEqual({ width: 792, height: 612 });
+  expect(result.firstText).toBe("Two");
+  expect(result.finalCount).toBe(2);
+  expect(result.revision).toBe(4);
+});

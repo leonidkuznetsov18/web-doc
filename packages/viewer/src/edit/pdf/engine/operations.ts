@@ -24,6 +24,17 @@ export interface OperationContext {
   locate(id: string): ElementLocation | undefined;
   /** The element as a query would return it. */
   element(id: string): PdfElement | undefined;
+  /** Displayed size of a page in points. */
+  pageSize(pageIndex: number): {
+    readonly width: number;
+    readonly height: number;
+  };
+  /** Records a page created at `index`; returns its stable key. */
+  insertPageRecord(index: number): string;
+  removePageRecord(index: number): void;
+  movePageRecord(from: number, to: number): void;
+  /** Drops what the model cached about a page after its geometry changed. */
+  invalidatePage(index: number): void;
   /** Replaces `count` object records from `start` with `records`. */
   spliceObjects(
     pageIndex: number,

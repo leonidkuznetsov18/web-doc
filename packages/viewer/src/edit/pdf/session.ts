@@ -13,14 +13,18 @@ import type {
 } from "../types.js";
 import type {
   DeleteElementOperation,
+  DeletePageOperation,
   Fields,
+  InsertPageOperation,
   InsertTextBoxOperation,
   MoveElementOperation,
+  MovePageOperation,
   PdfEditSession,
   PdfElement,
   PdfOperation,
   ReplaceTextOperation,
   ResizeElementOperation,
+  RotatePageOperation,
   SetTextStyleOperation,
 } from "./types.js";
 
@@ -132,5 +136,33 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.apply([{ op: "deleteElement", ...fields }], options);
+  }
+
+  insertPage(
+    fields: Fields<InsertPageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "insertPage", ...fields }], options);
+  }
+
+  deletePage(
+    fields: Fields<DeletePageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "deletePage", ...fields }], options);
+  }
+
+  movePage(
+    fields: Fields<MovePageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "movePage", ...fields }], options);
+  }
+
+  rotatePage(
+    fields: Fields<RotatePageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "rotatePage", ...fields }], options);
   }
 }

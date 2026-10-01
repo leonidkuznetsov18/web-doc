@@ -24,7 +24,9 @@ import {
 } from "./operations.js";
 import { insertTextBox, replaceText, setTextStyle } from "./text-box.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
+import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import {
+  displayedSize,
   rectContains,
   rectsIntersect,
   roundRect,
@@ -61,6 +63,10 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   resizeElement: resizeElement as OperationHandler,
   moveElement: moveElement as OperationHandler,
   deleteElement: deleteElement as OperationHandler,
+  insertPage: insertPage as OperationHandler,
+  deletePage: deletePage as OperationHandler,
+  movePage: movePage as OperationHandler,
+  rotatePage: rotatePage as OperationHandler,
 };
 
 export class PdfEditDocument {
@@ -257,6 +263,33 @@ export class PdfEditDocument {
       },
       locate: (id) => this.#locate(id),
       element: (id) => this.getElement(id),
+      pageSize: (pageIndex) =>
+        displayedSize(
+          this.#withPage(pageIndex, (page) =>
+            this.#geometryOf(pageIndex, page),
+          ),
+        ),
+      insertPageRecord: (index) => {
+        const key = `q${batch}.${operationIndex}`;
+        this.#pages.splice(index, 0, { key });
+        this.#forgetElements();
+        return key;
+      },
+      removePageRecord: (index) => {
+        this.#pages.splice(index, 1);
+        this.#forgetElements();
+      },
+      movePageRecord: (from, to) => {
+        const [record] = this.#pages.splice(from, 1);
+        this.#pages.splice(to, 0, record!);
+        this.#forgetElements();
+      },
+      invalidatePage: (index) => {
+        const page = this.#pages[index];
+        if (!page) return;
+        delete page.geometry;
+        delete page.elements;
+      },
       spliceObjects: (pageIndex, start, count, records) => {
         const page = this.#pages[pageIndex]!;
         const objects = [...(page.objects ?? [])];
@@ -265,6 +298,11 @@ export class PdfEditDocument {
         delete page.elements;
       },
     };
+  }
+
+  /** Cached elements carry page indexes, which a structure change makes stale. */
+  #forgetElements(): void {
+    for (const page of this.#pages) delete page.elements;
   }
 
   #locate(id: string): ElementLocation | undefined {

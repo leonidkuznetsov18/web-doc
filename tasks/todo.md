@@ -482,15 +482,15 @@ element ids stable across them.
 
 **Acceptance criteria:**
 
-- [ ] After each operation, save and reopen show the expected page count, order,
+- [x] After each operation, save and reopen show the expected page count, order,
       sizes and rotation in PDF.js; the viewer's page count updates.
-- [ ] Deleting the last page fails validation; ids of elements on other pages
+- [x] Deleting the last page fails validation; ids of elements on other pages
       survive page moves, undo and redo.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-pages.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-pages.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 13
 

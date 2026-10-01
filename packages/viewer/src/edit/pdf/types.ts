@@ -103,6 +103,33 @@ export interface DeleteElementOperation {
   readonly target: string;
 }
 
+export interface InsertPageOperation {
+  readonly op: "insertPage";
+  /** Position of the new page, 0 to the current page count. */
+  readonly index: number;
+  /** Points; defaults to the size of the page before, else after, the position. */
+  readonly size?: { readonly width: number; readonly height: number };
+}
+
+export interface DeletePageOperation {
+  readonly op: "deletePage";
+  readonly pageIndex: number;
+}
+
+export interface MovePageOperation {
+  readonly op: "movePage";
+  readonly from: number;
+  /** The page's index after the move. */
+  readonly to: number;
+}
+
+export interface RotatePageOperation {
+  readonly op: "rotatePage";
+  readonly pageIndex: number;
+  /** Absolute clockwise rotation in degrees. */
+  readonly rotation: 0 | 90 | 180 | 270;
+}
+
 /** The PDF operation union; operations are added as they ship. */
 export type PdfOperation =
   | InsertTextBoxOperation
@@ -110,7 +137,11 @@ export type PdfOperation =
   | SetTextStyleOperation
   | ResizeElementOperation
   | MoveElementOperation
-  | DeleteElementOperation;
+  | DeleteElementOperation
+  | InsertPageOperation
+  | DeletePageOperation
+  | MovePageOperation
+  | RotatePageOperation;
 
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type Fields<T extends PdfOperation> = Omit<T, "op">;
@@ -148,6 +179,26 @@ export interface PdfEditSession extends EditSessionBase<
   /** Removes an element and, for a group, every object in it. */
   deleteElement(
     fields: Fields<DeleteElementOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Adds a blank page. */
+  insertPage(
+    fields: Fields<InsertPageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Removes a page; the last page cannot be removed. */
+  deletePage(
+    fields: Fields<DeletePageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Reorders pages. */
+  movePage(
+    fields: Fields<MovePageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Sets a page's rotation. */
+  rotatePage(
+    fields: Fields<RotatePageOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
 }
