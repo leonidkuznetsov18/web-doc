@@ -609,15 +609,15 @@ alpha as a soft mask; pixel and byte limits.
 
 **Acceptance criteria:**
 
-- [ ] A JPEG and a transparent PNG appear at the requested rectangle after save
+- [x] A JPEG and a transparent PNG appear at the requested rectangle after save
       and reopen; the JPEG stream is stored without re-encoding.
-- [ ] Oversized images fail with `resource-limit`; malformed data fails
+- [x] Oversized images fail with `resource-limit`; malformed data fails
       validation.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-images.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-images.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Task 14
 
@@ -639,16 +639,16 @@ header fill) and `setTableCell` (rebuild from parameters), persisted through the
 
 **Acceptance criteria:**
 
-- [ ] A table appears with the requested rows, columns and widths; cell text is
+- [x] A table appears with the requested rows, columns and widths; cell text is
       extracted in reading order after save; after reopen it is one `table`
       element with its rows.
-- [ ] `setTableCell` rebuilds the table; more than 100 rows or 20 columns fails
+- [x] `setTableCell` rebuilds the table; more than 100 rows or 20 columns fails
       validation.
 
 **Verification:**
 
-- [ ] `npm run test --workspace web-doc` (new `pdf-edit-tables.test.ts`)
-- [ ] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
+- [x] `npm run test --workspace web-doc` (new `pdf-edit-tables.test.ts`)
+- [x] `npm run test:e2e -- tests/e2e/edit-pdf.spec.ts`
 
 **Dependencies:** Tasks 16 and 18
 
@@ -663,7 +663,7 @@ header fill) and `setTableCell` (rebuild from parameters), persisted through the
 
 ### Checkpoint D: all 15 operations
 
-- [ ] Unit and `edit-pdf.spec.ts` pass; every operation has a typed method, a
+- [x] Unit and `edit-pdf.spec.ts` pass; every operation has a typed method, a
       schema, a unit test and a browser round trip
 
 ## Phase 4 — hardening and readiness

@@ -1,6 +1,10 @@
 import { validateSchema } from "../../schema.js";
 import type { PageRect } from "../../types.js";
-import { textBoxMarkSchema } from "../schemas.js";
+import {
+  tableMarkSchema,
+  tableMemberMarkSchema,
+  textBoxMarkSchema,
+} from "../schemas.js";
 import type { PdfElement, PdfShapeStyle, PdfTextStyle } from "../types.js";
 import {
   round,
@@ -10,6 +14,7 @@ import {
   type PageGeometry,
 } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
+import type { TableSpec } from "./tables.js";
 
 /** FPDFPageObj_GetType values. */
 export const OBJECT_TEXT = 1;
@@ -116,18 +121,27 @@ export function readMark(
     try {
       const params: unknown = JSON.parse(raw);
       // Marks come from files, so they pass the same checks as operations.
-      if (
-        params &&
-        typeof params === "object" &&
-        (params as MarkParams).kind === "textBox" &&
-        validateSchema(params, textBoxMarkSchema, 0).length === 0
-      )
+      if (params && typeof params === "object" && isValidMark(params))
         return params as MarkParams;
     } catch {
       // A foreign or damaged mark leaves the object a plain element.
     }
   }
   return undefined;
+}
+
+function isValidMark(params: object): boolean {
+  switch ((params as MarkParams).kind) {
+    case "textBox":
+      return validateSchema(params, textBoxMarkSchema, 0).length === 0;
+    case "table":
+      return (
+        validateSchema(params, tableMarkSchema, 0).length === 0 ||
+        validateSchema(params, tableMemberMarkSchema, 0).length === 0
+      );
+    default:
+      return false;
+  }
 }
 
 export function objectBounds(
@@ -193,15 +207,29 @@ function compositeElement(
     .filter((member) => member.kind === "text" && member.text)
     .map((member) => member.text)
     .join("\n");
-  if (mark.kind === "table")
+  if (mark.kind === "table") {
+    // The head mark comes first in drawing order and carries the inputs.
+    const spec = mark as unknown as TableSpec;
+    const cells = spec.rows.map((row) => row.join("\t")).join("\n");
     return {
       id: mark.id,
       kind: "table",
       pageIndex,
       bounds,
-      ...(text ? { text } : {}),
+      ...(cells.trim() ? { text: cells } : {}),
+      shapeStyle: {
+        stroke: {
+          color: spec.style.borderColor,
+          width: spec.style.borderWidth,
+        },
+        ...(spec.style.headerFill
+          ? { fill: { color: spec.style.headerFill } }
+          : {}),
+      },
+      table: { rows: spec.rows },
       operations: TABLE_OPERATIONS,
     };
+  }
   const style = members.find((member) => member.textStyle)?.textStyle;
   return {
     id: mark.id,

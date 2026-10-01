@@ -18,6 +18,7 @@ import type {
   InsertImageOperation,
   InsertPageOperation,
   InsertShapeOperation,
+  InsertTableOperation,
   InsertTextBoxOperation,
   MoveElementOperation,
   MovePageOperation,
@@ -28,6 +29,7 @@ import type {
   ResizeElementOperation,
   RotatePageOperation,
   SetShapeStyleOperation,
+  SetTableCellOperation,
   SetTextStyleOperation,
 } from "./types.js";
 
@@ -191,5 +193,19 @@ export class PdfSession implements PdfEditSession {
     options?: ApplyOptions,
   ): Promise<EditReceipt> {
     return this.apply([{ op: "insertImage", ...fields }], options);
+  }
+
+  insertTable(
+    fields: Fields<InsertTableOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "insertTable", ...fields }], options);
+  }
+
+  setTableCell(
+    fields: Fields<SetTableCellOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "setTableCell", ...fields }], options);
   }
 }

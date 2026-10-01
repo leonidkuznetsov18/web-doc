@@ -17,6 +17,7 @@ import {
 import type { FontRequest } from "./fonts.js";
 import { displayedSize, pageToUser, type PageGeometry } from "./geometry.js";
 import { layoutText } from "./text-layout.js";
+import { tableSpecOf, tableText, type TableSpec } from "./tables.js";
 import type {
   ElementLocation,
   Issue,
@@ -200,6 +201,15 @@ export function rebuildTextBox(
   location: ElementLocation,
   spec: TextBoxSpec,
 ): DrawnTextBox {
+  const first = removeObjects(context, location);
+  return drawTextBox(context, location.pageIndex, spec, first);
+}
+
+/** Removes an element's objects from the page; returns where they started. */
+export function removeObjects(
+  context: OperationContext,
+  location: ElementLocation,
+): number {
   const { lib } = context.pdfium;
   const first = location.indexes[0]!;
   context.withPage(location.pageIndex, (page) => {
@@ -211,7 +221,7 @@ export function rebuildTextBox(
     }
   });
   context.spliceObjects(location.pageIndex, first, location.indexes.length, []);
-  return drawTextBox(context, location.pageIndex, spec, first);
+  return first;
 }
 
 /** The location and stored inputs of a text box, or the issue that stops the edit. */
@@ -292,6 +302,7 @@ export function fontRequestsOf(
       ? (mark as unknown as TextBoxSpec)
       : undefined;
   };
+  const table = (id: string): TableSpec | undefined => tableSpecOf(markOf(id));
   for (const raw of operations) {
     const operation = raw as PdfOperation;
     switch (operation.op) {
@@ -329,6 +340,27 @@ export function fontRequestsOf(
         const box = spec(operation.target);
         if (box)
           requests.push({ family: box.style.fontFamily, text: box.text });
+        const grid = table(operation.target);
+        if (grid)
+          requests.push({
+            family: grid.style.fontFamily,
+            text: tableText(grid.rows),
+          });
+        break;
+      }
+      case "insertTable":
+        requests.push({
+          family: operation.style?.fontFamily ?? "Helvetica",
+          text: tableText(operation.rows),
+        });
+        break;
+      case "setTableCell": {
+        const grid = table(operation.target);
+        if (grid)
+          requests.push({
+            family: grid.style.fontFamily,
+            text: `${tableText(grid.rows)}\n${operation.text}`,
+          });
         break;
       }
       default:

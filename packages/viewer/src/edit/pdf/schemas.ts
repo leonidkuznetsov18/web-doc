@@ -75,6 +75,30 @@ const definitions: Readonly<Record<string, JsonSchema>> = {
       lineHeight: { type: "number", minimum: 0.5, maximum: 5 },
     },
   },
+  tableStyle: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      fontFamily: { type: "string", minLength: 1, maxLength: 100 },
+      fontSize: { type: "number", minimum: 1, maximum: 500 },
+      color: { $ref: "#/$defs/color" },
+      borderColor: { $ref: "#/$defs/color" },
+      borderWidth: { type: "number", minimum: 0, maximum: 20 },
+      cellPadding: { type: "number", minimum: 0, maximum: 100 },
+      headerFill: { $ref: "#/$defs/color" },
+    },
+  },
+  tableRows: {
+    type: "array",
+    minItems: 1,
+    maxItems: 100,
+    items: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      items: { type: "string", maxLength: 2000 },
+    },
+  },
 };
 
 function operation(
@@ -212,6 +236,33 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       },
       ["pageIndex", "rect", "data", "mimeType"],
     ),
+    insertTable: operation(
+      "insertTable",
+      {
+        pageIndex: { type: "integer", minimum: 0 },
+        at: { $ref: "#/$defs/point" },
+        width: { type: "number", exclusiveMinimum: 0 },
+        rows: { $ref: "#/$defs/tableRows" },
+        columnWidths: {
+          type: "array",
+          minItems: 1,
+          maxItems: 20,
+          items: { type: "number", exclusiveMinimum: 0 },
+        },
+        style: { $ref: "#/$defs/tableStyle" },
+      },
+      ["pageIndex", "at", "width", "rows"],
+    ),
+    setTableCell: operation(
+      "setTableCell",
+      {
+        target: { $ref: "#/$defs/target" },
+        row: { type: "integer", minimum: 0 },
+        column: { type: "integer", minimum: 0 },
+        text: { type: "string", maxLength: 2000 },
+      },
+      ["target", "row", "column", "text"],
+    ),
   }),
 });
 
@@ -219,6 +270,52 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
  * What a `WebDoc` mark found in a file must look like before its objects are
  * treated as one of web-doc's own elements. Anything else stays plain objects.
  */
+/** The head mark of a table, on its path objects, holding every input. */
+export const tableMarkSchema: JsonSchema = {
+  type: "object",
+  required: ["kind", "id", "at", "rows", "columnWidths", "style"],
+  additionalProperties: false,
+  properties: {
+    kind: { const: "table" },
+    id: { $ref: "#/$defs/target" },
+    at: { $ref: "#/$defs/point" },
+    rows: { $ref: "#/$defs/tableRows" },
+    columnWidths: {
+      type: "array",
+      minItems: 1,
+      maxItems: 20,
+      items: { type: "number", exclusiveMinimum: 0 },
+    },
+    style: {
+      type: "object",
+      required: [
+        "fontFamily",
+        "fontSize",
+        "color",
+        "borderColor",
+        "borderWidth",
+        "cellPadding",
+        "headerFill",
+      ],
+      additionalProperties: false,
+      properties: {
+        ...(definitions.tableStyle!.properties as Record<string, JsonSchema>),
+        headerFill: { type: ["string", "null"], pattern: "^#[0-9A-Fa-f]{6}$" },
+      },
+    },
+  },
+  $defs: definitions,
+};
+
+/** The mark on a table's text objects: the id alone. */
+export const tableMemberMarkSchema: JsonSchema = {
+  type: "object",
+  required: ["kind", "id"],
+  additionalProperties: false,
+  properties: { kind: { const: "table" }, id: { $ref: "#/$defs/target" } },
+  $defs: definitions,
+};
+
 export const textBoxMarkSchema: JsonSchema = {
   type: "object",
   required: ["kind", "id", "rect", "text", "style"],

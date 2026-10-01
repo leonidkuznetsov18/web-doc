@@ -161,6 +161,47 @@ export interface InsertImageOperation {
   readonly mimeType: "image/png" | "image/jpeg";
 }
 
+export interface PdfTableStyle {
+  /** "Helvetica" (default), "Times", "Courier" or a registered family. */
+  readonly fontFamily?: string;
+  /** 1–500 points, default 10. */
+  readonly fontSize?: number;
+  /** Text colour, `#RRGGBB`, default "#000000". */
+  readonly color?: string;
+  /** Grid colour, default "#000000". */
+  readonly borderColor?: string;
+  /** Grid stroke in points, 0–20, default 0.75. */
+  readonly borderWidth?: number;
+  /** Space between a cell's edges and its text, 0–100, default 4. */
+  readonly cellPadding?: number;
+  /** Fill of the first row; none by default. */
+  readonly headerFill?: string;
+}
+
+export interface InsertTableOperation {
+  readonly op: "insertTable";
+  readonly pageIndex: number;
+  /** Top-left corner in page space. */
+  readonly at: PagePoint;
+  /** Total width in points; the height follows the wrapped cell text. */
+  readonly width: number;
+  /** Cell text by row; every row has the same number of cells. 1–100 rows, 1–20 columns. */
+  readonly rows: readonly (readonly string[])[];
+  /** Relative column weights, one per column; equal when omitted. */
+  readonly columnWidths?: readonly number[];
+  readonly style?: PdfTableStyle;
+}
+
+export interface SetTableCellOperation {
+  readonly op: "setTableCell";
+  /** A `table` element. */
+  readonly target: string;
+  readonly row: number;
+  readonly column: number;
+  /** The cell's new text; empty clears the cell. */
+  readonly text: string;
+}
+
 export interface SetShapeStyleOperation {
   readonly op: "setShapeStyle";
   readonly target: string;
@@ -191,7 +232,9 @@ export type PdfOperation =
   | RotatePageOperation
   | InsertShapeOperation
   | SetShapeStyleOperation
-  | InsertImageOperation;
+  | InsertImageOperation
+  | InsertTableOperation
+  | SetTableCellOperation;
 
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type Fields<T extends PdfOperation> = Omit<T, "op">;
@@ -264,6 +307,16 @@ export interface PdfEditSession extends EditSessionBase<
   /** Places a PNG or JPEG inside `rect`; JPEG data is embedded as it is. */
   insertImage(
     fields: Fields<InsertImageOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Draws a grid with wrapped cell text; rows grow to fit their tallest cell. */
+  insertTable(
+    fields: Fields<InsertTableOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Changes one cell's text and lays the table out again. */
+  setTableCell(
+    fields: Fields<SetTableCellOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
 }

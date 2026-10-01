@@ -29,6 +29,7 @@ import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
 import { insertShape, setShapeStyle } from "./shapes.js";
 import { ImageCache, insertImage } from "./images.js";
+import { insertTable, setTableCell, tableSpecOf } from "./tables.js";
 import { defaultResourceLimits } from "../../../limits.js";
 import type { ResourceLimits } from "../../../contracts.js";
 import {
@@ -76,6 +77,8 @@ const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
   insertShape: insertShape as OperationHandler,
   setShapeStyle: setShapeStyle as OperationHandler,
   insertImage: insertImage as OperationHandler,
+  insertTable: insertTable as OperationHandler,
+  setTableCell: setTableCell as OperationHandler,
 };
 
 export class PdfEditDocument {
@@ -430,8 +433,18 @@ export class PdfEditDocument {
         ...(mark ? { mark: this.#ownMark(mark, record.key) } : {}),
       });
     }
-    record.objects = objects;
-    return objects;
+    // A table's inputs sit on its first object; members without that head
+    // are plain objects again.
+    const heads = new Map<string, boolean>();
+    for (const object of objects)
+      if (object.mark && !heads.has(object.id))
+        heads.set(object.id, tableSpecOf(object.mark) !== undefined);
+    record.objects = objects.map((object, index) =>
+      object.mark?.kind === "table" && !heads.get(object.id)
+        ? { id: `${record.key}:o${index}`, type: object.type }
+        : object,
+    );
+    return record.objects;
   }
 
   /** Marks from other sessions keep their id only if it cannot collide with ours. */

@@ -16,10 +16,11 @@ import type {
 import {
   changed,
   rebuildTextBox,
-  textBoxTarget,
+  removeObjects,
   validateRect,
   type TextBoxSpec,
 } from "./text-box.js";
+import { changedTable, rebuildTable, tableSpecOf } from "./tables.js";
 
 /*
  * Geometry operations that apply to any element. Plain objects are moved and
@@ -53,6 +54,15 @@ export const moveElement: OperationHandler<MoveElementOperation> = {
         rebuildTextBox(context, location, {
           ...spec,
           rect: shifted(spec.rect, dx, dy),
+        }),
+      );
+    const table = tableSpecOf(location.record.mark);
+    if (table)
+      return changedTable(
+        location,
+        rebuildTable(context, location, {
+          ...table,
+          at: { x: table.at.x + dx, y: table.at.y + dy },
         }),
       );
     const geometry = context.geometry(location.pageIndex);
@@ -132,20 +142,7 @@ export const deleteElement: OperationHandler<DeleteElementOperation> = {
   },
   apply(operation, context) {
     const { location } = anyTarget(operation.target, context)!;
-    const { lib } = context.pdfium;
-    context.withPage(location.pageIndex, (page) => {
-      for (const index of [...location.indexes].reverse()) {
-        const object = lib.FPDFPage_GetObject(page, index);
-        lib.FPDFPage_RemoveObject(page, object);
-        lib.FPDFPageObj_Destroy(object);
-      }
-    });
-    context.spliceObjects(
-      location.pageIndex,
-      location.indexes[0]!,
-      location.indexes.length,
-      [],
-    );
+    removeObjects(context, location);
     return changed(location, { overflow: false });
   },
 };

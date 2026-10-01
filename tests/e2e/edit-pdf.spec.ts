@@ -373,3 +373,61 @@ test("inserts a PNG decoded in the worker", async ({ page }) => {
   expect(result.kind).toBe("image");
   expect(result.bounds).toEqual({ x: 50, y: 50, width: 120, height: 60 });
 });
+
+test("inserts a table and edits a cell", async ({ page }) => {
+  const original = await buildPdf([{ width: 400, height: 400 }]);
+  await loadPdf(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as unknown as { __pdfViewer: any }).__pdfViewer;
+    const session = await viewer.edit();
+    const receipt = await session.insertTable({
+      pageIndex: 0,
+      at: { x: 40, y: 40 },
+      width: 300,
+      rows: [
+        ["Item", "Total"],
+        ["Apples", "3.60"],
+      ],
+      style: { headerFill: "#dddddd" },
+    });
+    const id = receipt.createdIds[0];
+    await session.setTableCell({ target: id, row: 1, column: 1, text: "4.80" });
+    const element = await session.getElement(id);
+    const found = await session.findText("4.80");
+    const canvas = document.createElement("canvas");
+    await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+    const pixels = canvas
+      .getContext("2d")!
+      .getImageData(0, 0, canvas.width, canvas.height).data;
+    // Thin grid lines render grey, so any ink counts; the page was blank.
+    let dark = 0;
+    for (let offset = 0; offset < pixels.length; offset += 4)
+      if (pixels[offset]! < 200) dark += 1;
+    return {
+      kind: element.kind,
+      rows: element.table.rows,
+      operations: element.operations,
+      bounds: element.bounds,
+      matches: found.length,
+      dark,
+      revision: session.state.revision,
+    };
+  });
+  expect(result.kind).toBe("table");
+  expect(result.rows).toEqual([
+    ["Item", "Total"],
+    ["Apples", "4.80"],
+  ]);
+  expect(result.operations).toEqual([
+    "setTableCell",
+    "moveElement",
+    "deleteElement",
+  ]);
+  // PDFium grows a stroked path's bounds by the stroke width on each side.
+  expect(Math.abs(result.bounds.x - 40)).toBeLessThan(1.6);
+  expect(Math.abs(result.bounds.y - 40)).toBeLessThan(1.6);
+  expect(Math.abs(result.bounds.width - 300)).toBeLessThan(1.6);
+  expect(result.matches).toBe(1);
+  expect(result.dark).toBeGreaterThan(500);
+  expect(result.revision).toBe(2);
+});
