@@ -6,11 +6,14 @@ import type {
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
 import { readDescription, readOutline } from "./ai/outline.js";
+import { resolveTargets } from "./ai/targets.js";
 import type {
   DescribeOptions,
   DocumentDescription,
   OutlineOptions,
   OutlineResult,
+  TargetCandidate,
+  TargetQuery,
 } from "./ai/types.js";
 import {
   assetIdOf,
@@ -430,6 +433,13 @@ export class EditSessionController implements EditSessionCore {
 
   describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
     return readDescription(this, this.#host.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
   }
 
   readItem<T>(

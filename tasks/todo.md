@@ -1668,7 +1668,7 @@ Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`
 - [x] Task 59: Outline and description — `getOutline()` (nesting, ordinals,
       labels, operations) and `describe()` (line grammar, character budget)
       on PDF, PPTX and DOCX sessions; unit tests per format; docs grammar.
-- [ ] Task 60: Target resolution — `resolveTargets()` with the exact,
+- [x] Task 60: Target resolution — `resolveTargets()` with the exact,
       normalized, fuzzy and kind-only passes over `findText()` and the
       elements' text, ranges on candidates, citation queries; unit tests.
 - [ ] Task 61: Named checkpoints — `createCheckpoint`, `listCheckpoints`,

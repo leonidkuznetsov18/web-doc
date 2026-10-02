@@ -8,12 +8,23 @@ import { normalizeSearchText, normalizeWithMap } from "./search-text.js";
  * than a page × query traceback matrix. Equal-cost occurrences prefer the
  * earliest end, so an unmatched character after a passage cannot extend it.
  */
+/** The best contiguous alignment of a query in a text, with its edit cost. */
+export interface FuzzyPassage {
+  /** Offsets into the original text, in UTF-16 code units. */
+  readonly start: number;
+  readonly end: number;
+  /** Edits between the query and the passage; `cost / length` is the score Fuse bounds. */
+  readonly cost: number;
+  /** The normalized query's length. */
+  readonly length: number;
+}
+
 export function alignFuzzyPassage(
   text: string,
   query: string,
   caseSensitive: boolean,
   maxScore: number,
-): { start: number; end: number } | undefined {
+): FuzzyPassage | undefined {
   const source = normalizeWithMap(text, caseSensitive);
   const pattern = normalizeSearchText(query, caseSensitive);
   const length = pattern.length;
@@ -66,5 +77,7 @@ export function alignFuzzyPassage(
   if (bestEnd <= bestStart || bestCost / length > maxScore) return undefined;
   const start = source.starts[bestStart];
   const end = source.ends[bestEnd - 1];
-  return start === undefined || end === undefined ? undefined : { start, end };
+  return start === undefined || end === undefined
+    ? undefined
+    : { start, end, cost: bestCost, length };
 }

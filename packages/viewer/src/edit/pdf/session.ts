@@ -1,11 +1,14 @@
 import type { TextSelection } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { readDescription, readOutline } from "../ai/outline.js";
+import { resolveTargets } from "../ai/targets.js";
 import type {
   DescribeOptions,
   DocumentDescription,
   OutlineOptions,
   OutlineResult,
+  TargetCandidate,
+  TargetQuery,
 } from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import { reportError } from "../session.js";
@@ -270,6 +273,13 @@ export class PdfSession implements PdfEditSession {
 
   describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
     return readDescription(this, this.#core.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
   }
 
   getTextLayout(

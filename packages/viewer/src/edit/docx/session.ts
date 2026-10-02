@@ -1,10 +1,13 @@
 import type { TextRun } from "../../contracts.js";
 import { readDescription, readOutline } from "../ai/outline.js";
+import { resolveTargets } from "../ai/targets.js";
 import type {
   DescribeOptions,
   DocumentDescription,
   OutlineOptions,
   OutlineResult,
+  TargetCandidate,
+  TargetQuery,
 } from "../ai/types.js";
 import type { EditSessionAccess, EditSessionCore } from "../engine.js";
 import type {
@@ -221,6 +224,13 @@ export class DocxSession implements DocxEditSession {
 
   describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
     return readDescription(this, this.#core.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
   }
 
   replaceText(

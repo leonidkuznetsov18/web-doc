@@ -3,6 +3,7 @@ import type {
   ReadItem,
   ReadOptions,
   ReadResult,
+  TextRange,
 } from "../types.js";
 
 /*
@@ -76,10 +77,48 @@ export interface DocumentDescription {
   readonly truncated: boolean;
 }
 
+/** What a model names: a quoted text, a citation with its page, a kind, a place. */
+export interface TargetQuery {
+  /** Text to find; whitespace-insensitive, case-insensitive, tolerant to small differences. */
+  readonly text?: string;
+  /** A citation as the viewer's `search()` gets them: the passage and the 1-based page it is expected on. */
+  readonly citation?: { readonly text: string; readonly pageNumber?: number };
+  readonly pageIndex?: number;
+  readonly kinds?: readonly string[];
+  /** Restrict to an element and its descendants (a table, a group). */
+  readonly within?: string;
+  /** Default 5. */
+  readonly maxResults?: number;
+}
+
+/** One way to read a query, with how it was found and how far to trust it. */
+export interface TargetCandidate {
+  readonly elementId: string;
+  /** The matched part, for ranged operations; absent when the match is the element's whole text. */
+  readonly range?: TextRange;
+  readonly pageIndex: number;
+  /** 1 for an exact match, down to 0.5 for the loosest accepted one. */
+  readonly score: number;
+  /** The pass that matched: the engine's exact search, folded text, fuzzy alignment, or a kind lookup. */
+  readonly reason: "exact" | "normalized" | "fuzzy" | "kind-only";
+  /** The matched text with a little context, on one line. */
+  readonly snippet: string;
+}
+
 /** The AI-facing reads every edit session has. */
 export interface EditSessionReads {
   /** The body elements in reading order, shaped for a prompt. */
   getOutline(options?: OutlineOptions): Promise<OutlineResult>;
   /** The outline as plain text, one line per element, within a character budget. */
   describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>>;
+  /**
+   * Elements and ranges a query names, best first: an exact match, else a
+   * match with whitespace, case, quotes and compatibility forms folded,
+   * else the viewer's fuzzy citation match, else (without text) the
+   * elements of the asked kinds in reading order.
+   */
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>>;
 }

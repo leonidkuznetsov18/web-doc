@@ -110,6 +110,58 @@ is the session's.
 `DescribeOptions` takes every `OutlineOptions` field, so a description of one
 page or of the tables only is one call.
 
+## Target resolution
+
+```ts
+const { items } = await session.resolveTargets({
+  citation: { text: "covers three regions", pageNumber: 2 },
+});
+const best = items[0];
+if (best && best.score >= 0.9)
+  await session.replaceText({
+    target: best.elementId,
+    ...(best.range ? { range: best.range } : {}),
+    text: "covers four regions",
+  });
+```
+
+A model names what it wants to edit by quoting it, by citing it with a page,
+or by kind. `resolveTargets()` turns that into element ids and ranges in
+named passes and stops at the first that yields, so a host knows how far to
+trust a candidate and when to ask the person instead.
+
+| Query field  | Meaning                                                                                                                                                              |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text`       | Text to find; whitespace-insensitive, case-insensitive, tolerant to small differences.                                                                               |
+| `citation`   | A passage and the 1-based page it is expected on, as the viewer's `search()` takes them. The page is a hint, not a filter: candidates are ordered by distance to it. |
+| `pageIndex`  | Only elements of that page (0-based).                                                                                                                                |
+| `kinds`      | Only elements of those kinds.                                                                                                                                        |
+| `within`     | Only an element and its descendants (a table's cells, a group's members).                                                                                            |
+| `maxResults` | Default 5.                                                                                                                                                           |
+
+The passes, with the `reason` and `score` a candidate reports:
+
+| Pass         | Score      | What matched                                                                                                                  |
+| ------------ | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `exact`      | 1          | The engine's `findText()`: the characters as the document holds them.                                                         |
+| `normalized` | 0.9        | The elements' text with whitespace runs folded to one space, case folded, curly quotes and dashes made ASCII, NFKC applied.   |
+| `fuzzy`      | 0.85 – 0.5 | The viewer's citation matching (Fuse.js candidates, contiguous edit alignment) over the elements' text; lower for more edits. |
+| `kind-only`  | 0.5        | No text in the query: the elements of `kinds` in reading order.                                                               |
+
+A candidate carries `elementId` (the first element the match touches),
+`pageIndex`, a `snippet` (the matched text with a little context, on one
+line) and a `range` when the match is a part of the element's text, in the
+form `replaceText` and `setTextStyle` take; a match that covers an element's
+whole text has no range, so the operation takes the element as it is. The
+folded and fuzzy passes run over the elements' text joined in reading order,
+so a passage spanning two paragraphs or two PDF text objects resolves to a
+range from the first element into the last. A Word table contributes its
+cells, never its own text, so a match names the cell paragraph the
+operations take.
+
+Without text and without `kinds` the result is empty; with text that
+nothing resembles it is empty as well, never an error.
+
 ## Limits
 
 | Limit              | Default | Meaning                                                  |
