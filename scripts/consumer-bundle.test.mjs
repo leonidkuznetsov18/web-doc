@@ -93,6 +93,8 @@ for (const [specifier, entry] of Object.entries(entries))
           return file;
         }),
       );
+      // `.mjs`, so Node reads the bundles as ES modules wherever the
+      // temporary directory is (a `.js` file there would be CommonJS).
       await build({
         entryPoints: consumers,
         bundle: true,
@@ -100,13 +102,14 @@ for (const [specifier, entry] of Object.entries(entries))
         platform: "browser",
         target: ["es2022"],
         outdir: resolve(directory, "out"),
+        outExtension: { ".js": ".mjs" },
         logLevel: "silent",
         loader: { ".wasm": "file" },
       });
       const missing = [];
       for (const name of names) {
         const bundled = await import(
-          pathToFileURL(resolve(directory, "out", `consumer-${name}.js`)).href
+          pathToFileURL(resolve(directory, "out", `consumer-${name}.mjs`)).href
         );
         if (bundled[name] === undefined) missing.push(name);
       }
