@@ -1683,12 +1683,12 @@ Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`
       `setTableCell`, `setTextStyle`, `setParagraphStyle`; `getRevisions`;
       worker plumbing; XML-level unit tests; a fixture for the Word/Pages
       check.
-- [ ] Task 64: Agent turn in the browser (`tests/e2e/edit-ai.spec.ts` in
+- [x] Task 64: Agent turn in the browser (`tests/e2e/edit-ai.spec.ts` in
       the matrix), `describe()` latency on 500 pages/slides,
       `docs/api/ai-editing.md`, roadmap and notices, `npm run check`,
       Linear proofs.
 
 ### Checkpoint L: AI tooling done
 
-- [ ] Unit, matrix and `npm run check` green; docs written; release
-      published (Leonid); the module's Linear ticket Done.
+- [x] Unit, matrix and `npm run check` green; docs written (2026-10-02).
+- [ ] Release published (Leonid); the module's Linear ticket Done.

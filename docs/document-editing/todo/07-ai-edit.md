@@ -1,8 +1,8 @@
 # Module 07. `ai-edit` — AI tooling over the edit sessions
 
-**Status:** Approved 2026-10-02 with the recommended answers to the open
-questions (decisions 8–10); in progress (T59–T64), Linear ACTION-858 under
-ACTION-723 (web-doc). Everything here is additive to the
+**Status:** Done 2026-10-02 (T59–T64; approved the same day with the
+recommended answers to the open questions, decisions 8–10), Linear
+ACTION-858 under ACTION-723 (web-doc); release pending. Everything here is additive to the
 `EditSession` contract of module 01 and to the three format sessions:
 nothing a host or the Operators shell uses today changes shape.
 
@@ -457,4 +457,31 @@ None: the three questions of the draft were decided on 2026-10-02
 
 ## Actual result
 
-(Filled in as the tasks land.)
+Done 2026-10-02 on `feat/ai-edit` (T59–T64, ACTION-858); every method of
+the spec works on PDF, PPTX and DOCX sessions, in the worker-backed sessions
+of the viewer and through the tool path only. Deviations from the draft:
+
+- `getOutline()` resolves to `OutlineResult`, a `ReadResult<OutlineNode>`
+  with `nodeCount` and `truncated` added, so the node limit is reported
+  without a second call. `OutlineNode` gains `readOnlyReason` and `hidden`.
+- The description's header names the format, the page count and the
+  element count; page sizes are not part of it, since a session does not
+  know them (the viewer's `DocumentInfo.pageSizes` does).
+- `describeReceipt()` takes the format, the operations and the receipt.
+- `restoreCheckpoint()` reuses the checkpoint's state id for its history
+  entry, so `dirty` is exact after restoring a saved state; its receipt's
+  `createdIds` and `removedIds` are the net of the batches between the two
+  states; unknown ids reject with `invalid-operation` (the tool answers
+  `unknown-checkpoint`).
+- `documentchange` gains the reason `restore`.
+- A paragraph with changed properties only (`w:rPrChange`, `w:pPrChange`)
+  stays editable, as module 06 decided; insertions, deletions and moves on
+  runs or on the paragraph mark lock it. A tracked change that would touch
+  a hyperlink, content control or field is refused
+  (`unsupported-change-mode`), since a revision cannot wrap them.
+- The write mode (`changeMode`, `author`, `timestamp`) travels with the
+  engine batch and the history entry, so replays reproduce tracked bytes.
+- `describe()` latency (Chromium): 8 ms on 500 DOCX pages, 53 ms on 500
+  slides, 72 ms on 500 PDF pages; recorded in `docs/api/ai-editing.md`.
+- The manual Word and Pages check of `artifacts/docx-fixtures/tracked-changes.docx`
+  (`npm run fixtures:docx`) is Leonid's, like the module 06 fixtures.

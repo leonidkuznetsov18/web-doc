@@ -343,3 +343,21 @@ the same bytes.
 | `maxEditCheckpoints` | 20      | Named checkpoints alive at once                          |
 
 All three join `ResourceLimits` and are raised through `ViewerClient.create({ limits })`.
+
+## Performance
+
+`describe()` is one body scan: no layout, no geometry beyond the pages the
+viewer has cached. Measured in the browser matrix on the synthetic 500-page
+Word document, the 500-slide deck and a 500-page PDF (Chromium, Apple
+silicon), the first call after `edit()` and a repeated one:
+
+| Document         | Elements | First `describe()` | Repeated | Description                 |
+| ---------------- | -------- | ------------------ | -------- | --------------------------- |
+| DOCX, 500 pages  | 500      | 8 ms               | 6 ms     | 49 896 chars, cut to budget |
+| PPTX, 500 slides | 1 000    | 53 ms              | 7 ms     | 49 971 chars, cut to budget |
+| PDF, 500 pages   | 500      | 72 ms              | 1 ms     | 16 702 chars                |
+
+The slowest browser of the matrix (Firefox) takes up to 19 ms, 120 ms and
+692 ms for the first call. The browser suite (`tests/e2e/edit-ai.spec.ts`)
+fails above the operation budget (`maxOperationMs`, 30 s) and records the
+numbers on every run.

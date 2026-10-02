@@ -18,6 +18,7 @@ export default defineConfig({
     "ooxml-package.spec.ts",
     "edit-pptx.spec.ts",
     "edit-docx.spec.ts",
+    "edit-ai.spec.ts",
   ],
   fullyParallel: true,
   projects: [

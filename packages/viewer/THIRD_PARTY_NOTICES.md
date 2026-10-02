@@ -38,9 +38,16 @@ The release artifact contains or depends on the following principal components. 
   a flat block index over the original bytes with the raw paragraph and run
   properties kept, property merges that keep the original bytes where a
   value does not change and place new children in schema order, and
-  section properties that an edited paragraph never duplicates. The
+  section properties that an edited paragraph never duplicates. The AI
+  tooling of `packages/viewer/src/edit/ai/` follows its published ideas of
+  a numbered document skeleton the model reads first with full content
+  pulled on demand within a character budget, writes made only through a
+  small validated tool set with a dry run, index addressing guarded by an
+  optimistic "document seen" check, a per-turn snapshot to roll back, and
+  Word tracked changes authored by the AI as the review channel. The
   implementations in `packages/viewer/src/edit/pdf/selection.ts`,
-  `packages/viewer/src/edit/pptx/` and `packages/viewer/src/edit/docx/` are
-  web-doc's own; no GenOffice code is included.
+  `packages/viewer/src/edit/pptx/`, `packages/viewer/src/edit/docx/` and
+  `packages/viewer/src/edit/ai/` are web-doc's own; no GenOffice code is
+  included.
 - [Noto Sans](https://github.com/notofonts/noto-fonts) and [Noto Sans CJK](https://github.com/notofonts/noto-cjk) subset fonts — SIL Open Font License 1.1. The font manifest, complete OFL text, pinned source commits and SHA-256 hashes are included in `dist/fonts/`.
   No Microsoft proprietary font or copyleft runtime component is bundled. Transitive notices and license expressions are verified by `npm run licenses`.
