@@ -224,8 +224,26 @@ Proposed in the draft; the bump itself awaits approval.
   instead of two. The ticket's "the bundle does not grow" is therefore met
   only for the number of engine copies, not for the bytes a DOCX or XLSX
   viewer fetches; recorded here for the release note.
+- **T53 (2026-10-02)**: `TextRun.paragraphId` on every DOCX run the adapter
+  reports. `src/adapters/docx-paragraphs.ts` resolves a run's `source`
+  (story, instance, block path) through the engine's model to the paragraph
+  whose `_wd<id>` bookmark names its `w:p`, for the body, tables, the
+  document's and a section break's headers and footers (`default`, `first`,
+  `even`, `section:<i>:<kind>`), footnotes and endnotes by id, and text
+  boxes through their host run's key; the engine's own `paragraphId` wins
+  when it reads one. A paragraph the engine splits around a hoisted page
+  break keeps its first part's id (the second part carries no bookmark);
+  any other unmarked paragraph gets no id rather than a wrong one. Results
+  are cached per source; a model getter that throws (worker mode) leaves
+  runs without ids. Unit tests: `docx-paragraphs.test.ts` (8) and the
+  adapter test; `docx-engine.spec.ts` now also reads the viewer's runs
+  through `selectText`: all 228 runs of `sample.docx` carry ids that the
+  pre-pass wrote, and a built fixture whose first paragraph holds a page
+  break shows the same id on both pages with the table cell and the last
+  paragraph on their own ids. Documented in `docs/api/reference.md` and
+  `docs/formats/office.md`.
 
 ## Open questions
 
-- None for the bump. The release and the monorepo verification on DOCX
-  previews stay Leonid's.
+- None. The release and the monorepo verification on DOCX previews stay
+  Leonid's.

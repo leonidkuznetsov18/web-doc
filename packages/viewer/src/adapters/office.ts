@@ -13,6 +13,12 @@ import { abortError, ViewerError } from "../errors.js";
 import type { EditEngineProvider } from "../edit/engine.js";
 import type { PptxEditProviderOptions } from "../edit/pptx/provider.js";
 import { PptxSession } from "../edit/pptx/session.js";
+import {
+  createDocxParagraphIdResolver,
+  type DocxModelDocument,
+  type DocxParagraphIdResolver,
+  type DocxRunSource,
+} from "./docx-paragraphs.js";
 import { prepareDocxForDisplay } from "./docx-prepass.js";
 import { enforceContainerLimits } from "../limits.js";
 
@@ -58,6 +64,10 @@ interface DocxRun {
   readonly h: number;
   readonly fontSize: number;
   readonly font: string;
+  /** The `w14:paraId` of the run's paragraph, when the engine reads one. */
+  readonly paragraphId?: string;
+  /** Where the run came from in the engine's model; the paragraph bridge. */
+  readonly source?: DocxRunSource;
   readonly letterSpacingPx?: number;
   readonly transform?: string;
   readonly eastAsianVert?: boolean;
@@ -66,6 +76,11 @@ interface DocxRun {
 
 interface DocxBackend {
   readonly pageCount: number;
+  /**
+   * The parsed model (`main` mode). Read once at open for the paragraph
+   * bridge: its paragraphs keep the pre-pass bookmarks that name each `w:p`.
+   */
+  readonly document?: DocxModelDocument;
   pageSize(pageIndex: number): { widthPt: number; heightPt: number };
   renderPage(
     target: HTMLCanvasElement | OffscreenCanvas,
@@ -239,6 +254,8 @@ interface DocumentHandle {
   readonly format: DocumentFormat;
   readonly backend: DocxBackend;
   readonly warnings: readonly ViewerWarning[];
+  /** Maps a run's source to the id of its `w:p` (cached per paragraph). */
+  readonly paragraphIdOf: DocxParagraphIdResolver;
 }
 
 interface PresentationHandle {
@@ -369,7 +386,13 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
           total: 1,
           ratio: 1,
         });
-        return { kind, format: context.format, backend, warnings };
+        return {
+          kind,
+          format: context.format,
+          backend,
+          warnings,
+          paragraphIdOf: createDocxParagraphIdResolver(docxModelOf(backend)),
+        };
       }
       const buffer = exactArrayBuffer(data);
       if (kind === "presentation") {
@@ -554,6 +577,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       return runs.map((run) => {
         const logicalStart = logicalOffset;
         logicalOffset += run.text.length;
+        const paragraphId = run.paragraphId ?? handle.paragraphIdOf(run.source);
         return {
           text: run.text,
           x: run.x,
@@ -562,6 +586,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
           height: run.h,
           font: run.font,
           fontSize: run.fontSize,
+          ...(paragraphId === undefined ? {} : { paragraphId }),
           ...(run.letterSpacingPx === undefined
             ? {}
             : { letterSpacingPx: run.letterSpacingPx }),
@@ -722,6 +747,15 @@ export function createOfficeAdapter(
   options: OfficeAdapterOptions = {},
 ): OfficeDocumentAdapter {
   return new OfficeDocumentAdapter(options);
+}
+
+/** The engine's model when it is reachable; a worker-mode getter throws. */
+function docxModelOf(backend: DocxBackend): DocxModelDocument | undefined {
+  try {
+    return backend.document;
+  } catch {
+    return undefined;
+  }
 }
 
 export function sanitizeOfficeHyperlink(

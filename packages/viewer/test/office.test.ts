@@ -47,6 +47,12 @@ describe("OfficeDocumentAdapter", () => {
       engines: {
         docx: async () => ({
           pageCount: 2,
+          document: {
+            body: [
+              { type: "paragraph", bookmarks: ["_wd1A000001"] },
+              { type: "paragraph" },
+            ],
+          },
           pageSize: () => ({ widthPt: 612, heightPt: 792 }),
           renderPage: async (_target, _index, options) => {
             renderedWidth = options.width;
@@ -61,6 +67,8 @@ describe("OfficeDocumentAdapter", () => {
               fontSize: 12,
               font: '700 12px "Noto Sans"',
               letterSpacingPx: 0.5,
+              paragraphId: "2B000000",
+              source: { story: "body", storyInstance: "body", path: [1, 0] },
               hyperlink: { kind: "external", url: "https://example.com/a" },
             },
             {
@@ -72,6 +80,7 @@ describe("OfficeDocumentAdapter", () => {
               fontSize: 12,
               font: 'italic 12px "Noto Sans"',
               transform: "rotate(90deg)",
+              source: { story: "body", storyInstance: "body", path: [0, 0] },
               hyperlink: { kind: "external", url: "javascript:alert(1)" },
             },
             {
@@ -143,8 +152,47 @@ describe("OfficeDocumentAdapter", () => {
       ref: "chapter",
       pageIndex: 1,
     });
+    // The paragraph bridge: the engine's own id first, else the pre-pass
+    // bookmark of the paragraph the run's source names, else nothing.
+    assert.deepEqual(
+      runs.map((run) => run.paragraphId),
+      ["2B000000", "1A000001", undefined],
+    );
     await adapter.close(handle);
     assert.equal(destroyed, 1);
+  });
+
+  it("opens a DOCX whose model is unreachable and reports its runs without paragraph ids", async () => {
+    const adapter = new OfficeDocumentAdapter({
+      engines: {
+        docx: async () => ({
+          pageCount: 1,
+          get document(): never {
+            throw new Error("worker mode has no model");
+          },
+          pageSize: () => ({ widthPt: 612, heightPt: 792 }),
+          renderPage: async () => {},
+          collectPageRuns: async () => [
+            {
+              text: "x",
+              x: 0,
+              y: 0,
+              w: 5,
+              h: 10,
+              fontSize: 10,
+              font: '10px "Noto Sans"',
+              source: { story: "body", storyInstance: "body", path: [0, 0] },
+            },
+          ],
+          destroy: () => {},
+        }),
+      },
+    });
+    const handle = await adapter.open(Uint8Array.of(1), context("docx"));
+    const runs = await adapter.getTextMap(handle, 0);
+    assert.equal(runs.length, 1);
+    assert.equal("paragraphId" in runs[0]!, false);
+    await adapter.close(handle);
   });
 
   it("hands the DOCX engine the display pre-pass: fitted pictures and paragraph ids, not the saved bytes", async () => {

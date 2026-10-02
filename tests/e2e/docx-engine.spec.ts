@@ -3,7 +3,13 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 import { prepareDocxForDisplay } from "../../packages/viewer/src/adapters/docx-prepass.js";
+import { OoxmlPackage } from "../../packages/viewer/src/edit/ooxml/package.js";
 import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
+import {
+  buildDocx,
+  paragraph,
+  sectPr,
+} from "../../packages/viewer/test/fixtures/docx-builder.js";
 import { installDeterministicOfficeFonts } from "./deterministic-fonts.js";
 
 /*
@@ -16,8 +22,9 @@ import { installDeterministicOfficeFonts } from "./deterministic-fonts.js";
  * must change what the engine draws for an oversized inline picture and
  * nothing for a corpus document; and every text run the engine reports must
  * resolve to the `_wd<id>` bookmark of its paragraph, the bridge the adapter
- * uses for paragraph ids. Load and render times are logged for the record.
- * This spec began as the upgrade's spike (T50) and kept its measurements.
+ * uses for paragraph ids, which the viewer's own runs then carry as
+ * `paragraphId`. Load and render times are logged for the record. This spec
+ * began as the upgrade's spike (T50) and kept its measurements.
  */
 
 const CORPUS = new URL("../../.cache/corpus/", import.meta.url);
@@ -36,11 +43,17 @@ interface Rendering {
   readonly height: number;
 }
 
+/** A page's runs as the viewer reports them: text and paragraph id. */
+interface ViewerRun {
+  readonly text: string;
+  readonly paragraphId: string | undefined;
+}
+
 async function renderWithViewer(
   page: Page,
   bytes: Uint8Array,
   fileName: string,
-): Promise<Rendering> {
+): Promise<Rendering & { readonly pages: readonly (readonly ViewerRun[])[] }> {
   return page.evaluate(
     async ({ data, fileName, width }) => {
       const { ViewerClient } = (await import("/main.js")) as any;
@@ -61,7 +74,22 @@ async function renderWithViewer(
       });
       const renderMs = performance.now() - renderStarted;
       const pixels = canvas.toDataURL("image/png");
-      const pageCount = viewer.state.pageCount;
+      const pageCount = viewer.state.pageCount as number;
+      // The public path to the adapter's runs: a whole-page selection.
+      const pages: ViewerRun[][] = [];
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        const selection = await viewer.selectText({
+          startPageIndex: pageIndex,
+          startOffset: 0,
+          endPageIndex: pageIndex,
+          endOffset: Number.MAX_SAFE_INTEGER,
+        });
+        pages.push(
+          (selection.runs as { text: string; paragraphId?: string }[]).map(
+            (run) => ({ text: run.text, paragraphId: run.paragraphId }),
+          ),
+        );
+      }
       await viewer.destroy();
       await client.destroy();
       return {
@@ -71,9 +99,23 @@ async function renderWithViewer(
         pixels,
         width: canvas.width,
         height: canvas.height,
+        pages,
       };
     },
     { data: Array.from(bytes), fileName, width: WIDTH },
+  );
+}
+
+/** The ids the pre-pass bookmarks carry, from the display copy's main part. */
+async function markedIds(display: Uint8Array): Promise<Set<string>> {
+  const pkg = await OoxmlPackage.open(display, {
+    limits: defaultResourceLimits,
+  });
+  const xml = new TextDecoder().decode(await pkg.part("/word/document.xml"));
+  return new Set(
+    [...xml.matchAll(/w:name="_wd([0-9A-Fa-f]{8})"/g)].map(
+      (match) => match[1]!,
+    ),
   );
 }
 
@@ -299,6 +341,10 @@ for (const { name, url, scaledImages } of [
       withSource: prepassed.withSource,
       firstRun: prepassed.firstRun,
       layoutComplete: prepassed.layoutComplete,
+      viewerRuns: viewer.pages[0]?.length ?? 0,
+      viewerParagraphs: new Set(
+        viewer.pages[0]?.map((run) => run.paragraphId) ?? [],
+      ).size,
     };
     console.log(`docx engine ${JSON.stringify(report)}`);
     await testInfo.attach(`${name}-viewer.png`, {
@@ -317,4 +363,53 @@ for (const { name, url, scaledImages } of [
     else expect(prepassEffect).toBeGreaterThanOrEqual(SSIM_THRESHOLD);
     expect(prepassed.resolvedIds).toBe(prepassed.runs);
     expect(prepassed.layoutComplete).toBe(true);
+    // The adapter's runs carry the ids the pre-pass wrote, nothing else.
+    const marked = await markedIds(display.bytes);
+    const viewerRuns = viewer.pages[0] ?? [];
+    expect(viewerRuns.length).toBe(prepassed.runs);
+    for (const run of viewerRuns) {
+      expect(run.paragraphId).toMatch(/^[0-9A-F]{8}$/);
+      expect(marked.has(run.paragraphId!)).toBe(true);
+    }
   });
+
+test("DOCX engine: a paragraph that continues on the next page keeps one paragraph id", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  // A paragraph with a page break in the middle, a table and a trailing
+  // paragraph; the engine splits the first around a hoisted page break.
+  const bytes = buildDocx({
+    body:
+      `<w:p><w:r><w:t>Before the break</w:t></w:r><w:r><w:br w:type="page"/></w:r><w:r><w:t>After the break</w:t></w:r></w:p>` +
+      `<w:tbl><w:tr><w:tc>${paragraph("In a cell")}</w:tc></w:tr></w:tbl>` +
+      paragraph("Last paragraph") +
+      sectPr(),
+  });
+  await page.goto("/");
+  await installDeterministicOfficeFonts(page);
+  const rendered = await renderWithViewer(page, bytes, "split.docx");
+  const display = await prepareDocxForDisplay(bytes, defaultResourceLimits);
+  const marked = await markedIds(display.bytes);
+  const idsOf = (pageIndex: number, text: string): string[] =>
+    (rendered.pages[pageIndex] ?? [])
+      .filter((run) => run.text.includes(text))
+      .map((run) => run.paragraphId ?? "");
+  console.log(
+    `docx engine split ${JSON.stringify({ pages: rendered.pages, marked: [...marked] })}`,
+  );
+  expect(rendered.pageCount).toBe(2);
+  expect(marked.size).toBe(3);
+  const before = idsOf(0, "Before");
+  const after = idsOf(1, "After");
+  const cell = idsOf(1, "cell");
+  const last = idsOf(1, "Last");
+  expect(before.length).toBeGreaterThan(0);
+  expect(after.length).toBeGreaterThan(0);
+  expect(new Set([...before, ...after]).size).toBe(1);
+  expect(cell).not.toEqual([]);
+  expect(last).not.toEqual([]);
+  expect(new Set([before[0], cell[0], last[0]]).size).toBe(3);
+  for (const run of rendered.pages.flat())
+    expect(marked.has(run.paragraphId ?? "")).toBe(true);
+});

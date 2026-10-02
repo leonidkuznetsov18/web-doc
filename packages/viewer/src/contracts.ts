@@ -280,6 +280,14 @@ export interface TextRun {
   readonly hyperlink?: HyperlinkTarget;
   readonly row?: number;
   readonly column?: number;
+  /**
+   * DOCX: the `w:p` of the source XML this run was laid out from, as the
+   * file's `w14:paraId` or the deterministic id the viewer assigns to a
+   * paragraph without one (eight hex digits). The runs of a paragraph that
+   * continues on the next page share it. Absent when the run belongs to no
+   * source paragraph.
+   */
+  readonly paragraphId?: string;
 }
 
 export type HyperlinkTarget =

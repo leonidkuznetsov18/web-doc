@@ -1615,12 +1615,12 @@ roadmap; Linear proofs.
 
 **Acceptance criteria:**
 
-- [ ] Every DOCX run the adapter reports carries a `paragraphId` naming a
+- [x] Every DOCX run the adapter reports carries a `paragraphId` naming a
       `w:p` of the source XML.
 
 **Verification:**
 
-- [ ] `npm test`, `npm run test:e2e -- tests/e2e/doc.spec.ts`
+- [x] `npm test`, `npm run test:e2e -- tests/e2e/doc.spec.ts`
 
 **Dependencies:** Task 52
 
@@ -1630,7 +1630,8 @@ roadmap; Linear proofs.
 
 ### Checkpoint J: one engine copy
 
-- [ ] ACTION-813 Done except its release criterion
+- [x] ACTION-813 Done except its release criterion (2026-10-02; the ticket
+      stays In Progress for the release, like ACTION-811 and 812)
 
 ## Phase 10 — DOCX editing (Linear ACTION-814)
 
