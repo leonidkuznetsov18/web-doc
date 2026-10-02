@@ -659,34 +659,36 @@ test("changes only the entries an edit touches: the body part, plus media and re
   ]);
 });
 
-test("applies an edit within the budget on 10- and 100-page documents and records 500", async ({
-  page,
-}) => {
-  test.setTimeout(300_000);
-  const timings: Record<string, number[]> = {};
-  for (const count of [10, 100, 500]) {
-    await loadDocument(page, syntheticDocument(count), `pages-${count}.docx`);
-    timings[count] = await page.evaluate(async () => {
-      const viewer = (window as unknown as { __viewer: any }).__viewer;
-      const session = await viewer.edit();
-      const elements = (await session.getElements()).items as Element[];
-      const first = elements[0]!;
-      const last = elements.at(-1)!;
-      const out: number[] = [];
-      for (const text of ["First edit", "Second edit"]) {
+test(
+  "applies an edit within the budget on 10- and 100-page documents and records 500",
+  { tag: "@performance" },
+  async ({ page }) => {
+    test.setTimeout(300_000);
+    const timings: Record<string, number[]> = {};
+    for (const count of [10, 100, 500]) {
+      await loadDocument(page, syntheticDocument(count), `pages-${count}.docx`);
+      timings[count] = await page.evaluate(async () => {
+        const viewer = (window as unknown as { __viewer: any }).__viewer;
+        const session = await viewer.edit();
+        const elements = (await session.getElements()).items as Element[];
+        const first = elements[0]!;
+        const last = elements.at(-1)!;
+        const out: number[] = [];
+        for (const text of ["First edit", "Second edit"]) {
+          const started = performance.now();
+          await session.replaceText({ target: first.id, text });
+          out.push(performance.now() - started);
+        }
         const started = performance.now();
-        await session.replaceText({ target: first.id, text });
+        await session.insertParagraph({ after: last.id, text: "Last page" });
         out.push(performance.now() - started);
-      }
-      const started = performance.now();
-      await session.insertParagraph({ after: last.id, text: "Last page" });
-      out.push(performance.now() - started);
-      return out;
-    });
-    console.log(
-      `docx apply ${count} pages: replaceText ${timings[count]![0]!.toFixed(0)} ms then ${timings[count]![1]!.toFixed(0)} ms, insertParagraph on the last page ${timings[count]![2]!.toFixed(0)} ms`,
-    );
-    if (count < 500)
-      for (const value of timings[count]!) expect(value).toBeLessThan(3000);
-  }
-});
+        return out;
+      });
+      console.log(
+        `docx apply ${count} pages: replaceText ${timings[count]![0]!.toFixed(0)} ms then ${timings[count]![1]!.toFixed(0)} ms, insertParagraph on the last page ${timings[count]![2]!.toFixed(0)} ms`,
+      );
+      if (count < 500)
+        for (const value of timings[count]!) expect(value).toBeLessThan(3000);
+    }
+  },
+);

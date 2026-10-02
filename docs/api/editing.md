@@ -1040,7 +1040,9 @@ paragraph per page, a `replaceText` resolves in 70–85 ms on 10 pages,
 `insertParagraph` on the last page takes 70 ms, 500 ms and 2.4 s
 respectively. The slowest browser of the matrix takes up to 470 ms on 10
 pages, 2.3 s on 100 and 9.5 s on 500. The browser suite fails above three
-seconds on 10 and 100 pages and records 500. Commit on idle: debounce
+seconds on 10 and 100 pages and records 500. CI runs this measurement
+separately with one worker on every matrix browser so parallel functional
+tests cannot compete for its CPU time. Commit on idle: debounce
 typing and commit on blur, batch the operations that belong together, and
 expect a long document to take seconds per commit.
 

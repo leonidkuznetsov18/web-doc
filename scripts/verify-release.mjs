@@ -26,6 +26,7 @@ for (const [command, args] of [
   ["npm", ["run", "test:qualification"]],
   ["npm", ["run", "test:e2e"]],
   ["npm", ["run", "test:e2e:matrix"]],
+  ["npm", ["run", "test:e2e:performance"]],
   ["npm", ["run", "test:pages"]],
   ["npm", ["run", "fuzz:js"]],
   ["npm", ["run", "audit:vulnerabilities"]],

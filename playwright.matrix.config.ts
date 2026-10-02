@@ -7,6 +7,7 @@ const chromiumPath =
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  grepInvert: /@performance/,
   testMatch: [
     "compat.spec.ts",
     "selection.spec.ts",
