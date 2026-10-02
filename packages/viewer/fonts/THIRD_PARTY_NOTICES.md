@@ -8,8 +8,9 @@ The WOFF2 files in this directory are modified/subset builds of Noto Sans and No
 - Modified font family used by the viewer: `Zrimo Noto`.
 - `noto-sans-latin-cyrillic.ttf` is the same Latin/Cyrillic subset plus Noto
   Sans's General Punctuation, Superscripts and Subscripts, Currency Symbols,
-  Letterlike Symbols, Number Forms and Arrows (ranges in `manifest.json`),
-  saved as an uncompressed TrueType file; the PDF editor embeds it into
+  Letterlike Symbols and Number Forms (ranges in `manifest.json`; the Arrows
+  and Mathematical Operators ranges are requested too, but Noto Sans has no
+  glyphs there), saved as an uncompressed TrueType file; the PDF editor embeds it into
   documents whose text the standard fonts cannot encode.
 
 No proprietary Microsoft font is included.

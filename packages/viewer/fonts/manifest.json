@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "family": "Zrimo Noto",
-  "generated": "2026-07-16",
-  "tooling": "fonttools pyftsubset with all layout features, then woff2_compress; the .ttf is the Latin/Cyrillic subset saved uncompressed with fonttools for embedding into PDFs, from hinted/ttf/NotoSans/NotoSans-Regular.ttf with U+0000,U+000D,U+0020-007E,U+00A0-024F,U+0300-036F,U+0400-052F,U+1E00-1EFF plus General Punctuation, Superscripts and Subscripts, Currency Symbols, Letterlike Symbols, Number Forms, Arrows, Mathematical Operators, U+25CC and U+FFFD (U+2000-206F,U+2070-209F,U+20A0-20CF,U+2100-214F,U+2150-218F,U+2190-21FF,U+2200-22FF,U+25CC,U+FFFD) so text typed with dashes, quotes, currency signs and the numero sign can be embedded",
+  "generated": "2026-10-02",
+  "tooling": "fonttools pyftsubset with all layout features, then woff2_compress; the .ttf is the Latin/Cyrillic subset saved uncompressed with fonttools for embedding into PDFs, from hinted/ttf/NotoSans/NotoSans-Regular.ttf with U+0000,U+000D,U+0020-007E,U+00A0-024F,U+0300-036F,U+0400-052F,U+1E00-1EFF plus General Punctuation, Superscripts and Subscripts, Currency Symbols, Letterlike Symbols, Number Forms, Arrows, Mathematical Operators, U+25CC and U+FFFD (U+2000-206F,U+2070-209F,U+20A0-20CF,U+2100-214F,U+2150-218F,U+2190-21FF,U+2200-22FF,U+25CC,U+FFFD) so text typed with dashes, quotes, currency signs and the numero sign can be embedded; Noto Sans has no glyphs in the Arrows and Mathematical Operators ranges, so those two add none",
   "license": "OFL-1.1",
   "sources": {
     "noto-fonts": "https://github.com/notofonts/noto-fonts/tree/ffebf8c1ee449e544955a7e813c54f9b73848eac",
