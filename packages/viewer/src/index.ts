@@ -1,5 +1,6 @@
 export * from "./contracts.js";
 export * from "./edit/types.js";
+export * from "./edit/ai/types.js";
 export * from "./edit/sessions.js";
 export * from "./edit/pdf/types.js";
 export * from "./edit/pptx/types.js";

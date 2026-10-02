@@ -52,6 +52,7 @@ export default defineConfig({
           { text: "API reference", link: "/api/reference" },
           { text: "Headless API", link: "/api/headless" },
           { text: "Editing API", link: "/api/editing" },
+          { text: "AI editing", link: "/api/ai-editing" },
           { text: "Runtime and lifecycle", link: "/api/runtime" },
           { text: "Built-in UI", link: "/ui" },
         ],

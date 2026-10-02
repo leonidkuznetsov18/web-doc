@@ -1,4 +1,11 @@
 import type { TextRun } from "../../contracts.js";
+import { readDescription, readOutline } from "../ai/outline.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  OutlineOptions,
+  OutlineResult,
+} from "../ai/types.js";
 import type { EditSessionAccess, EditSessionCore } from "../engine.js";
 import type {
   ApplyOptions,
@@ -206,6 +213,14 @@ export class DocxSession implements DocxEditSession {
           .slice(0, options.maxResults ?? placed.length)
       : placed;
     return Object.freeze({ ...found, items });
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#core.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#core.limits, options);
   }
 
   replaceText(

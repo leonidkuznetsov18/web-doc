@@ -349,6 +349,8 @@ issues, so a client handles one error shape per batch. `aborted`,
 | `maxEditOperations`      | 500     | Operations in one `apply()` call                                       |
 | `maxEditHistory`         | 200     | Undoable batches kept; older ones are folded into the starting point   |
 | `maxEditCheckpointBytes` | 64 MiB  | Memory for retained history checkpoints; fewer are kept for a big file |
+| `maxOutlineNodes`        | 5 000   | Nodes one `getOutline()` returns; more is cut and reported             |
+| `maxDescribeChars`       | 200 000 | Upper bound of `describe()`'s character budget                         |
 
 Binary payloads count against `maxInputBytes`; the engine work of one call
 counts against `maxOperationMs`.
@@ -1036,3 +1038,6 @@ expect a long document to take seconds per commit.
   one re-render for the viewer.
 - Treat `invalid-operation` issues as structured feedback: `operationIndex`
   and `path` point at the exact field to fix.
+- Start a turn with `describe()` or `getOutline()`: the document as a prompt
+  sees it, ids first. The [AI editing](./ai-editing.md) page documents the
+  grammar and the budget.

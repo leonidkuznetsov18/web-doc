@@ -47,6 +47,8 @@ export interface EditSessionCore extends EditSessionBase<
   EditOperation,
   EditElement
 > {
+  /** The host's limits, for reads a typed session builds over the core. */
+  readonly limits: ResourceLimits;
   readItem<T>(
     options: ReadOptions | undefined,
     task: (engine: EditEngine, signal: AbortSignal) => Promise<T | undefined>,

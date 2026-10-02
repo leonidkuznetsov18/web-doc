@@ -5,6 +5,13 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
+import { readDescription, readOutline } from "./ai/outline.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  OutlineOptions,
+  OutlineResult,
+} from "./ai/types.js";
 import {
   assetIdOf,
   AssetStore,
@@ -153,6 +160,10 @@ export class EditSessionController implements EditSessionCore {
 
   get state(): EditState {
     return this.#state;
+  }
+
+  get limits(): ResourceLimits {
+    return this.#host.limits;
   }
 
   applyJson(
@@ -411,6 +422,14 @@ export class EditSessionController implements EditSessionCore {
     return this.#enqueue(own, async (signal) =>
       this.#items(await this.#engine.findText(query, engineOptions, signal)),
     );
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#host.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#host.limits, options);
   }
 
   readItem<T>(

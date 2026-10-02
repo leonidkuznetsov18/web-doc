@@ -1,5 +1,12 @@
 import type { TextSelection } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
+import { readDescription, readOutline } from "../ai/outline.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  OutlineOptions,
+  OutlineResult,
+} from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import { reportError } from "../session.js";
 import { rectContains } from "./engine/geometry.js";
@@ -255,6 +262,14 @@ export class PdfSession implements PdfEditSession {
     options?: EditFindOptions,
   ): Promise<ReadResult<TextTarget>> {
     return this.#core.findText(query, options);
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#core.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#core.limits, options);
   }
 
   getTextLayout(

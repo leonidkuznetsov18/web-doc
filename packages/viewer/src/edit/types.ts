@@ -1,4 +1,5 @@
 import type { ViewerWarning } from "../contracts.js";
+import type { EditSessionReads } from "./ai/types.js";
 
 /** Formats an edit session can be started for. */
 export type EditableFormat = "pdf" | "pptx" | "docx";
@@ -259,7 +260,7 @@ export interface OperationIssue {
 export interface EditSessionBase<
   TOperation extends EditOperation,
   TElement extends EditElement,
-> {
+> extends EditSessionReads {
   readonly format: EditableFormat;
   /** Unique per session; stamped on state, receipts, read results and events. */
   readonly sessionId: string;

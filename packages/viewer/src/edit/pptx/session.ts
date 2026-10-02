@@ -1,4 +1,11 @@
 import { ViewerError } from "../../errors.js";
+import { readDescription, readOutline } from "../ai/outline.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  OutlineOptions,
+  OutlineResult,
+} from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import type {
   ApplyOptions,
@@ -136,6 +143,14 @@ export class PptxSession implements PptxEditSession {
     options?: EditFindOptions,
   ): Promise<ReadResult<TextTarget>> {
     return this.#core.findText(query, options);
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#core.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#core.limits, options);
   }
 
   getSlides(options?: ReadOptions): Promise<ReadResult<PptxSlideInfo>> {
