@@ -621,3 +621,10 @@ Proposed in the draft; open for review.
   grows a paragraph's pages around the first page found; undo and redo
   repaint from the earliest of the entry's pages and the reflowed
   paragraph's page. Unit 446/446.
+- **Pages import check (2026-10-02)**: every fixture of `npm run
+  fixtures:docx` (12 files) opened in Pages 14 through AppleScript without
+  an error, with the expected paragraph count and leading text (for
+  example `everything.docx`: 5 paragraphs starting "Everything at once.",
+  `insertParagraph.docx`: "Inserted before everything."). Import
+  warnings are not observable from a script, and Word is not installed on
+  the build machine: that check stays manual.
