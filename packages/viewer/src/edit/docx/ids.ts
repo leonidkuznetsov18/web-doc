@@ -115,3 +115,33 @@ export function assignParagraphIds(
   }
   return out;
 }
+
+/** The paragraph id an element id is built on: `p:X`, `tbl:X`, `img:X.n`, `other:X.n`. */
+export function paragraphIdOfElement(elementId: string): string | undefined {
+  const match = /^(?:p|tbl|img|other):([0-9A-Fa-f]{8})(?:\.\d+)?$/.exec(
+    elementId,
+  );
+  return match ? match[1]!.toUpperCase() : undefined;
+}
+
+/**
+ * A fresh id for the `index`-th paragraph an operation creates: derived
+ * from the batch's state id and the operation's position, so a replay of
+ * the same batches issues the same ids, and skipping any id in use.
+ */
+export function freshParagraphId(
+  stateId: number,
+  operationIndex: number,
+  index: number,
+  taken: ReadonlySet<string>,
+): string {
+  const base =
+    (0x2a000000 + stateId * 0x10000 + operationIndex * 0x100 + index) %
+    0x80000000;
+  let candidate = base;
+  for (;;) {
+    const value = candidate.toString(16).toUpperCase().padStart(8, "0");
+    if (!taken.has(value)) return value;
+    candidate = (candidate + 1) % 0x80000000;
+  }
+}

@@ -6,6 +6,7 @@ import {
   collectIds,
   newIdState,
   OFFICE_RELATIONSHIPS,
+  paragraphsOf,
   STORY_RELATIONSHIP_TYPES,
   W_NS,
 } from "./ids.js";
@@ -89,12 +90,23 @@ export class DocxModel {
     readonly byId: ReadonlyMap<string, AnyRecord>,
     /** Id of every `w:p` of the main part, listed or not. */
     readonly paragraphIds: ReadonlyMap<XmlElement, string>,
+    /** Ids of the paragraphs without `w14:paraId`, in document order. */
+    readonly unauthoredIds: readonly string[],
+    /** Every paragraph id the document uses, in any story part. */
+    readonly takenIds: ReadonlySet<string>,
     readonly styles: DocxStyles,
   ) {}
 
+  /**
+   * Builds the index. `unauthored` carries the ids of the paragraphs that
+   * have no `w14:paraId`, in document order, as the engine tracks them
+   * between edits; without it the ids are computed from the bytes, as the
+   * display pre-pass computes them.
+   */
   static async load(
     pkg: OoxmlPackage,
     signal?: AbortSignal,
+    unauthored?: readonly string[],
   ): Promise<DocxModel> {
     const root = await pkg.relationships("/", signal);
     const main = root.byType(`${OFFICE_RELATIONSHIPS}officeDocument`)[0]
@@ -116,8 +128,34 @@ export class DocxModel {
         if (item.targetPart && pkg.has(item.targetPart))
           collectIds(await pkg.xml(item.targetPart, signal), state);
     const paragraphIds = new Map<XmlElement, string>();
-    for (const entry of assignParagraphIds(document, state))
-      paragraphIds.set(entry.paragraph, entry.id);
+    const unauthoredIds: string[] = [];
+    if (unauthored) {
+      const queue = [...unauthored];
+      for (const paragraph of paragraphsOf(document)) {
+        const authored = document.attribute(paragraph, "w14:paraId");
+        if (authored) {
+          paragraphIds.set(paragraph, authored.toUpperCase());
+          continue;
+        }
+        const id = queue.shift();
+        if (id === undefined)
+          throw new ViewerError(
+            "internal",
+            "The document has more unmarked paragraphs than the session knows",
+          );
+        paragraphIds.set(paragraph, id);
+        unauthoredIds.push(id);
+      }
+      if (queue.length > 0)
+        throw new ViewerError(
+          "internal",
+          "The session knows more unmarked paragraphs than the document has",
+        );
+    } else
+      for (const entry of assignParagraphIds(document, state)) {
+        paragraphIds.set(entry.paragraph, entry.id);
+        if (!entry.authored) unauthoredIds.push(entry.id);
+      }
     const styles = await DocxStyles.load(pkg, main, signal);
     const builder = new Builder(document, paragraphIds);
     let bodySectPr: XmlElement | undefined;
@@ -138,6 +176,8 @@ export class DocxModel {
       builder.records,
       builder.byId,
       paragraphIds,
+      unauthoredIds,
+      state.taken,
       styles,
     );
   }

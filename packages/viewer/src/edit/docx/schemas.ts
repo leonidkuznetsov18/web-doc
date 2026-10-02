@@ -220,7 +220,11 @@ const all: Readonly<Record<string, JsonSchema>> = {
 };
 
 /** Operations with an engine handler; grows as the tasks land. */
-export const IMPLEMENTED_OPERATIONS: readonly string[] = [];
+export const IMPLEMENTED_OPERATIONS: readonly string[] = [
+  "replaceText",
+  "setTextStyle",
+  "setParagraphStyle",
+];
 
 export const docxOperationSchemas: OperationSchemaSet = Object.freeze({
   format: "docx",

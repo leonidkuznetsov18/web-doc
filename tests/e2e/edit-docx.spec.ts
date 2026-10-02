@@ -266,3 +266,116 @@ test("joins a paragraph that continues on the next page across both pages", asyn
   );
   expect(result.cellHit).toEqual(["paragraph", "table"]);
 });
+
+test("replaces and restyles paragraph text so the renderer shows it, repaints from its page and survives save and reload", async ({
+  page,
+}) => {
+  const bytes = buildDocx({
+    body:
+      paragraph("First paragraph of the document") +
+      paragraph("Second paragraph to edit") +
+      paragraph("Third paragraph stays") +
+      sectPr(),
+  });
+  await loadDocument(page, bytes, "edit.docx");
+  const result = await page.evaluate(
+    async ({ data }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const changes: number[][] = [];
+      viewer.on("documentchange", (event: { changedPages: number[] }) =>
+        changes.push([...event.changedPages]),
+      );
+      const session = await viewer.edit();
+      const [first, second, third] = (
+        await session.getElements({ pageIndex: 0 })
+      ).items as Element[];
+      const before = await viewer.getPageText(0);
+      const replaced = await session.replaceText({
+        target: second!.id,
+        text: "Rewritten\tparagraph",
+      });
+      const afterReplace = await viewer.getPageText(0);
+      const styled = await session.setTextStyle({
+        target: second!.id,
+        style: { bold: true, fontSize: 20, color: "#FF0000" },
+      });
+      await session.setParagraphStyle({
+        target: second!.id,
+        style: { align: "center" },
+      });
+      const element = (await session.getElement(second!.id)).item as Element & {
+        textStyle: { bold: boolean; fontSize: number; color: string };
+        paragraphStyle: { align: string };
+      };
+      const split = await session.replaceText({
+        target: first!.id,
+        text: "Alpha\nBeta",
+      });
+      const texts = (await session.getElements({ pageIndex: 0 })).items.map(
+        (item: Element) => item.text,
+      );
+      const saved = await session.save();
+      const client = (await import("/main.js")) as any;
+      const fresh = client.ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href),
+        fontPolicy: { mode: "offline" },
+      }).createViewer();
+      await fresh.load(saved.bytes, { fileName: "edited.docx" });
+      const reloaded = await fresh.getPageText(0);
+      await fresh.destroy();
+      await session.undo();
+      await session.undo();
+      await session.undo();
+      await session.undo();
+      const restored = await session.save();
+      const identical =
+        restored.bytes.length === data.length &&
+        restored.bytes.every(
+          (byte: number, index: number) => byte === data[index],
+        );
+      return {
+        before,
+        afterReplace,
+        changedPages: [
+          replaced.changedPages,
+          styled.changedPages,
+          split.changedPages,
+        ],
+        events: changes,
+        element,
+        texts,
+        reloaded,
+        identical,
+        third: third!.id,
+        thirdAfter: (
+          (await session.getElements({ pageIndex: 0 })).items as Element[]
+        ).at(-1)!.id,
+      };
+    },
+    { data: Array.from(bytes) },
+  );
+  expect(result.before).toContain("Second paragraph to edit");
+  expect(result.afterReplace).not.toContain("Second paragraph to edit");
+  expect(result.afterReplace).toContain("Rewritten");
+  expect(result.afterReplace).toContain("paragraph");
+  expect(result.changedPages).toEqual([[0], [0], [0]]);
+  expect(result.events.slice(0, 3)).toEqual([[0], [0], [0]]);
+  expect(result.element.textStyle).toMatchObject({
+    bold: true,
+    fontSize: 20,
+    color: "#FF0000",
+  });
+  expect(result.element.paragraphStyle.align).toBe("center");
+  expect(result.texts).toEqual([
+    "Alpha",
+    "Beta",
+    "Rewritten\tparagraph",
+    "Third paragraph stays",
+  ]);
+  expect(result.reloaded).toContain("Alpha");
+  expect(result.reloaded).toContain("Beta");
+  expect(result.reloaded).toContain("Rewritten");
+  expect(result.identical).toBe(true);
+  // The untouched paragraph kept its id through every edit and undo.
+  expect(result.thirdAfter).toBe(result.third);
+});

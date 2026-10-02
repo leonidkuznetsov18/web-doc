@@ -53,7 +53,35 @@ export interface ThemeFonts {
   readonly minor: string;
 }
 
+/** `#RRGGBB` per colour scheme slot (`dk1`, `lt1`, `accent1`, …). */
+export type ThemeColors = ReadonlyMap<string, string>;
+
 const BUILTIN_FONTS: ThemeFonts = { major: "Calibri Light", minor: "Calibri" };
+
+/** Word's `w:themeColor` names to the theme's colour scheme slots. */
+const THEME_SLOTS: Readonly<Record<string, string>> = {
+  dark1: "dk1",
+  text1: "dk1",
+  light1: "lt1",
+  background1: "lt1",
+  dark2: "dk2",
+  text2: "dk2",
+  light2: "lt2",
+  background2: "lt2",
+  accent1: "accent1",
+  accent2: "accent2",
+  accent3: "accent3",
+  accent4: "accent4",
+  accent5: "accent5",
+  accent6: "accent6",
+  hyperlink: "hlink",
+  followedHyperlink: "folHlink",
+};
+
+/** Whether a name is one Word accepts in `w:themeColor`. */
+export function isThemeColorName(name: string): boolean {
+  return Object.hasOwn(THEME_SLOTS, name);
+}
 
 /** The styles and theme of a document, read once per revision. */
 export class DocxStyles {
@@ -65,7 +93,14 @@ export class DocxStyles {
     readonly docDefaultsRPr: XmlElement | undefined,
     readonly docDefaultsPPr: XmlElement | undefined,
     readonly fonts: ThemeFonts,
+    readonly colors: ThemeColors,
   ) {}
+
+  /** The `#RRGGBB` a `w:themeColor` name resolves to in this theme, when it has one. */
+  themeColor(name: string): string | undefined {
+    const slot = THEME_SLOTS[name];
+    return slot ? this.colors.get(slot) : undefined;
+  }
 
   static async load(
     pkg: OoxmlPackage,
@@ -77,7 +112,7 @@ export class DocxStyles {
       ?.targetPart;
     const themePart = rels.byType(`${OFFICE_RELATIONSHIPS}theme`)[0]
       ?.targetPart;
-    const fonts = await readThemeFonts(pkg, themePart, signal);
+    const { fonts, colors } = await readTheme(pkg, themePart, signal);
     if (!stylesPart || !pkg.has(stylesPart))
       return new DocxStyles(
         undefined,
@@ -87,6 +122,7 @@ export class DocxStyles {
         undefined,
         undefined,
         fonts,
+        colors,
       );
     const part = await pkg.xml(stylesPart, signal);
     const styles = new Map<string, StyleRecord>();
@@ -130,6 +166,7 @@ export class DocxStyles {
       rPrDefault?.children.find((child) => child.local === "rPr"),
       pPrDefault?.children.find((child) => child.local === "pPr"),
       fonts,
+      colors,
     );
   }
 
@@ -163,12 +200,13 @@ function pick(
   return out;
 }
 
-async function readThemeFonts(
+async function readTheme(
   pkg: OoxmlPackage,
   themePart: string | undefined,
   signal?: AbortSignal,
-): Promise<ThemeFonts> {
-  if (!themePart || !pkg.has(themePart)) return BUILTIN_FONTS;
+): Promise<{ fonts: ThemeFonts; colors: ThemeColors }> {
+  const none = { fonts: BUILTIN_FONTS, colors: new Map<string, string>() };
+  if (!themePart || !pkg.has(themePart)) return none;
   try {
     const xml = await pkg.xml(themePart, signal);
     const face = (scheme: string): string | undefined => {
@@ -176,12 +214,29 @@ async function readThemeFonts(
       const latin = node?.children.find((child) => child.local === "latin");
       return latin ? xml.attribute(latin, "typeface") : undefined;
     };
+    const colors = new Map<string, string>();
+    const scheme = xml.find("clrScheme");
+    for (const slot of scheme?.children ?? []) {
+      const value = slot.children[0];
+      const rgb = value
+        ? value.local === "srgbClr"
+          ? xml.attribute(value, "val")
+          : value.local === "sysClr"
+            ? xml.attribute(value, "lastClr")
+            : undefined
+        : undefined;
+      if (rgb && /^[0-9A-Fa-f]{6}$/.test(rgb))
+        colors.set(slot.local, rgb.toUpperCase());
+    }
     return {
-      major: face("majorFont") || BUILTIN_FONTS.major,
-      minor: face("minorFont") || BUILTIN_FONTS.minor,
+      fonts: {
+        major: face("majorFont") || BUILTIN_FONTS.major,
+        minor: face("minorFont") || BUILTIN_FONTS.minor,
+      },
+      colors,
     };
   } catch {
-    return BUILTIN_FONTS;
+    return none;
   }
 }
 

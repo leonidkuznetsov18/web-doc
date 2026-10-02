@@ -72,6 +72,11 @@ export interface EditSessionHost {
   ): number;
   /** Releases a preparation that will not be shown. */
   discardDocument(prepared: PreparedDocument): void;
+  /**
+   * Flow formats: the first page whose text runs carry `paragraphId`, when
+   * the host has laid it out; the core repaints from it to the end.
+   */
+  pageOf?(paragraphId: string): number | undefined;
   emit<K extends "editstatechange" | "documentchange">(
     type: K,
     event: ViewerEventMap[K],
@@ -83,11 +88,16 @@ export interface PreparedDocument {
   readonly pageCount: number;
 }
 
-/** What a transaction showed: the bytes and the renderer's page count. */
+/** What a transaction showed: the bytes, the renderer's page count and the pages repainted. */
 interface Shown {
   readonly bytes: Uint8Array;
   readonly pageCount: number;
+  readonly changedPages: readonly number[];
 }
+
+/** The pages to repaint, known once the renderer has counted the shown document. */
+type ChangedPages =
+  readonly number[] | ((pageCount: number) => readonly number[]);
 
 type FailureStage = "apply" | "materialize" | "reopen";
 
@@ -203,7 +213,10 @@ export class EditSessionController implements EditSessionCore {
           const result = await this.#engine.apply(engineBatch, signal);
           return {
             change: result,
-            shown: await this.#show(signal, result.changedPages),
+            shown: await this.#show(
+              signal,
+              this.#pagesOf(result.changedPages, result.reflowFrom),
+            ),
           };
         },
       );
@@ -212,13 +225,17 @@ export class EditSessionController implements EditSessionCore {
         ...(options.label === undefined ? {} : { label: options.label }),
         createdIds: change.createdIds,
         removedIds: change.removedIds,
-        changedPages: change.changedPages,
+        changedPages: shown.changedPages,
+        ...(change.reflowFrom === undefined
+          ? {}
+          : { reflowFrom: change.reflowFrom }),
         pageCountBefore: before,
         pageCountAfter: shown.pageCount,
       });
-      this.#commit("apply", change.changedPages, shown);
+      this.#commit("apply", shown.changedPages, shown);
       return this.#receipt(false, batch.length, change.createdIds, {
         ...change,
+        changedPages: shown.changedPages,
         pageCount: shown.pageCount,
         warnings: [...change.warnings, ...pageCountWarning(change, shown)],
       });
@@ -230,17 +247,19 @@ export class EditSessionController implements EditSessionCore {
       this.#assertRevision(options);
       const entry = this.#history.undoEntry;
       if (!entry) return this.#noop();
-      const changedPages = pagesTouched(entry, entry.pageCountBefore);
       const shown = await this.#moveTo(
         this.#history.position - 1,
-        changedPages,
+        this.#pagesOf(
+          pagesTouched(entry, entry.pageCountBefore),
+          entry.reflowFrom,
+        ),
         signal,
       );
       this.#history.undo();
-      this.#commit("undo", changedPages, shown);
+      this.#commit("undo", shown.changedPages, shown);
       return this.#receipt(false, entry.operations.length, [], {
         removedIds: entry.createdIds,
-        changedPages,
+        changedPages: shown.changedPages,
         pageCount: shown.pageCount,
         warnings: [],
       });
@@ -252,17 +271,19 @@ export class EditSessionController implements EditSessionCore {
       this.#assertRevision(options);
       const entry = this.#history.redoEntry;
       if (!entry) return this.#noop();
-      const changedPages = pagesTouched(entry, entry.pageCountAfter);
       const shown = await this.#moveTo(
         this.#history.position + 1,
-        changedPages,
+        this.#pagesOf(
+          pagesTouched(entry, entry.pageCountAfter),
+          entry.reflowFrom,
+        ),
         signal,
       );
       this.#history.redo();
-      this.#commit("redo", changedPages, shown);
+      this.#commit("redo", shown.changedPages, shown);
       return this.#receipt(false, entry.operations.length, entry.createdIds, {
         removedIds: entry.removedIds,
-        changedPages,
+        changedPages: shown.changedPages,
         pageCount: shown.pageCount,
         warnings: [],
       });
@@ -543,10 +564,25 @@ export class EditSessionController implements EditSessionCore {
     };
   }
 
-  async #show(
-    signal: AbortSignal,
+  /**
+   * The pages a change repaints: the engine's list, or for a reflow every
+   * page from the paragraph's first page (asked of the host before the
+   * document is replaced) to the end of the shown document.
+   */
+  #pagesOf(
     changedPages: readonly number[],
-  ): Promise<Shown> {
+    reflowFrom: string | undefined,
+  ): ChangedPages {
+    if (reflowFrom === undefined) return changedPages;
+    const first = this.#host.pageOf?.(reflowFrom) ?? 0;
+    return (pageCount) =>
+      Array.from(
+        { length: Math.max(0, pageCount - first) },
+        (_, index) => first + index,
+      );
+  }
+
+  async #show(signal: AbortSignal, changedPages: ChangedPages): Promise<Shown> {
     let bytes: Uint8Array;
     try {
       ({ bytes } = await this.#materialize("show", {}, signal));
@@ -564,15 +600,21 @@ export class EditSessionController implements EditSessionCore {
       this.#host.discardDocument(prepared);
       throw abortError();
     }
+    const pages = Object.freeze(
+      typeof changedPages === "function"
+        ? [...changedPages(prepared.pageCount)]
+        : [...changedPages],
+    );
     return {
       bytes,
-      pageCount: this.#host.commitDocument(prepared, changedPages),
+      pageCount: this.#host.commitDocument(prepared, pages),
+      changedPages: pages,
     };
   }
 
   async #moveTo(
     position: number,
-    changedPages: readonly number[],
+    changedPages: ChangedPages,
     signal: AbortSignal,
   ): Promise<Shown> {
     return this.#transaction(signal, "apply", async () => {

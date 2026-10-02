@@ -1642,9 +1642,10 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
       model, styles, worker format switch, adapter provider for `docx`/`docm`,
       geometry join with the viewer's runs, `elementsAt`, `findText`, identity,
       restore; browser test on the corpus document. (2026-10-02)
-- [ ] Task 55: Text and formatting — `replaceText`, `setTextStyle`,
+- [x] Task 55: Text and formatting — `replaceText`, `setTextStyle`,
       `setParagraphStyle`, schema-order merges, fields, hyperlinks, inline sdt,
-      paragraph splits, the id rule of `materialize`.
+      paragraph splits, the id rule of `materialize`. (2026-10-02; also the
+      reflow plumbing: `reflowFrom` → `pageOf` → pages to the end)
 - [ ] Task 56: Structure and pictures — `insertParagraph`, `deleteElement`,
       `moveElement`, `insertImage`.
 - [ ] Task 57: Tables — `insertTable`, `setTableCell`.

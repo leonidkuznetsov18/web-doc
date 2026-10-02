@@ -20,12 +20,20 @@ export interface DocxOperationContext {
   /** The batch's state id, for ids an operation derives. */
   readonly stateId: number;
   readonly operationIndex: number;
+  /** A paragraph id no paragraph of the document or of this batch uses. */
+  freshParagraphId(): string;
 }
 
 export interface DocxOperationResult {
   readonly createdIds: readonly string[];
   readonly removedIds?: readonly string[];
   readonly warnings: readonly ViewerWarning[];
+  /** Paragraphs the operation wrote a `w14:paraId` on, by id. */
+  readonly stamped?: readonly string[];
+  /** Paragraphs the operation removed from the document, by id, nested ones included. */
+  readonly removedParagraphIds?: readonly string[];
+  /** The paragraph id the document reflows from. */
+  readonly reflowFrom?: string;
 }
 
 export type Issue = (path: string, code: string, message: string) => void;

@@ -59,6 +59,12 @@ export async function docxSession(
     commitDocument: (prepared) => prepared.pageCount,
     discardDocument: () => {},
     emit: () => {},
+    pageOf: (paragraphId) => {
+      const index = pages.findIndex((runs) =>
+        runs.some((run) => run.paragraphId === paragraphId),
+      );
+      return index < 0 ? undefined : index;
+    },
   };
   const core = new EditSessionController(engine, host, original, pages.length);
   const reads: number[] = [];

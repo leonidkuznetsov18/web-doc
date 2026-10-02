@@ -230,7 +230,11 @@ describe("DOCX edit session: geometry join (docx-edit T54)", () => {
       assert.deepEqual(saved.bytes, DOCUMENT);
       assert.equal(session.state.dirty, false);
       assert.equal(session.format, "docx");
-      assert.deepEqual(Object.keys(session.schemas.operations), []);
+      assert.deepEqual(Object.keys(session.schemas.operations), [
+        "replaceText",
+        "setTextStyle",
+        "setParagraphStyle",
+      ]);
       await assert.rejects(
         session.applyJson([
           { op: "replaceText", target: "p:x", text: "y" } as EditOperation,

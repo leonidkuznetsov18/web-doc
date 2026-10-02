@@ -103,8 +103,13 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
         assert.deepEqual(element.bounds, { x: 0, y: 0, width: 0, height: 0 });
         assert.deepEqual(element.fragments, []);
         assert.deepEqual(element.story, { kind: "body" });
-        // No handler has shipped yet: no element accepts an operation.
-        assert.deepEqual(element.operations, []);
+        // Only the shipped handlers are offered; tables and pictures wait.
+        assert.deepEqual(
+          element.operations,
+          element.kind === "paragraph"
+            ? ["replaceText", "setTextStyle", "setParagraphStyle"]
+            : [],
+        );
       }
       assert.equal(
         (await engine.getElement(picture.id, signal))?.text,
@@ -340,12 +345,15 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
     try {
       assert.deepEqual(await engine.materialize(signal), bytes);
       const issues = await engine.validate(
-        [{ op: "replaceText", target: "p:1", text: "y" } as EditOperation],
+        [
+          { op: "insertTable", rows: [["a"]] } as EditOperation,
+          { op: "replaceText", target: "p:1", text: "y" } as EditOperation,
+        ],
         signal,
       );
       assert.deepEqual(
         issues.map((issue) => issue.code),
-        ["unknown-operation"],
+        ["unknown-operation", "unknown-target"],
       );
       await assert.rejects(
         engine.apply([{ op: "nope" } as EditOperation], signal),

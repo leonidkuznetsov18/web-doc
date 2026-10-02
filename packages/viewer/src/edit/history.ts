@@ -10,6 +10,8 @@ export interface HistoryEntry {
   readonly removedIds: readonly string[];
   /** Page indexes the batch changed, in the document after it. */
   readonly changedPages: readonly number[];
+  /** Flow formats: the paragraph the document reflows from, for undo and redo. */
+  readonly reflowFrom?: string;
   readonly pageCountBefore: number;
   readonly pageCountAfter: number;
   /** Identifies the content after this batch; equal ids mean equal content. */

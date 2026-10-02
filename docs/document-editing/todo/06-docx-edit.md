@@ -475,3 +475,39 @@ Proposed in the draft; open for review.
   matrix (worker loads on `edit()` only, every corpus paragraph's bounds
   cover its runs, hit test, search, identity; a paragraph split by a page
   break joined across two pages with its table). Unit 384/384.
+- **T55 (2026-10-02)**: `replaceText`, `setTextStyle` and
+  `setParagraphStyle` in `src/edit/docx/text-ops.ts` over the writer in
+  `write.ts`. A paragraph is rebuilt from units (its direct children, a
+  complex field's runs as one): untouched units keep their bytes, a
+  touched run is re-serialized around the change with its `w:rPr`, a
+  hyperlink or content control is entered when the range lies inside it,
+  bookmarks and comment markers stay in place, covered fields, links,
+  controls and pictures go (pictures reported in `removedIds`), and the
+  paragraph is written back as one element with `w14:paraId` (the root
+  gains `xmlns:w14` and `mc:Ignorable` once). Newlines split the
+  paragraph: fresh ids derived from the batch's state id and the
+  operation's position (so a replay issues the same), properties copied
+  without `w:sectPr`, the tail moved to the last paragraph. Run and
+  paragraph properties merge in schema order (`w:rFonts` keeps its other
+  faces and drops the theme overrides, `w:sz` and `w:szCs` together,
+  theme colours written with the theme's resolved value, `w:spacing`
+  keeps its other attributes); the paragraph mark takes a style change
+  that reaches the end. Ids stay stable across edits: the engine tracks
+  the ids of paragraphs without `w14:paraId` in document order and
+  removes those it stamps or deletes, the model reads ids from that list,
+  `materialize("show")` stamps every remaining paragraph in a copy (so
+  the pre-pass and the viewer's runs name the engine's paragraphs and a
+  checkpoint opened as a base keeps every id) while `materialize("save")`
+  carries ids only where the session wrote. Reflow: an operation reports
+  `reflowFrom` (the paragraph id), the core asks the host for that
+  paragraph's first page before the document is replaced and repaints
+  from it to the end, for apply, undo and redo alike (`EngineChange`,
+  `EditSessionHost.pageOf`, `HistoryEntry.reflowFrom`). Validation:
+  control characters and lone surrogates, unknown and read-only targets,
+  offsets, surrogate splits, field cuts, wrapper edge cuts, paragraph
+  breaks inside a wrapper, colours (`#RRGGBB`, `auto`, Word theme colour
+  names). Tests: `docx-edit-text.test.ts` (10, byte-level) and the
+  browser round trip in `edit-docx.spec.ts` (replace, restyle, align,
+  split, `getPageText` after each, `documentchange` pages, reload of the
+  saved bytes, undo to identical bytes, stable id of the untouched
+  paragraph). Unit 394/394.

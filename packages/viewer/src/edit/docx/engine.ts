@@ -10,6 +10,7 @@ import type {
   RestoreTarget,
 } from "../engine.js";
 import { OoxmlPackage } from "../ooxml/package.js";
+import { patches, type XmlPatch } from "../ooxml/patch.js";
 import { invalidOperationError, parseReference } from "../operations.js";
 import type {
   EditFindOptions,
@@ -21,16 +22,25 @@ import type {
 } from "../types.js";
 import { NO_PAGE, toElement } from "./elements.js";
 import { docxHandlers } from "./handlers.js";
+import { freshParagraphId, paragraphsOf } from "./ids.js";
 import { DocxModel, type AnyRecord } from "./model.js";
 import { issueCollector, type DocxOperationContext } from "./operations.js";
 import { docxOperationSchemas } from "./schemas.js";
 import type { DocxElement, DocxOperation } from "./types.js";
+import { namespacePatches } from "./write.js";
 
 /*
  * The DOCX edit engine: the package layer under a block index of the body
  * story. It runs inside the OOXML edit worker in the browser and directly
  * in Node tests. It never lays out: elements carry no geometry, and the
  * session joins the renderer's runs on the main thread.
+ *
+ * Paragraph ids: a paragraph with a `w14:paraId` keeps it; one without is
+ * numbered from its position when the document opens, and the engine then
+ * tracks those ids by document order (`#unauthored`), writing a
+ * `w14:paraId` on every paragraph it rebuilds or creates. The shown copy
+ * carries an id on every paragraph, so the viewer's runs name the same
+ * paragraphs; the saved file carries ids only where the session wrote.
  */
 
 export class DocxEditEngine implements EditEngine {
@@ -40,6 +50,8 @@ export class DocxEditEngine implements EditEngine {
   readonly #assets = new AssetStore();
   #pkg: OoxmlPackage;
   #model: Promise<DocxModel> | undefined;
+  /** Ids of the paragraphs without `w14:paraId`, in document order; undefined until read from the bytes. */
+  #unauthored: string[] | undefined;
   #disposed = false;
   #stateId = 0;
 
@@ -82,17 +94,19 @@ export class DocxEditEngine implements EditEngine {
   model(signal?: AbortSignal): Promise<DocxModel> {
     this.#assertAlive();
     const revision = this.#pkg.revision;
-    if (!this.#model) return this.#startModel(revision, signal);
+    if (!this.#model) return this.#startModel(signal);
     return this.#model.then((current) =>
-      current.revision === revision
-        ? current
-        : this.#startModel(revision, signal),
+      current.revision === revision ? current : this.#startModel(signal),
     );
   }
 
-  #startModel(revision: number, signal?: AbortSignal): Promise<DocxModel> {
-    void revision;
-    const pending = DocxModel.load(this.#pkg, signal);
+  #startModel(signal?: AbortSignal): Promise<DocxModel> {
+    const pending = DocxModel.load(this.#pkg, signal, this.#unauthored).then(
+      (model) => {
+        this.#unauthored ??= [...model.unauthoredIds];
+        return model;
+      },
+    );
     this.#model = pending;
     pending.catch(() => {
       if (this.#model === pending) this.#model = undefined;
@@ -132,7 +146,7 @@ export class DocxEditEngine implements EditEngine {
         continue;
       }
       const collect = issueCollector(index, issues);
-      const skipped = new Set(referenced.map((entry) => `/${entry.field}`));
+      const skipped = referenced.map((entry) => `/${entry.field}`);
       await handler.validate(
         operation as DocxOperation,
         context,
@@ -140,7 +154,7 @@ export class DocxEditEngine implements EditEngine {
           ? collect
           : (path, code, message) => {
               if (
-                ![...skipped].some(
+                !skipped.some(
                   (prefix) => path === prefix || path.startsWith(`${prefix}/`),
                 ) &&
                 !path.startsWith("/range")
@@ -162,10 +176,13 @@ export class DocxEditEngine implements EditEngine {
       : (input as EngineBatch);
     this.#stateId = Math.max(this.#stateId, batch.stateId);
     const snapshot = this.#pkg.snapshot();
+    const unauthored = this.#unauthored ? [...this.#unauthored] : undefined;
     const createdIds: string[] = [];
     const removedIds: string[] = [];
     const warnings: ViewerWarning[] = [];
     const createdByOperation: string[][] = [];
+    const issued = new Set<string>();
+    let reflowFrom: string | undefined;
     try {
       for (const [index, raw] of batch.operations.entries()) {
         throwIfAborted(signal);
@@ -176,7 +193,12 @@ export class DocxEditEngine implements EditEngine {
             "invalid-operation",
             `Unknown operation ${operation.op}`,
           );
-        const context = await this.#context(batch.stateId, signal, index);
+        const context = await this.#context(
+          batch.stateId,
+          signal,
+          index,
+          issued,
+        );
         const issues: OperationIssue[] = [];
         await handler.validate(
           operation,
@@ -186,14 +208,22 @@ export class DocxEditEngine implements EditEngine {
         if (issues.length > 0) throw invalidOperationError(issues);
         const result = await handler.apply(operation, context);
         this.#model = undefined;
+        const gone = new Set([
+          ...(result.stamped ?? []),
+          ...(result.removedParagraphIds ?? []),
+        ]);
+        if (gone.size > 0 && this.#unauthored)
+          this.#unauthored = this.#unauthored.filter((id) => !gone.has(id));
         createdByOperation.push([...result.createdIds]);
         createdIds.push(...result.createdIds);
         removedIds.push(...(result.removedIds ?? []));
         warnings.push(...result.warnings);
+        reflowFrom ??= result.reflowFrom;
       }
     } catch (error) {
-      // Everything the batch did is undone.
+      // Everything the batch did, ids included, is undone.
       this.#pkg.restore(snapshot);
+      this.#unauthored = unauthored;
       this.#model = undefined;
       throw error;
     }
@@ -202,10 +232,10 @@ export class DocxEditEngine implements EditEngine {
     return {
       createdIds,
       removedIds,
-      // A flow document reflows from the first changed element onwards;
-      // naming its pages needs the renderer's layout, which the operations
-      // of the next tasks report through the session.
+      // A flow document reflows from the first changed paragraph; the host
+      // turns it into pages.
       changedPages: [],
+      ...(reflowFrom === undefined ? {} : { reflowFrom }),
       warnings,
     };
   }
@@ -219,8 +249,10 @@ export class DocxEditEngine implements EditEngine {
     stateId: number,
     signal: AbortSignal | undefined,
     operationIndex = 0,
+    issued: Set<string> = new Set(),
   ): Promise<DocxOperationContext> {
     const model = await this.model(signal);
+    let count = 0;
     return {
       pkg: this.#pkg,
       model,
@@ -228,6 +260,13 @@ export class DocxEditEngine implements EditEngine {
       assets: this.#assets,
       stateId,
       operationIndex,
+      freshParagraphId: () => {
+        const taken = new Set([...model.takenIds, ...issued]);
+        const id = freshParagraphId(stateId, operationIndex, count, taken);
+        count += 1;
+        issued.add(id);
+        return id;
+      },
     };
   }
 
@@ -240,15 +279,55 @@ export class DocxEditEngine implements EditEngine {
       .bytes;
   }
 
+  /**
+   * `save` is the package as the session changed it: ids written only on
+   * the paragraphs the session rebuilt or created. `show` also stamps every
+   * other paragraph with the id the engine knows it by, in a copy, so the
+   * display pre-pass and the viewer's runs name the engine's paragraphs
+   * after edits that moved paragraphs around. Without changes both are
+   * the original bytes.
+   */
   async materializeDocument(
     purposeOrSignal: "show" | "save" | AbortSignal = "show",
     _options: MaterializeOptions = {},
     signal: AbortSignal = new AbortController().signal,
   ): Promise<MaterializedDocument> {
     this.#assertAlive();
+    const purpose =
+      purposeOrSignal instanceof AbortSignal ? "show" : purposeOrSignal;
     const own =
       purposeOrSignal instanceof AbortSignal ? purposeOrSignal : signal;
-    return { bytes: await this.#pkg.save({}, own), warnings: [] };
+    const bytes = await this.#pkg.save({}, own);
+    if (purpose === "save" || this.#pkg.changedParts.length === 0)
+      return { bytes, warnings: [] };
+    return { bytes: await this.#stamped(bytes, own), warnings: [] };
+  }
+
+  /** A copy of `bytes` with a `w14:paraId` on every paragraph of the main part. */
+  async #stamped(bytes: Uint8Array, signal: AbortSignal): Promise<Uint8Array> {
+    const model = await this.model(signal);
+    const copy = await OoxmlPackage.open(bytes, {
+      limits: this.#limits,
+      signal,
+    });
+    const part = await copy.xml(model.mainPart, signal);
+    const queue = [...(this.#unauthored ?? [])];
+    const items: XmlPatch[] = [];
+    for (const paragraph of paragraphsOf(part)) {
+      if (part.attribute(paragraph, "w14:paraId")) continue;
+      const id = queue.shift();
+      if (id === undefined)
+        throw new ViewerError(
+          "internal",
+          "The document has more unmarked paragraphs than the session knows",
+        );
+      items.push(patches.setAttribute(part, paragraph, "w14:paraId", id));
+    }
+    if (items.length === 0) return bytes;
+    const transaction = copy.transaction();
+    transaction.patch(part, [...namespacePatches(part), ...items]);
+    await transaction.commit(signal);
+    return copy.save({}, signal);
   }
 
   async restore(
@@ -267,6 +346,9 @@ export class DocxEditEngine implements EditEngine {
       limits: this.#limits,
       signal,
     });
+    // A base is a shown copy with every paragraph marked, the original has
+    // the ids its positions give: either way the bytes say what they are.
+    this.#unauthored = undefined;
     this.#model = undefined;
     await this.model(signal);
     for (const batch of target.batches) await this.apply(batch, signal);
@@ -324,8 +406,8 @@ export class DocxEditEngine implements EditEngine {
   }
 
   /**
-   * Matches in paragraph and table text, in document order, without
-   * rectangles or pages: the session adds those from the renderer's runs.
+   * Matches in paragraph text, in document order, without rectangles or
+   * pages: the session adds those from the renderer's runs.
    */
   async findText(
     query: string,

@@ -1003,6 +1003,16 @@ export class DocumentViewer implements ViewerApi {
         discardDocument: (prepared) =>
           this.#discardDocument(prepared as PreparedViewerDocument),
         emit: (type, event) => this.#emit(type, event),
+        pageOf: (paragraphId) => {
+          let first: number | undefined;
+          for (const [pageIndex, runs] of this.#textMaps)
+            if (
+              (first === undefined || pageIndex < first) &&
+              runs.some((run) => run.paragraphId === paragraphId)
+            )
+              first = pageIndex;
+          return first;
+        },
       };
       const core = new EditSessionController(
         engine,

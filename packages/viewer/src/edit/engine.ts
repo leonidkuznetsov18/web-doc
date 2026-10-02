@@ -112,6 +112,12 @@ export interface EngineChange {
   readonly remappedIds?: Readonly<Record<string, string>>;
   /** A superset of the pages whose content changed. */
   readonly changedPages: readonly number[];
+  /**
+   * Flow formats: the `paragraphId` of the text runs where the document
+   * reflows; the host turns it into every page from that paragraph's first
+   * page to the end, and `changedPages` is ignored.
+   */
+  readonly reflowFrom?: string;
   /** Optional: the core takes the count from the renderer and only cross-checks this. */
   readonly pageCount?: number;
   readonly warnings: readonly ViewerWarning[];

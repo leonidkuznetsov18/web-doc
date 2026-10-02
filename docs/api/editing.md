@@ -863,6 +863,28 @@ name. The operations the session accepts are the ones `session.schemas`
 lists; `operations` on each element names the ones that take it as their
 target.
 
+### Methods
+
+Positions in a flow document are other elements, never page points. Font
+sizes and spacing are points.
+
+| Method                                            | Effect                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replaceText({ target, text, range? })`           | Replaces the whole text of a paragraph, or the part a range covers (a collapsed range inserts). Newlines in `text` split the paragraph: the new paragraphs copy its properties (never a section break), get fresh ids reported in `createdIds`, and the text after the range moves to the last of them. `\t`, `\v` and `\f` write a tab, a line break and a page break. |
+| `setTextStyle({ target, range?, style })`         | Changes `fontFamily`, `fontSize`, `bold`, `italic`, `underline`, `color` (`#RRGGBB`, `"auto"` or `{ theme }` with a Word theme colour name such as `accent1` or `text1`) and `highlight` (a Word highlight name or `"none"`) on the runs a range covers, splitting runs at its ends; a range that reaches the paragraph end also sets the paragraph mark, so text typed after it inherits the change. |
+| `setParagraphStyle({ target, style })`            | Changes `align` (`left`, `center`, `right`, `justify`) and `spacing` (`before` and `after` in points, `line` as a multiple of single spacing); other paragraph properties keep their bytes.                                                                                                                                                 |
+
+Every method targets a paragraph that is not read-only. The text model
+offsets of `range` are those of the element's `text`. A range that starts
+or ends inside a field, or that cuts one edge of a hyperlink or an inline
+content control, is `invalid-range`; a range that lies inside a hyperlink
+edits its text, and one that covers a field, a hyperlink, a content
+control or an inline picture whole removes it (the picture's id is
+reported in `removedIds`). A paragraph break cannot be inserted inside a
+hyperlink or content control. New text is styled like the run that held
+the first replaced character, like the run before a collapsed range, else
+like the run after it, else like the paragraph mark.
+
 ### Elements
 
 | Kind        | What it is                                               | Id                                                      |
@@ -927,7 +949,22 @@ first page. Page space is CSS pixels at 96 dpi, the unit of
 
 A session without changes saves the original bytes. Nothing outside the
 body part is touched by any operation; headers, footers, notes, comments,
-styles, numbering and settings keep their bytes.
+styles, numbering and settings keep their bytes. Inside the body part an
+edit rebuilds only the paragraph it targets: every other paragraph keeps
+its bytes, and within the rebuilt paragraph untouched runs, bookmarks,
+comment markers, hyperlinks, content controls and fields keep theirs. A
+rebuilt or new paragraph is written with a `w14:paraId` (the document
+root gains the `w14` namespace declaration when it lacks one), so its id
+survives a save and a later session; untouched paragraphs without one
+keep none in the saved file. The copy the viewer shows carries an id on
+every paragraph, so the runs keep naming the engine's paragraphs after
+edits that move paragraphs around, and undo and redo restore the exact
+bytes of the earlier state.
+
+Each `apply()` reopens the document, which lays every page out again;
+`changedPages` of the receipt and of `documentchange` is every page from
+the first page of the edited paragraph to the end of the document, as
+the viewer knew that paragraph's page before the change.
 
 ### Performance
 
