@@ -1,7 +1,8 @@
 # Module 07. `ai-edit` — AI tooling over the edit sessions
 
-**Status:** Draft 2026-10-02, awaiting approval. Starts after the approval;
-Linear ACTION-858 under ACTION-723 (web-doc). Everything here is additive to the
+**Status:** Approved 2026-10-02 with the recommended answers to the open
+questions (decisions 8–10); in progress (T59–T64), Linear ACTION-858 under
+ACTION-723 (web-doc). Everything here is additive to the
 `EditSession` contract of module 01 and to the three format sessions:
 nothing a host or the Operators shell uses today changes shape.
 
@@ -280,8 +281,9 @@ interface ApplyOptions {
   previous properties. `moveElement`, `insertTable`, `insertImage` and
   `deleteElement` of a table or picture have no tracked form in this
   module and are refused in tracked mode (`unsupported-change-mode`).
-- `w:author` is `ApplyOptions.author` (default `"web-doc"`), `w:date` the
-  batch's `timestamp` (module 01), `w:id` unique in the part. Word and
+- `w:author` is `ApplyOptions.author`, required in tracked mode (decision
+  8); `w:date` is the batch's `timestamp` (module 01); `w:id` is unique in
+  the part. Word and
   Pages show the result as suggestions to accept or reject.
 - A paragraph holding a tracked change is read-only for direct edits
   (module 06's rule) and stays so after the session's own tracked edit:
@@ -438,18 +440,20 @@ history.
    later module may add accept/reject inside web-doc.
 7. **Tool arguments carry assets by reference.** Registered through
    `addAsset()` by the host; a model never pastes base64 into a call.
+8. **Tracked changes name their author explicitly** (2026-10-02, Leonid):
+   no default; a tracked batch without `author` is refused with a
+   `required` issue at `/author`, so a file never carries an anonymous
+   suggestion.
+9. **No preview is required before an apply** (2026-10-02, Leonid): the
+   model decides; the docs recommend `document_preview` for batches above
+   one operation, and `document_apply`'s description says so.
+10. **`maxEditCheckpoints` stays 20** (2026-10-02, Leonid), raised through
+    `ResourceLimits` by a host that needs more.
 
 ## Open questions
 
-1. Default `author` for tracked changes: `"web-doc"` or a host-mandated
-   value with no default (the call refused without one)? Recommended: no
-   default, the host names the agent.
-2. Should `document_apply` require a preceding `document_preview` in the
-   same turn? Recommended: no, the model decides; the docs recommend the
-   preview for batches above one operation.
-3. `maxEditCheckpoints` 20: enough for a long chat (one per turn)? The
-   oldest unpinned retention is evicted first; pinned ones past the byte
-   budget replay. Recommended: 20, raised through `ResourceLimits`.
+None: the three questions of the draft were decided on 2026-10-02
+(decisions 8–10).
 
 ## Actual result
 

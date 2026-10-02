@@ -1663,8 +1663,7 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
 
 ## Phase 11 — AI tooling over the edit sessions (module 07, `ai-edit`)
 
-Starts after Leonid approves `docs/document-editing/todo/07-ai-edit.md`.
-Commits carry `[linear:ACTION-858]`.
+Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`.
 
 - [ ] Task 59: Outline and description — `getOutline()` (nesting, ordinals,
       labels, operations) and `describe()` (line grammar, character budget)
