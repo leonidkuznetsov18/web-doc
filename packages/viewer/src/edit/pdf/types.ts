@@ -237,12 +237,14 @@ export type RotatePageOperation =
       readonly pageIndex: number;
       /** Absolute clockwise rotation in degrees. */
       readonly rotation: 0 | 90 | 180 | 270;
+      readonly by?: never;
     }
   | {
       readonly op: "rotatePage";
       readonly pageIndex: number;
       /** Clockwise turn in degrees from the page's current rotation. */
       readonly by: 90 | 180 | 270;
+      readonly rotation?: never;
     };
 
 /** The PDF operation union; operations are added as they ship. */
@@ -448,7 +450,7 @@ export interface PdfEditSession extends EditSessionBase<
     fields: Fields<MovePageOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
-  /** Sets a page's rotation. */
+  /** Sets a page's rotation, or turns it from the one it has. */
   rotatePage(
     fields: Fields<RotatePageOperation>,
     options?: ApplyOptions,

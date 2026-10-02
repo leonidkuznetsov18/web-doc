@@ -221,6 +221,25 @@ describe("page operations", () => {
           .map((issue) => `${issue.operationIndex}${issue.path}:${issue.code}`),
         ["0:one-of", "1:one-of"],
       );
+      // A field spread in as undefined is absent, as a structured clone keeps
+      // the key.
+      assert.deepEqual(
+        model.validate([
+          op({
+            op: "rotatePage",
+            pageIndex: 0,
+            rotation: 90,
+            by: undefined,
+          } as unknown as PdfOperation),
+          op({
+            op: "rotatePage",
+            pageIndex: 0,
+            rotation: undefined,
+            by: 90,
+          } as unknown as PdfOperation),
+        ]),
+        [],
+      );
     } finally {
       model.dispose();
     }

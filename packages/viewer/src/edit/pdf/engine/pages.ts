@@ -98,7 +98,8 @@ export const rotatePage: OperationHandler<RotatePageOperation> = {
   validate(operation, context, issue) {
     if (operation.pageIndex >= context.pageCount)
       issue("/pageIndex", "unknown-target", `No page ${operation.pageIndex}`);
-    if ("rotation" in operation === "by" in operation)
+    // A field given as undefined counts as absent, as it does everywhere else.
+    if ((operation.rotation === undefined) === (operation.by === undefined))
       issue("", "one-of", "Give exactly one of `rotation` and `by`");
   },
   apply(operation, context) {
@@ -107,7 +108,7 @@ export const rotatePage: OperationHandler<RotatePageOperation> = {
       // A turn reads the angle the page has now, so it composes with what
       // the file was saved with and with turns earlier in the history.
       const quarters =
-        "by" in operation
+        operation.by !== undefined
           ? (lib.FPDFPage_GetRotation(page) + operation.by / 90) % 4
           : operation.rotation / 90;
       lib.FPDFPage_SetRotation(page, quarters);
