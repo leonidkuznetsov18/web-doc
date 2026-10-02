@@ -1678,7 +1678,7 @@ Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`
 - [x] Task 62: Tool set — `session.tools` from the operation schemas,
       `callTool()` with validation and the refusal paths, `describeReceipt`;
       unit tests for every tool.
-- [ ] Task 63: DOCX tracked changes — `changeMode: "tracked"` for
+- [x] Task 63: DOCX tracked changes — `changeMode: "tracked"` for
       `replaceText`, `insertParagraph`, `deleteElement` (paragraph),
       `setTableCell`, `setTextStyle`, `setParagraphStyle`; `getRevisions`;
       worker plumbing; XML-level unit tests; a fixture for the Word/Pages

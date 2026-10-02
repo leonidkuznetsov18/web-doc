@@ -22,6 +22,17 @@ export interface DocxOperationContext {
   readonly operationIndex: number;
   /** A paragraph id no paragraph of the document or of this batch uses. */
   freshParagraphId(): string;
+  /** Set when the batch writes tracked changes: who, and when. */
+  readonly tracked?: TrackedChange;
+  /** A `w:id` no revision of the document or of this batch uses. */
+  nextRevisionId(): number;
+}
+
+/** What every revision of a tracked batch records. */
+export interface TrackedChange {
+  readonly author: string;
+  /** ISO 8601; left out of the file when the batch has no timestamp. */
+  readonly date?: string;
 }
 
 export interface DocxOperationResult {

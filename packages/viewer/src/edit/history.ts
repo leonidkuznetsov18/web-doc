@@ -1,7 +1,7 @@
-import type { EngineBatch } from "./engine.js";
+import type { BatchMode, EngineBatch } from "./engine.js";
 import type { EditOperation } from "./types.js";
 
-export interface HistoryEntry {
+export interface HistoryEntry extends BatchMode {
   readonly operations: readonly EditOperation[];
   readonly label?: string;
   /** Ids the batch created; an undo removes them again. */
@@ -109,10 +109,7 @@ export class EditHistory {
 
   /** Batches applied to the original when `position` undoable entries are applied. */
   batchesAt(position: number): readonly EngineBatch[] {
-    return this.entriesAt(position).map((entry) => ({
-      stateId: entry.stateId,
-      operations: entry.operations,
-    }));
+    return this.entriesAt(position).map(batchOf);
   }
 
   /** Entries applied when `position` undoable entries are applied, folded ones first. */
@@ -158,4 +155,22 @@ export class EditHistory {
     this.#entries = [];
     this.#position = 0;
   }
+}
+
+/** The engine batch an entry replays as: its operations and how they were written. */
+export function batchOf(entry: HistoryEntry): EngineBatch {
+  return {
+    stateId: entry.stateId,
+    operations: entry.operations,
+    ...modeOf(entry),
+  };
+}
+
+/** The write mode fields of a batch or an entry, only those set. */
+export function modeOf(mode: BatchMode): BatchMode {
+  return {
+    ...(mode.changeMode === undefined ? {} : { changeMode: mode.changeMode }),
+    ...(mode.author === undefined ? {} : { author: mode.author }),
+    ...(mode.timestamp === undefined ? {} : { timestamp: mode.timestamp }),
+  };
 }

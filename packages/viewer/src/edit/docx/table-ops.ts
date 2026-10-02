@@ -10,6 +10,11 @@ import type {
 } from "./operations.js";
 import { LINE_BREAK } from "./text.js";
 import { replacedParagraph } from "./text-ops.js";
+import {
+  deletedParagraphXml,
+  trackedRangeProblem,
+  unsupportedTracked,
+} from "./tracked.js";
 import type {
   DocxInsertTableOperation,
   DocxSetTableCellOperation,
@@ -162,6 +167,10 @@ function commit(
 export const insertTableHandler: DocxOperationHandler<DocxInsertTableOperation> =
   {
     async validate(operation, context, issue) {
+      if (context.tracked) {
+        unsupportedTracked(issue, "", "Inserting a table");
+        return;
+      }
       placement(operation, context, issue);
       const columns = operation.rows[0]?.length ?? 0;
       if (operation.rows.some((row) => row.length !== columns))
@@ -284,6 +293,19 @@ export const setTableCellHandler: DocxOperationHandler<DocxSetTableCellOperation
           "invalid-target",
           `The cell's paragraph is read-only (${first.readOnlyReason})`,
         );
+      else if (context.tracked)
+        for (const paragraph of cell.paragraphs)
+          if (
+            paragraph.readOnlyReason ||
+            trackedRangeProblem(
+              paragraph,
+              0,
+              paragraph.text.text.length,
+              issue,
+              "/target",
+            )
+          )
+            return;
     },
     async apply(operation, context) {
       const { model } = context;
@@ -302,13 +324,31 @@ export const setTableCellHandler: DocxOperationHandler<DocxSetTableCellOperation
       const items: XmlPatch[] = [...replaced.items];
       const removedIds = [...replaced.removedIds];
       const removedParagraphIds: string[] = [...replaced.removedParagraphIds];
+      const stamped: string[] = model.unauthoredSet.has(first!.id)
+        ? [first!.id]
+        : [];
       for (const paragraph of rest) {
-        items.push(patches.removeElement(part, paragraph.node));
-        removedIds.push(
-          paragraph.elementId,
-          ...paragraph.inlines.map((inline) => inline.elementId),
-        );
-        removedParagraphIds.push(paragraph.id);
+        if (context.tracked) {
+          if (model.unauthoredSet.has(paragraph.id)) stamped.push(paragraph.id);
+          // The paragraph stays, marked deleted, until Word accepts.
+          items.push(
+            patches.replaceElement(
+              part,
+              paragraph.node,
+              deletedParagraphXml(context, paragraph),
+            ),
+          );
+          removedIds.push(
+            ...paragraph.inlines.map((inline) => inline.elementId),
+          );
+        } else {
+          items.push(patches.removeElement(part, paragraph.node));
+          removedIds.push(
+            paragraph.elementId,
+            ...paragraph.inlines.map((inline) => inline.elementId),
+          );
+          removedParagraphIds.push(paragraph.id);
+        }
         for (const nested of part.findAll("p", paragraph.node)) {
           const id = model.paragraphIds.get(nested);
           if (id && nested !== paragraph.node) removedParagraphIds.push(id);
@@ -318,7 +358,7 @@ export const setTableCellHandler: DocxOperationHandler<DocxSetTableCellOperation
         createdIds: replaced.createdIds,
         ...(removedIds.length > 0 ? { removedIds } : {}),
         ...(removedParagraphIds.length > 0 ? { removedParagraphIds } : {}),
-        ...(model.unauthoredSet.has(first!.id) ? { stamped: [first!.id] } : {}),
+        ...(stamped.length > 0 ? { stamped } : {}),
         reflowFrom: record.id,
       });
     },

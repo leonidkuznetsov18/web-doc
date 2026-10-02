@@ -15,7 +15,13 @@ import type {
   ToolResult,
   ToolSet,
 } from "../ai/types.js";
-import type { EditSessionAccess, EditSessionCore } from "../engine.js";
+import { ViewerError } from "../../errors.js";
+import type {
+  EditEngine,
+  EditSessionAccess,
+  EditSessionCore,
+} from "../engine.js";
+import type { DocxEngineReads } from "./engine.js";
 import type {
   ApplyOptions,
   AssetOptions,
@@ -46,6 +52,7 @@ import type {
   DocxMoveElementOperation,
   DocxOperation,
   DocxReplaceTextOperation,
+  DocxRevision,
   DocxSaveOptions,
   DocxSetParagraphStyleOperation,
   DocxSetTableCellOperation,
@@ -265,6 +272,15 @@ export class DocxSession implements DocxEditSession {
 
   callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
     return runTool(this, this.tools, call, options);
+  }
+
+  getRevisions(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadResult<DocxRevision>> {
+    return this.#core.readItems(options, (engine, signal) =>
+      docxReads(engine).revisions(elementId, signal),
+    );
   }
 
   replaceText(
@@ -690,4 +706,15 @@ function matchesQuery(element: DocxElement, query: ElementQuery): boolean {
   );
   if (!fragment) return false;
   return !query.intersects || rectsIntersect(fragment.bounds, query.intersects);
+}
+
+function docxReads(engine: EditEngine): DocxEngineReads {
+  const candidate = engine as Partial<DocxEngineReads>;
+  if (typeof candidate.revisions !== "function")
+    throw new ViewerError(
+      "edit-unsupported",
+      "The engine does not provide the DOCX reads",
+      { details: { format: "docx", reason: "no-reads" } },
+    );
+  return candidate as DocxEngineReads;
 }

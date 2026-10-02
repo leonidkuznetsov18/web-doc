@@ -18,6 +18,13 @@ import type {
   Issue,
 } from "./operations.js";
 import { firstTextItem } from "./text.js";
+import {
+  deletedParagraphXml,
+  insertedRunXml,
+  markedParagraphProperties,
+  trackedRangeProblem,
+  unsupportedTracked,
+} from "./tracked.js";
 import type {
   DocxDeleteElementOperation,
   DocxInsertImageOperation,
@@ -241,21 +248,27 @@ export const insertParagraphHandler: DocxOperationHandler<DocxInsertParagraphOpe
             context.model.styles,
           )
         : sliceOf(part, sourceRPr);
-      const pPr =
-        record.kind === "paragraph"
-          ? paragraphPropertiesWithoutSection(part, record.pPr)
-          : "";
+      const sourcePPr = record.kind === "paragraph" ? record.pPr : undefined;
+      const pPr = paragraphPropertiesWithoutSection(part, sourcePPr);
       const segments = normalizeText(operation.text).split("\n");
       const createdIds: string[] = [];
       const xml = segments.map((segment) => {
         const id = context.freshParagraphId();
         createdIds.push(`p:${id}`);
-        return paragraphXml(
-          undefined,
-          id,
-          pPr,
-          runXml(rPr, runContentXml(segment)),
-        );
+        // Tracked: the paragraph mark and the run are both insertions.
+        return context.tracked
+          ? paragraphXml(
+              undefined,
+              id,
+              markedParagraphProperties(context, sourcePPr, "ins"),
+              insertedRunXml(context, rPr, segment),
+            )
+          : paragraphXml(
+              undefined,
+              id,
+              pPr,
+              runXml(rPr, runContentXml(segment)),
+            );
       });
       // Inserts at one position land in call order, so the paragraphs
       // keep their order on either side of the reference.
@@ -329,7 +342,23 @@ export const deleteElementHandler: DocxOperationHandler<DocxDeleteElementOperati
         );
         return;
       }
+      if (context.tracked && record.kind !== "paragraph") {
+        unsupportedTracked(issue, "/target", "Deleting a table or a picture");
+        return;
+      }
       if (record.kind === "paragraph") {
+        if (
+          context.tracked &&
+          !record.readOnlyReason &&
+          trackedRangeProblem(
+            record,
+            0,
+            record.text.text.length,
+            issue,
+            "/target",
+          )
+        )
+          return;
         if (record.sectPr)
           issue(
             "/target",
@@ -358,6 +387,32 @@ export const deleteElementHandler: DocxOperationHandler<DocxDeleteElementOperati
         return deleteInline(context, found);
       const record: ParagraphRecord | TableRecord = found;
       const node = blockNode(record);
+      if (context.tracked && record.kind === "paragraph") {
+        // The paragraph stays, marked deleted; its inline objects leave
+        // the model with their runs, Word drops the rest on accept.
+        const nested = paragraphIdsUnder(model, node).filter(
+          (id) => id !== record.id,
+        );
+        return commit(
+          context,
+          [
+            patches.replaceElement(
+              part,
+              node,
+              deletedParagraphXml(context, record),
+            ),
+          ],
+          {
+            createdIds: [],
+            removedIds: record.inlines.map((inline) => inline.elementId),
+            ...(nested.length > 0 ? { removedParagraphIds: nested } : {}),
+            ...(model.unauthoredSet.has(record.id)
+              ? { stamped: [record.id] }
+              : {}),
+            reflowFrom: record.id,
+          },
+        );
+      }
       const items: XmlPatch[] = [patches.removeElement(part, node)];
       const createdIds: string[] = [];
       if (model.blocks.includes(record)) {
@@ -437,6 +492,10 @@ function stripNode(part: XmlPart, node: XmlElement): string {
 export const moveElementHandler: DocxOperationHandler<DocxMoveElementOperation> =
   {
     async validate(operation, context, issue) {
+      if (context.tracked) {
+        unsupportedTracked(issue, "", "Moving an element");
+        return;
+      }
       const record = context.model.byId.get(operation.target);
       if (!record || (record.kind !== "paragraph" && record.kind !== "table")) {
         issue(
@@ -610,6 +669,10 @@ function drawingNamespacePatches(part: XmlPart): XmlPatch[] {
 export const insertImageHandler: DocxOperationHandler<DocxInsertImageOperation> =
   {
     async validate(operation, context, issue) {
+      if (context.tracked) {
+        unsupportedTracked(issue, "", "Inserting a picture");
+        return;
+      }
       placement(operation, context, issue);
       try {
         const bytes = resolveBinary(operation.data, context.assets);

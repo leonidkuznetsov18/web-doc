@@ -5,6 +5,8 @@ import type {
   EditElement,
   EditReceipt,
   EditSessionBase,
+  ReadOptions,
+  ReadResult,
   SavedDocument,
   SaveOptions,
   TextRange,
@@ -224,6 +226,21 @@ export type DocxOperation =
 /** DOCX saves have no fields of their own. */
 export type DocxSaveOptions = SaveOptions;
 
+/** One revision of a paragraph, as `getRevisions()` lists them in document order. */
+export interface DocxRevision {
+  readonly kind:
+    "ins" | "del" | "moveFrom" | "moveTo" | "rPrChange" | "pPrChange";
+  /** The `w:id`; -1 when the file leaves it out. */
+  readonly id: number;
+  readonly author?: string;
+  /** ISO 8601, as the file writes it. */
+  readonly date?: string;
+  /** Runs of the paragraph, its paragraph mark, or the paragraph's properties. */
+  readonly scope: "runs" | "mark" | "paragraph";
+  /** The inserted, deleted or restyled text; "\n" for a paragraph mark; absent for a property change. */
+  readonly text?: string;
+}
+
 /** An operation's fields without its `op`, as the typed methods take them. */
 export type DocxFields<T extends DocxOperation> = T extends unknown
   ? Omit<T, "op">
@@ -235,6 +252,11 @@ export interface DocxEditSession extends EditSessionBase<
 > {
   readonly format: "docx";
   save(options?: DocxSaveOptions): Promise<SavedDocument>;
+  /** The tracked changes a paragraph holds, in document order; empty for other elements. */
+  getRevisions(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadResult<DocxRevision>>;
   /** Replaces the whole text of a paragraph, or the part a range covers. */
   replaceText(
     fields: DocxFields<DocxReplaceTextOperation>,

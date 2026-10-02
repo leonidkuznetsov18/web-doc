@@ -16,7 +16,7 @@ import type { DocxParagraphStyleChange, DocxTextStyleChange } from "./types.js";
 const MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 /** Children of `w:rPr` in schema order (CT_RPr). */
-const RPR_ORDER = [
+export const RPR_ORDER = [
   "rStyle",
   "rFonts",
   "b",
@@ -60,7 +60,7 @@ const RPR_ORDER = [
 ];
 
 /** Children of `w:pPr` in schema order (CT_PPr). */
-const PPR_ORDER = [
+export const PPR_ORDER = [
   "pStyle",
   "keepNext",
   "keepLines",
@@ -228,14 +228,24 @@ function toggleXml(local: string, on: boolean): string {
   return on ? `<w:${local}/>` : `<w:${local} w:val="0"/>`;
 }
 
-/** `w:rPr` bytes with a text style change applied. */
+/**
+ * `w:rPr` bytes with a text style change applied. With `revision` (the
+ * attributes of a tracked change) the previous properties are kept in a
+ * `w:rPrChange`, so Word shows the change as a suggestion.
+ */
 export function changedRunProperties(
   part: XmlPart,
   rPr: XmlElement | undefined,
   change: DocxTextStyleChange,
   styles: DocxStyles,
+  revision?: string,
 ): string {
   const set = new Map<string, string | null>();
+  if (revision !== undefined)
+    set.set(
+      "rPrChange",
+      `<w:rPrChange${revision}>${wrapped("w:rPr", innerPropertiesXml(part, rPr, ["rPrChange"]))}</w:rPrChange>`,
+    );
   if (change.bold !== undefined) {
     set.set("b", toggleXml("b", change.bold));
     set.set("bCs", toggleXml("bCs", change.bold));
@@ -295,13 +305,40 @@ function fontsXml(
   return `<w:rFonts w:ascii="${face}" w:hAnsi="${face}"${rest}/>`;
 }
 
-/** `w:pPr` bytes with alignment and spacing changed, other children kept. */
+/** `inner` inside `tag`, self-closing when empty. */
+function wrapped(tag: string, inner: string): string {
+  return inner.length === 0 ? `<${tag}/>` : `<${tag}>${inner}</${tag}>`;
+}
+
+/** The children of a properties element as bytes, the named ones left out. */
+export function innerPropertiesXml(
+  part: XmlPart,
+  properties: XmlElement | undefined,
+  without: readonly string[],
+): string {
+  return (properties?.children ?? [])
+    .filter((child) => !without.includes(child.local))
+    .map((child) => sliceOf(part, child))
+    .join("");
+}
+
+/**
+ * `w:pPr` bytes with alignment and spacing changed, other children kept.
+ * With `revision` the previous paragraph properties are kept in a
+ * `w:pPrChange`.
+ */
 export function changedParagraphProperties(
   part: XmlPart,
   pPr: XmlElement | undefined,
   change: DocxParagraphStyleChange,
+  revision?: string,
 ): string {
   const set = new Map<string, string | null>();
+  if (revision !== undefined)
+    set.set(
+      "pPrChange",
+      `<w:pPrChange${revision}>${wrapped("w:pPr", innerPropertiesXml(part, pPr, ["rPr", "sectPr", "pPrChange"]))}</w:pPrChange>`,
+    );
   if (change.align !== undefined)
     set.set("jc", `<w:jc w:val="${alignValue(change.align)}"/>`);
   if (change.spacing !== undefined) {
@@ -359,11 +396,12 @@ export function paragraphMarkProperties(
   pPr: XmlElement | undefined,
   change: DocxTextStyleChange,
   styles: DocxStyles,
+  revision?: string,
 ): string {
   const rPr = pPr?.children.find(
     (child) => child.local === "rPr" && child.namespace === W_NS,
   );
-  const changed = changedRunProperties(part, rPr, change, styles);
+  const changed = changedRunProperties(part, rPr, change, styles, revision);
   return mergedProperties(
     part,
     pPr,

@@ -89,6 +89,12 @@ class Reader {
   paragraph(paragraph: XmlElement): void {
     for (const child of paragraph.children) this.#child(child, undefined);
     if (this.#field) this.#closeField();
+    // A paragraph mark inserted, deleted or moved under revision marks the
+    // paragraph as well.
+    const pPr = paragraph.children.find(
+      (child) => child.local === "pPr" && child.namespace === W_NS,
+    );
+    if (pPr && paragraphMarkTracked(pPr)) this.#tracked();
   }
 
   #child(node: XmlElement, wrapper: XmlElement | undefined): void {
@@ -324,6 +330,27 @@ class Reader {
     this.items.push(item);
     this.text += item.text;
   }
+}
+
+const MARK_REVISIONS = new Set(["ins", "del", "moveFrom", "moveTo"]);
+
+/**
+ * Whether the paragraph mark's `w:rPr` carries an insertion, deletion or
+ * move. Changed properties alone (`w:rPrChange`, `w:pPrChange`) leave a
+ * paragraph editable, as module 06 decided.
+ */
+function paragraphMarkTracked(pPr: XmlElement): boolean {
+  for (const child of pPr.children) {
+    if (child.namespace !== W_NS) continue;
+    if (
+      child.local === "rPr" &&
+      child.children.some(
+        (mark) => mark.namespace === W_NS && MARK_REVISIONS.has(mark.local),
+      )
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Reads the text of a `w:p`. */

@@ -36,7 +36,7 @@ import type {
   MaterializeOptions,
   RestoreTarget,
 } from "./engine.js";
-import { EditHistory, type HistoryEntry } from "./history.js";
+import { batchOf, EditHistory, modeOf, type HistoryEntry } from "./history.js";
 import {
   assertBatchSize,
   checkOperations,
@@ -207,7 +207,8 @@ export class EditSessionController implements EditSessionCore {
       if (referenceIssues.length > 0)
         throw invalidOperationError(referenceIssues);
       const interned = await this.#intern(batch, signal);
-      const engineIssues = await this.#engine.validate(interned, signal);
+      const mode = modeOf(options);
+      const engineIssues = await this.#engine.validate(interned, signal, mode);
       throwIfAborted(signal);
       if (engineIssues.length > 0) throw invalidOperationError(engineIssues);
       // The id the history will give this state; a dry run uses the same one,
@@ -215,6 +216,7 @@ export class EditSessionController implements EditSessionCore {
       const engineBatch: EngineBatch = {
         stateId: this.#history.nextStateId,
         operations: interned,
+        ...mode,
       };
 
       if (options.dryRun) {
@@ -249,6 +251,7 @@ export class EditSessionController implements EditSessionCore {
       );
       this.#history.push({
         operations: interned,
+        ...mode,
         ...(options.label === undefined ? {} : { label: options.label }),
         createdIds: change.createdIds,
         removedIds: change.removedIds,
@@ -1219,9 +1222,7 @@ interface NamedCheckpoint {
 
 /** The engine batches of entries that carry operations; restore entries carry none. */
 function batchesOf(entries: readonly HistoryEntry[]): readonly EngineBatch[] {
-  return entries
-    .filter((entry) => entry.operations.length > 0)
-    .map((entry) => ({ stateId: entry.stateId, operations: entry.operations }));
+  return entries.filter((entry) => entry.operations.length > 0).map(batchOf);
 }
 
 /** The batches from the original to the state after `entries`, through the last restore. */

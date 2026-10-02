@@ -150,6 +150,13 @@ different count adds a `fidelity-degraded` warning instead of being trusted.
 Each call reopens the document once, so prefer one batch of several operations
 over several calls.
 
+`ApplyOptions.changeMode` chooses how the batch is written: `direct` (the
+default) replaces content in place; `tracked` writes Word revisions for a
+person to accept or reject, with `author` (required) and `timestamp` (the
+revision's date). DOCX is the only format with a tracked form; the others
+refuse it with `unsupported-change-mode`, as does a DOCX operation without a
+tracked form. The [AI editing](./ai-editing.md) page describes it.
+
 ### Receipts
 
 ```ts
@@ -882,6 +889,7 @@ sizes and spacing are points.
 | `insertImage({ before \| after, data, mimeType, size })` | Adds a paragraph holding an inline PNG or JPEG at `size` points (the display pre-pass fits it to the column like any other picture). The bytes are stored once under `word/media` and related from the document; `createdIds` names the paragraph, then the picture.                                                                                                                                                                                                                                                                                      |
 | `insertTable({ before \| after, rows, columnWidths? })`  | Adds a table next to a paragraph or table of the body (not inside a cell): a grid over the section's content width from the relative `columnWidths` (equal when omitted), the `TableGrid` style when the document defines it or single borders otherwise, one paragraph per cell with the cell's text (newlines become line breaks), and an empty paragraph after the table when the next block would be a table or the end of the body. `createdIds` names the table, then every cell paragraph, then that trailing paragraph. 1–100 rows, 1–20 columns. |
 | `setTableCell({ target, row, column, text })`            | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                                                                                                                                                                                                                              |
+| `getRevisions(elementId, options?)`                      | A read: the tracked changes a paragraph holds, in document order (`ins`, `del`, `moveFrom`, `moveTo`, `rPrChange`, `pPrChange` with `id`, `author`, `date`, `scope` and the text they cover); empty for other elements.                                                                                                                                                                                                                                                                                                                                   |
 
 A table is named after its first paragraph, so an insertion, a move or a
 deletion that changes which paragraph comes first in its first cell
@@ -930,10 +938,14 @@ and colours); `paragraphStyle` carries the style id, alignment, spacing
 numbering.
 
 A paragraph that cannot be edited in place says why in `readOnlyReason`:
-`tracked-changes` (it holds `w:ins`, `w:del` or a move), `section-break`
-(its `w:pPr` carries a `w:sectPr`) or `unsupported-content` (all its text
-comes from fields). Such a paragraph only accepts the insertion operations
-that place a sibling next to it.
+`tracked-changes` (it holds `w:ins`, `w:del` or a move, on its runs or on
+its paragraph mark), `section-break` (its `w:pPr` carries a `w:sectPr`) or
+`unsupported-content` (all its text comes from fields). Such a paragraph
+only accepts the insertion operations that place a sibling next to it.
+Changed properties alone (`w:rPrChange`, `w:pPrChange`) leave a paragraph
+editable. `getRevisions(elementId)` lists a paragraph's revisions (kind,
+id, author, date, the text they cover) in document order; see
+[tracked changes](./ai-editing.md#tracked-changes).
 
 ### Geometry
 

@@ -2,6 +2,7 @@ import type { ResourceLimits, ViewerWarning } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { AssetStore } from "../assets.js";
 import type {
+  BatchMode,
   EditEngine,
   EngineBatch,
   EngineChange,
@@ -25,10 +26,15 @@ import { docxHandlers } from "./handlers.js";
 import { freshParagraphId, paragraphsOf } from "./ids.js";
 import { DocxModel, type AnyRecord } from "./model.js";
 import type { DocxStyles } from "./style.js";
-import { issueCollector, type DocxOperationContext } from "./operations.js";
+import {
+  issueCollector,
+  type DocxOperationContext,
+  type TrackedChange,
+} from "./operations.js";
 import { docxOperationSchemas } from "./schemas.js";
-import type { DocxElement, DocxOperation } from "./types.js";
-import { namespacePatches } from "./write.js";
+import { revisionsOf } from "./tracked.js";
+import type { DocxElement, DocxOperation, DocxRevision } from "./types.js";
+import { attributeProblem, namespacePatches } from "./write.js";
 
 /*
  * The DOCX edit engine: the package layer under a block index of the body
@@ -65,7 +71,21 @@ function unauthoredIdsOf(bytes: Uint8Array): string[] {
   return [...text.matchAll(/<p id="([0-9A-F]{8})"\/>/g)].map((m) => m[1]!);
 }
 
-export class DocxEditEngine implements EditEngine {
+/** Reads the DOCX session adds on top of the core, served by the engine and the worker client alike. */
+export interface DocxEngineReads {
+  revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]>;
+}
+
+/** The tracked-change record of a batch, when it writes revisions. */
+function trackedOf(mode: BatchMode): TrackedChange | undefined {
+  if (mode.changeMode !== "tracked") return undefined;
+  return {
+    author: mode.author ?? "",
+    ...(mode.timestamp === undefined ? {} : { date: mode.timestamp }),
+  };
+}
+
+export class DocxEditEngine implements EditEngine, DocxEngineReads {
   readonly schemas = docxOperationSchemas;
   readonly #original: Uint8Array;
   readonly #limits: ResourceLimits;
@@ -145,9 +165,23 @@ export class DocxEditEngine implements EditEngine {
   async validate(
     operations: readonly EditOperation[],
     signal: AbortSignal,
+    mode: BatchMode = {},
   ): Promise<readonly OperationIssue[]> {
     const issues: OperationIssue[] = [];
-    const base = await this.#context(0, signal);
+    const tracked = trackedOf(mode);
+    if (tracked) {
+      const problem = attributeProblem(tracked.author);
+      if (problem)
+        return [
+          {
+            operationIndex: -1,
+            path: "/author",
+            code: "invalid-value",
+            message: `The author holds ${problem}`,
+          },
+        ];
+    }
+    const base = await this.#context(0, signal, 0, new Set(), tracked);
     for (const [index, operation] of operations.entries()) {
       const context = { ...base, operationIndex: index };
       const handler = docxHandlers.get(operation.op);
@@ -227,6 +261,7 @@ export class DocxEditEngine implements EditEngine {
           signal,
           index,
           issued,
+          trackedOf(batch),
         );
         const issues: OperationIssue[] = [];
         await handler.validate(
@@ -290,10 +325,12 @@ export class DocxEditEngine implements EditEngine {
     signal: AbortSignal | undefined,
     operationIndex = 0,
     issued: Set<string> = new Set(),
+    tracked?: TrackedChange,
   ): Promise<DocxOperationContext> {
     const model = await this.model(signal);
     const taken = new Set([...model.takenIds, ...issued]);
     let count = 0;
+    let revisions = 0;
     return {
       pkg: this.#pkg,
       model,
@@ -308,7 +345,23 @@ export class DocxEditEngine implements EditEngine {
         taken.add(id);
         return id;
       },
+      ...(tracked ? { tracked } : {}),
+      nextRevisionId: () => {
+        revisions += 1;
+        return model.maxRevisionId + revisions;
+      },
     };
+  }
+
+  /** The revisions of a paragraph; none for another element or an unknown id. */
+  async revisions(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<readonly DocxRevision[]> {
+    const model = await this.model(signal);
+    const record = model.byId.get(id);
+    if (!record || record.kind !== "paragraph") return [];
+    return revisionsOf(model.document, record.node);
   }
 
   async materialize(

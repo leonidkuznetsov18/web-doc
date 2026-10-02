@@ -279,6 +279,61 @@ Deleted slide 3. Moved slide 1 to 4. Removed sld3:2, sld3:3. Revision 3; changed
    again first.
 6. To reject the turn: `document_checkpoint { action: "restore", id }`.
 
+## Tracked changes
+
+```ts
+await session.callTool(
+  { name: "document_apply", arguments: { operations } },
+  { expectedRevision, changeMode: "tracked", author: "Writer agent" },
+);
+// or directly:
+await session.replaceText(
+  { target, text: "four regions" },
+  {
+    changeMode: "tracked",
+    author: "Writer agent",
+    timestamp: new Date().toISOString(),
+  },
+);
+const { items: revisions } = await session.getRevisions(target);
+```
+
+Suggestion mode is Word's tracked changes (decision 5): with
+`changeMode: "tracked"` a DOCX batch is written as revisions the person
+accepts or rejects in Word or Pages, and nothing synthetic is invented for
+PDF and PPTX, which review through checkpoints instead. `author` is required
+(decision 8): a tracked batch without one is refused with a `required` issue
+at `/author`, so a file never carries an anonymous suggestion. `timestamp`
+becomes the revision's `w:date`; without it the date is left out. Every
+revision gets a `w:id` above the file's own.
+
+| Operation                      | Tracked form                                                                                                                                                                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replaceText`                  | The removed runs inside `w:del` (text as `w:delText`), the new text inside `w:ins`; a cut run keeps its head and tail. Newlines split the paragraph with inserted paragraph marks; the original mark ends the last paragraph. |
+| `insertParagraph`              | Each paragraph with an inserted mark and its run inside `w:ins`.                                                                                                                                                              |
+| `deleteElement` of a paragraph | The paragraph stays, its mark and every run marked deleted; Word drops it on accept.                                                                                                                                          |
+| `setTableCell`                 | A tracked `replaceText` of the cell's first paragraph; the cell's other paragraphs are marked deleted.                                                                                                                        |
+| `setTextStyle`                 | The new run properties with the previous ones in `w:rPrChange` (the paragraph mark's too when the range reaches the end).                                                                                                     |
+| `setParagraphStyle`            | The new paragraph properties with the previous ones in `w:pPrChange`.                                                                                                                                                         |
+
+`moveElement`, `insertTable`, `insertImage` and `deleteElement` of a table
+or a picture have no tracked form in this module and are refused with
+`unsupported-change-mode`; so is a tracked change that would touch a
+hyperlink, a content control or a field, since a revision cannot wrap them.
+A paragraph holding an insertion, a deletion or a move is read-only for the
+next edit, direct or tracked, until the change is accepted or rejected in
+Word (decision 6); changed properties alone leave it editable, as the DOCX
+module decided.
+
+A tracked edit changes the saved bytes exactly like a direct one elsewhere
+in the paragraph (one paragraph rebuilt, the rest byte-identical). Reads
+show the accepted text: inserted runs in, deleted runs out, and
+`readOnlyReason: "tracked-changes"` on the paragraph. `getRevisions(id)`
+lists what the batch wrote so a host can show what the agent proposed; the
+viewer draws the accepted text and no revision marks. The history replays a
+tracked batch as tracked, so undo, redo and a checkpoint restore reproduce
+the same bytes.
+
 ## Limits
 
 | Limit                | Default | Meaning                                                  |

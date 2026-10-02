@@ -201,18 +201,57 @@ const cases = [
   ],
 ];
 
+/** Written as Word tracked changes (module 07): suggestions to accept or reject. */
+const tracked = {
+  changeMode: "tracked",
+  author: "web-doc agent",
+  timestamp: new Date().toISOString(),
+};
+cases.push([
+  "tracked-changes",
+  [
+    {
+      op: "setTextStyle",
+      target: first,
+      style: { bold: true, color: "#C00000" },
+    },
+    { op: "setParagraphStyle", target: first, style: { align: "center" } },
+    {
+      op: "replaceText",
+      target: first,
+      text: "A tracked replacement of the first paragraph.",
+    },
+    {
+      op: "replaceText",
+      target: second,
+      text: "tracked",
+      range: {
+        start: { elementId: second, offset: 0 },
+        end: { elementId: second, offset: 5 },
+      },
+    },
+    {
+      op: "insertParagraph",
+      after: third,
+      text: "A tracked insertion.\nAnd its second paragraph.",
+    },
+    { op: "deleteElement", target: third },
+  ],
+  tracked,
+]);
+
 await mkdir(outdir, { recursive: true });
 const written = [];
-for (const [name, operations] of cases) {
+for (const [name, operations, mode] of cases) {
   const engine = await DocxEditEngine.open(
     original,
     defaultResourceLimits,
     signal,
   );
-  const issues = await engine.validate(operations, signal);
+  const issues = await engine.validate(operations, signal, mode);
   if (issues.length > 0)
     throw new Error(`${name}: ${JSON.stringify(issues, null, 2)}`);
-  await engine.apply({ stateId: 1, operations }, signal);
+  await engine.apply({ stateId: 1, operations, ...mode }, signal);
   const bytes = await engine.materialize("save", {}, signal);
   await engine.dispose();
   const file = resolve(outdir, `${name}.docx`);
@@ -227,6 +266,9 @@ await writeFile(
     "One edited copy of `.cache/corpus/sample.docx` per DOCX operation, written by",
     "`npm run fixtures:docx`. Open each file in Word and in Pages and record whether",
     "it opens without a repair prompt in `docs/document-editing/todo/06-docx-edit.md`.",
+    "`tracked-changes.docx` holds the same edits as Word revisions: check that they",
+    "show as suggestions by `web-doc agent`, that accepting them gives the direct",
+    "edit's text and rejecting them the original (`docs/document-editing/todo/07-ai-edit.md`).",
     "",
     ...written.map((entry) => `- ${entry}`),
     "",
