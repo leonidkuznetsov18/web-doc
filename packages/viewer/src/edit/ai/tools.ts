@@ -300,24 +300,27 @@ export async function callTool(
   options: ToolCallOptions = {},
 ): Promise<ToolResult> {
   const definition = tools.definitions.find((tool) => tool.name === call.name);
-  if (!definition)
+  if (!definition) {
+    const name = String(call.name).slice(0, 80);
     return refused(
       [
         {
           operationIndex: -1,
           path: "/name",
           code: "unknown-tool",
-          message: `Unknown tool ${call.name}`,
+          message: `Unknown tool ${name}`,
         },
       ],
-      `No tool named ${call.name}; the tools are ${tools.definitions.map((tool) => tool.name).join(", ")}.`,
+      `No tool named ${name}; the tools are ${tools.definitions.map((tool) => tool.name).join(", ")}.`,
     );
+  }
   const args = call.arguments ?? {};
   const schema =
-    definition.name === "document_apply" ||
-    definition.name === "document_preview"
-      ? BATCH_ARGUMENTS
-      : definition.inputSchema;
+    definition.name === "document_apply"
+      ? APPLY_ARGUMENTS
+      : definition.name === "document_preview"
+        ? PREVIEW_ARGUMENTS
+        : definition.inputSchema;
   const issues = validateSchema(args, schema, -1);
   if (issues.length > 0)
     return refused(
@@ -355,8 +358,8 @@ export async function callTool(
   }
 }
 
-/** The loose shape of a batch call; the operations themselves are validated by `apply()`. */
-const BATCH_ARGUMENTS: JsonSchema = {
+/** The loose shape of a preview call; the operations themselves are validated by `apply()`. */
+const PREVIEW_ARGUMENTS: JsonSchema = {
   type: "object",
   required: ["operations"],
   additionalProperties: false,
@@ -366,6 +369,14 @@ const BATCH_ARGUMENTS: JsonSchema = {
       minItems: 1,
       items: { type: "object" },
     },
+  },
+};
+
+/** The loose shape of an apply call: a preview plus the history label. */
+const APPLY_ARGUMENTS: JsonSchema = {
+  ...PREVIEW_ARGUMENTS,
+  properties: {
+    ...(PREVIEW_ARGUMENTS.properties as Record<string, JsonSchema>),
     label: { type: "string", maxLength: 200 },
   },
 };
@@ -401,6 +412,12 @@ function ok(content: unknown, text: string): ToolResult {
 function refusal(session: ToolSource, error: unknown): ToolResult {
   if (!(error instanceof ViewerError)) throw error;
   if (error.code === "lifecycle-error" || error.code === "aborted") throw error;
+  // A session that could not recover answers nothing a model can act on.
+  if (
+    error.code === "worker-crashed" ||
+    (error.code === "edit-failed" && error.details?.recovered === false)
+  )
+    throw error;
   if (error.code === "invalid-operation") {
     const reported = error.details?.issues as
       readonly OperationIssue[] | undefined;

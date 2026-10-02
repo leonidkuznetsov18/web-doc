@@ -980,8 +980,8 @@ export class EditSessionController implements EditSessionCore {
 
   /**
    * Walks `entries` from the end: the first with retained bytes is the base;
-   * a restore entry without them starts from its own base's bytes, else from
-   * the original plus the batches that built its checkpoint.
+   * a restore entry without them starts from the original plus the batches
+   * that built its checkpoint.
    */
   #targetFor(entries: readonly HistoryEntry[]): RestoreTarget {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -990,12 +990,10 @@ export class EditSessionController implements EditSessionCore {
         batchesOf(entries.slice(index + 1));
       const retained = this.#checkpoints.get(entry.stateId);
       if (retained) return { base: retained, batches: after() };
-      if (entry.base) {
-        const base = this.#checkpoints.get(entry.base.stateId);
-        return base
-          ? { base, batches: after() }
-          : { batches: [...entry.base.batches, ...after()] };
-      }
+      // A restore entry carries its checkpoint's state id, so its bytes
+      // were just looked up; without them the checkpoint's batches rebuild
+      // it from the original.
+      if (entry.base) return { batches: [...entry.base.batches, ...after()] };
     }
     return { batches: batchesOf(entries) };
   }
@@ -1171,27 +1169,41 @@ function checkChangeMode(
   format: EditableFormat,
   options: ApplyOptions,
 ): OperationIssue[] {
-  if (options.changeMode !== "tracked") return [];
+  const issues: OperationIssue[] = [];
+  // A timestamp is written into the file where a format records one, so
+  // it must be a date-time the file can hold whatever the mode.
+  if (
+    options.timestamp !== undefined &&
+    (!DATE_TIME.test(options.timestamp) ||
+      Number.isNaN(Date.parse(options.timestamp)))
+  )
+    issues.push({
+      operationIndex: -1,
+      path: "/timestamp",
+      code: "invalid-value",
+      message: "The timestamp must be an ISO 8601 date-time",
+    });
+  if (options.changeMode !== "tracked") return issues;
   if (format !== "docx")
-    return [
-      {
-        operationIndex: -1,
-        path: "",
-        code: "unsupported-change-mode",
-        message: `${format.toUpperCase()} has no tracked changes; apply directly and review with checkpoints`,
-      },
-    ];
-  if (!options.author || options.author.trim().length === 0)
-    return [
-      {
-        operationIndex: -1,
-        path: "/author",
-        code: "required",
-        message: "Tracked changes name their author; pass ApplyOptions.author",
-      },
-    ];
-  return [];
+    issues.push({
+      operationIndex: -1,
+      path: "",
+      code: "unsupported-change-mode",
+      message: `${format.toUpperCase()} has no tracked changes; apply directly and review with checkpoints`,
+    });
+  else if (!options.author || options.author.trim().length === 0)
+    issues.push({
+      operationIndex: -1,
+      path: "/author",
+      code: "required",
+      message: "Tracked changes name their author; pass ApplyOptions.author",
+    });
+  return issues;
 }
+
+/** ISO 8601 as `xsd:dateTime` takes it. */
+const DATE_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/;
 
 /** The renderer owns the page count; an engine that disagrees is reported, not trusted. */
 function pageCountWarning(

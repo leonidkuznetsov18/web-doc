@@ -100,7 +100,7 @@ describe("DOCX tracked changes (ai-edit T63)", () => {
     assert.equal(
       body,
       `<w:p w14:paraId="${first!.slice(2)}"><w:bookmarkStart w:id="4" w:name="m"/>` +
-        `<w:del${REV(5)}><w:r><w:rPr><w:i/></w:rPr><w:delText xml:space="preserve">Hello </w:delText></w:r><w:r><w:delText>world</w:delText></w:r></w:del>` +
+        `<w:del${REV(5)}><w:r><w:rPr><w:i/></w:rPr><w:delText xml:space="preserve">Hello </w:delText></w:r><w:r><w:delText xml:space="preserve">world</w:delText></w:r></w:del>` +
         `<w:ins${REV(6)}><w:r><w:rPr><w:i/></w:rPr><w:t>Bye</w:t></w:r></w:ins>` +
         `<w:bookmarkEnd w:id="4"/></w:p>` +
         paragraph("Untouched") +
@@ -183,7 +183,7 @@ describe("DOCX tracked changes (ai-edit T63)", () => {
     );
     assert.ok(
       body.includes(
-        `<w:del${REV(4)}><w:r><w:delText>gone</w:delText></w:r></w:del></w:p>`,
+        `<w:del${REV(4)}><w:r><w:delText xml:space="preserve">gone</w:delText></w:r></w:del></w:p>`,
       ),
       body,
     );
@@ -336,6 +336,132 @@ describe("DOCX tracked changes (ai-edit T63)", () => {
     // The same operations apply directly.
     const direct: DocxOperation = { op: "deleteElement", target: table! };
     assert.deepEqual(await engine.validate([direct], signal), []);
+    await engine.dispose();
+  });
+
+  it("keeps carets next to a hyperlink and a field where they are, and never writes a note reference twice", async () => {
+    const engine = await open(
+      buildDocx({
+        body:
+          `<w:p>${RUN("a ")}<w:hyperlink r:id="rId9">${RUN("link")}</w:hyperlink>${RUN(" z")}</w:p>` +
+          `<w:p>${RUN("Page ")}<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${RUN("7")}<w:r><w:fldChar w:fldCharType="end"/></w:r>${RUN(" end")}</w:p>` +
+          `<w:p>${RUN("abc")}<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>${RUN("def")}</w:p>` +
+          sectPr(),
+      }),
+    );
+    const [linked, fielded, noted] = await ids(engine);
+    const range = (id: string, start: number, end: number) => ({
+      start: { elementId: id, offset: start },
+      end: { elementId: id, offset: end },
+    });
+    await tracked(engine, [
+      // A caret where the hyperlink starts: before it, styled like "a ".
+      {
+        op: "replaceText",
+        target: linked!,
+        text: "X",
+        range: range(linked!, 2, 2),
+      },
+      // A caret where the field starts: before its begin run.
+      {
+        op: "replaceText",
+        target: fielded!,
+        text: "Y",
+        range: range(fielded!, 5, 5),
+      },
+      // A range ending at the note reference: the reference stays once, in the kept tail.
+      {
+        op: "replaceText",
+        target: noted!,
+        text: "Z",
+        range: range(noted!, 1, 3),
+      },
+    ]);
+    const body = await bodyOf(engine);
+    assert.ok(
+      body.includes(
+        `<w:r><w:t xml:space="preserve">a </w:t></w:r><w:ins${REV(2)}><w:r><w:t>X</w:t></w:r></w:ins><w:hyperlink r:id="rId9">`,
+      ),
+      body,
+    );
+    assert.ok(
+      body.includes(
+        `<w:r><w:t xml:space="preserve">Page </w:t></w:r><w:ins${REV(3)}><w:r><w:t>Y</w:t></w:r></w:ins><w:r><w:fldChar w:fldCharType="begin"/></w:r>`,
+      ),
+      body,
+    );
+    assert.ok(
+      body.includes(
+        `<w:r><w:t>a</w:t></w:r><w:del${REV(4)}><w:r><w:delText>bc</w:delText></w:r></w:del><w:ins${REV(5)}><w:r><w:t>Z</w:t></w:r></w:ins><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r><w:r><w:t xml:space="preserve">def</w:t></w:r>`,
+      ),
+      body,
+    );
+    assert.equal((body.match(/<w:footnoteReference/g) ?? []).length, 1);
+    const texts = (await engine.getElements({}, signal)).map((e) => e.text);
+    assert.deepEqual(texts, ["a Xlink z", "Page Y7 end", "aZdef"]);
+    await engine.dispose();
+  });
+
+  it("refuses a tracked change over an equation and a timestamp the file cannot hold", async () => {
+    const engine = await open(
+      buildDocx({
+        body:
+          `<w:p>${RUN("x = ")}<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>y</m:t></m:r></m:oMath>${RUN(" done")}</w:p>` +
+          paragraph("plain") +
+          sectPr(),
+      }),
+    );
+    const [equation, plain] = await ids(engine);
+    await expectIssue(
+      engine,
+      { op: "replaceText", target: equation!, text: "nothing" },
+      "unsupported-change-mode",
+      "/range",
+    );
+    await expectIssue(
+      engine,
+      { op: "deleteElement", target: equation! },
+      "unsupported-change-mode",
+      "/target",
+    );
+    // Beside the equation, not over it: allowed.
+    const beside: DocxOperation = {
+      op: "replaceText",
+      target: equation!,
+      text: "X",
+      range: {
+        start: { elementId: equation!, offset: 0 },
+        end: { elementId: equation!, offset: 1 },
+      },
+    };
+    assert.deepEqual(await engine.validate([beside], signal, TRACKED), []);
+    await expectIssue(
+      engine,
+      { op: "replaceText", target: plain!, text: "x" },
+      "invalid-value",
+      "/timestamp",
+      { changeMode: "tracked", author: "Agent", timestamp: "yesterday" },
+    );
+    await expectIssue(
+      engine,
+      { op: "replaceText", target: plain!, text: "x" },
+      "required",
+      "/author",
+      { changeMode: "tracked", author: "  " },
+    );
+    const anonymous: DocxOperation = {
+      op: "replaceText",
+      target: plain!,
+      text: "x",
+    };
+    await assert.rejects(
+      engine.apply(
+        { stateId: 1, operations: [anonymous], changeMode: "tracked" },
+        signal,
+      ),
+      (error: unknown) =>
+        error instanceof ViewerError && error.code === "invalid-operation",
+    );
     await engine.dispose();
   });
 

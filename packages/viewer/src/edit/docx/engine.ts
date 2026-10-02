@@ -85,6 +85,54 @@ function trackedOf(mode: BatchMode): TrackedChange | undefined {
   };
 }
 
+/** ISO 8601 as `xsd:dateTime` takes it; what `w:date` carries. */
+const DATE_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/;
+
+/**
+ * What a tracked batch must carry before any revision is written: an author
+ * the file can hold (the core requires one too; the engine used on its own
+ * does the same) and a date the file can hold.
+ */
+function trackedModeIssues(
+  tracked: TrackedChange | undefined,
+): OperationIssue[] {
+  if (!tracked) return [];
+  const issues: OperationIssue[] = [];
+  const author = attributeProblem(tracked.author);
+  if (tracked.author.trim().length === 0)
+    issues.push({
+      operationIndex: -1,
+      path: "/author",
+      code: "required",
+      message: "Tracked changes name their author; pass ApplyOptions.author",
+    });
+  else if (author)
+    issues.push({
+      operationIndex: -1,
+      path: "/author",
+      code: "invalid-value",
+      message: `The author holds ${author}`,
+    });
+  if (tracked.date !== undefined) {
+    const date = attributeProblem(tracked.date);
+    if (
+      date ||
+      !DATE_TIME.test(tracked.date) ||
+      Number.isNaN(Date.parse(tracked.date))
+    )
+      issues.push({
+        operationIndex: -1,
+        path: "/timestamp",
+        code: "invalid-value",
+        message: date
+          ? `The timestamp holds ${date}`
+          : "The timestamp must be an ISO 8601 date-time",
+      });
+  }
+  return issues;
+}
+
 export class DocxEditEngine implements EditEngine, DocxEngineReads {
   readonly schemas = docxOperationSchemas;
   readonly #original: Uint8Array;
@@ -169,18 +217,8 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
   ): Promise<readonly OperationIssue[]> {
     const issues: OperationIssue[] = [];
     const tracked = trackedOf(mode);
-    if (tracked) {
-      const problem = attributeProblem(tracked.author);
-      if (problem)
-        return [
-          {
-            operationIndex: -1,
-            path: "/author",
-            code: "invalid-value",
-            message: `The author holds ${problem}`,
-          },
-        ];
-    }
+    const modeIssues = trackedModeIssues(tracked);
+    if (modeIssues.length > 0) return modeIssues;
     const base = await this.#context(0, signal, 0, new Set(), tracked);
     for (const [index, operation] of operations.entries()) {
       const context = { ...base, operationIndex: index };
@@ -237,6 +275,9 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
       ? { stateId: this.#nextStateId(), operations: input }
       : (input as EngineBatch);
     this.#stateId = Math.max(this.#stateId, batch.stateId);
+    const tracked = trackedOf(batch);
+    const modeIssues = trackedModeIssues(tracked);
+    if (modeIssues.length > 0) throw invalidOperationError(modeIssues);
     const snapshot = this.#pkg.snapshot();
     const unauthored = this.#unauthored ? [...this.#unauthored] : undefined;
     const createdIds: string[] = [];
@@ -261,7 +302,7 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
           signal,
           index,
           issued,
-          trackedOf(batch),
+          tracked,
         );
         const issues: OperationIssue[] = [];
         await handler.validate(

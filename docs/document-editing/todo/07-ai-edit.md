@@ -477,8 +477,16 @@ of the viewer and through the tool path only. Deviations from the draft:
 - A paragraph with changed properties only (`w:rPrChange`, `w:pPrChange`)
   stays editable, as module 06 decided; insertions, deletions and moves on
   runs or on the paragraph mark lock it. A tracked change that would touch
-  a hyperlink, content control or field is refused
+  a hyperlink, content control, field or equation is refused
   (`unsupported-change-mode`), since a revision cannot wrap them.
+- `ApplyOptions.timestamp` is validated as an ISO 8601 date-time whenever
+  given (`invalid-value` at `/timestamp`), since it goes into the file.
+- The review of the branch (code-reviewer agent, 2026-10-02) found and the
+  branch fixed: equations reaching the tracked writer, carets beside a
+  hyperlink or a field landing inside it, a note reference written twice at
+  a range end, the PDF session's hover cache and range map not following a
+  checkpoint restore, an unvalidated timestamp, and a quadratic budget loop
+  in `describe()`.
 - The write mode (`changeMode`, `author`, `timestamp`) travels with the
   engine batch and the history entry, so replays reproduce tracked bytes.
 - `describe()` latency (Chromium): 8 ms on 500 DOCX pages, 53 ms on 500

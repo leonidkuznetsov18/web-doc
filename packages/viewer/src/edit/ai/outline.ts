@@ -374,29 +374,38 @@ export function renderDescription(
   for (const node of nodes) push(node, 0);
 
   // Whole lines within the budget; the last line then says what was left
-  // out, and makes room for itself by dropping lines from the end.
-  let keep = lines.length;
-  let text = "";
-  let truncated = outline.truncated;
-  for (;;) {
+  // out and makes room for itself. Prefix sums keep this linear in the
+  // number of lines: `joined[k]` is the length of the first `k` lines joined.
+  const joined = new Array<number>(lines.length + 1);
+  joined[0] = 0;
+  for (let index = 0; index < lines.length; index += 1)
+    joined[index + 1] =
+      joined[index]! + lines[index]!.length + (index > 0 ? 1 : 0);
+  const tailOf = (keep: number): string | undefined => {
     const left = lines.length - keep;
-    const tail =
-      left > 0
-        ? `… (${count(left, "more line")})`
-        : outline.truncated
-          ? `… (outline cut at ${count(maxNodes, "node")})`
-          : undefined;
+    if (left > 0) return `… (${count(left, "more line")})`;
+    if (outline.truncated)
+      return `… (outline cut at ${count(maxNodes, "node")})`;
+    return undefined;
+  };
+  const lengthOf = (keep: number): number => {
+    const tail = tailOf(keep);
+    const body = joined[keep]!;
+    if (tail === undefined) return body;
+    return body === 0 ? tail.length : body + 1 + tail.length;
+  };
+  let keep = lines.length;
+  while (keep > 0 && lengthOf(keep) > maxChars) keep -= 1;
+  let text: string;
+  let truncated = outline.truncated || keep < lines.length;
+  if (keep === 0 && lengthOf(0) > maxChars) {
+    // Not even the header fits: hand back what does.
+    text = lines[0]!.slice(0, maxChars);
+    truncated = true;
+  } else {
+    const tail = tailOf(keep);
     const body = lines.slice(0, keep).join("\n");
     text = tail === undefined ? body : body ? `${body}\n${tail}` : tail;
-    if (text.length <= maxChars) break;
-    if (keep === 0) {
-      // Not even the header fits: hand back what does.
-      text = lines[0]!.slice(0, maxChars);
-      truncated = true;
-      break;
-    }
-    keep -= 1;
-    truncated = true;
   }
   return Object.freeze({
     format,

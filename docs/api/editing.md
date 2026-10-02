@@ -153,7 +153,8 @@ over several calls.
 `ApplyOptions.changeMode` chooses how the batch is written: `direct` (the
 default) replaces content in place; `tracked` writes Word revisions for a
 person to accept or reject, with `author` (required) and `timestamp` (the
-revision's date). DOCX is the only format with a tracked form; the others
+revision's date; an ISO 8601 date-time whenever given, else
+`invalid-value` at `/timestamp`). DOCX is the only format with a tracked form; the others
 refuse it with `unsupported-change-mode`, as does a DOCX operation without a
 tracked form. The [AI editing](./ai-editing.md) page describes it.
 

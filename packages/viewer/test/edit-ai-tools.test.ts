@@ -324,6 +324,23 @@ describe("callTool", () => {
       assert.equal(tracked.ok, false);
       assert.deepEqual(issueCodes(tracked), ["unsupported-change-mode@"]);
       assert.match(tracked.text, /PDF has no tracked changes/);
+      const labelled = await core.callTool({
+        name: "document_preview",
+        arguments: { operations: [op], label: "x" },
+      });
+      assert.deepEqual(issueCodes(labelled), ["additional-property@/label"]);
+      const dated = await core.callTool(
+        { name: "document_apply", arguments: { operations: [op] } },
+        { changeMode: "direct", author: "a" },
+      );
+      assert.equal(dated.ok, true);
+      await assert.rejects(
+        core.apply([op as EditOperation], { timestamp: "not a date" }),
+        (error: unknown) =>
+          error instanceof ViewerError &&
+          (error.details?.issues as { path: string }[])[0]!.path ===
+            "/timestamp",
+      );
     } finally {
       await core.end();
     }

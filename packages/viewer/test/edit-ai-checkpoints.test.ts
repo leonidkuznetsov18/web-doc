@@ -304,8 +304,59 @@ describe("named checkpoints", () => {
         [(await edit.getElements()).items[0]!.id, boxId],
       );
       assert.equal(edit.listCheckpoints().length, 1);
+      // The hover cache and the range map follow a restore like any change.
+      const restoredAgain = await edit.restoreCheckpoint(checkpoint.id);
+      assert.equal(restoredAgain.revision, 4);
+      const centre = { x: 72 + 100, y: 100 + 20 };
+      assert.deepEqual((await edit.elementsAt(0, centre)).items, []);
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (edit.elementsAtSync(0, centre).revision === 4) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.deepEqual(edit.elementsAtSync(0, centre).items, []);
+      const text = (await edit.getElements()).items[0]!;
+      const range = {
+        start: { elementId: text.id, offset: 0 },
+        end: { elementId: text.id, offset: 2 },
+      };
+      assert.deepEqual((await edit.mapRange(range, 0)).item, range);
+      const boxRange = {
+        start: { elementId: boxId, offset: 0 },
+        end: { elementId: boxId, offset: 3 },
+      };
+      assert.equal((await edit.mapRange(boxRange, 1)).item, undefined);
     } finally {
       await end();
     }
+  });
+
+  it("replays through a restore entry the history folded away", async () => {
+    // maxEditHistory 2: entries fold into the starting point quickly.
+    const {
+      session: edit,
+      host,
+      engine,
+      apply,
+    } = session(
+      {},
+      { limits: { maxEditHistory: 2, maxEditCheckpointBytes: 1 } },
+    );
+    await apply([text(1)]);
+    const checkpoint = await edit.createCheckpoint();
+    await apply([text(2)]);
+    await apply([text(3)]);
+    await edit.restoreCheckpoint(checkpoint.id);
+    await apply([text(4)]);
+    await apply([text(5)]);
+    assert.deepEqual(host.current, ["s5", "two", "three"]);
+    // The restore entry is folded; an undo still rebuilds through it.
+    await edit.undo();
+    assert.deepEqual(host.current, ["s4", "two", "three"]);
+    assert.equal(engine.restoreBases.at(-1), undefined);
+    assert.equal(lastRestore(engine.calls), "restore:2");
+    await edit.undo();
+    assert.deepEqual(host.current, ["s1", "two", "three"]);
+    assert.equal(edit.state.canUndo, false);
+    await edit.end();
   });
 });

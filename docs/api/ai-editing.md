@@ -304,8 +304,9 @@ accepts or rejects in Word or Pages, and nothing synthetic is invented for
 PDF and PPTX, which review through checkpoints instead. `author` is required
 (decision 8): a tracked batch without one is refused with a `required` issue
 at `/author`, so a file never carries an anonymous suggestion. `timestamp`
-becomes the revision's `w:date`; without it the date is left out. Every
-revision gets a `w:id` above the file's own.
+becomes the revision's `w:date` and must be an ISO 8601 date-time
+(`invalid-value` at `/timestamp` otherwise); without it the date is left
+out. Every revision gets a `w:id` above the file's own.
 
 | Operation                      | Tracked form                                                                                                                                                                                                                  |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -319,7 +320,8 @@ revision gets a `w:id` above the file's own.
 `moveElement`, `insertTable`, `insertImage` and `deleteElement` of a table
 or a picture have no tracked form in this module and are refused with
 `unsupported-change-mode`; so is a tracked change that would touch a
-hyperlink, a content control or a field, since a revision cannot wrap them.
+hyperlink, a content control, a field or an equation, since a revision
+cannot wrap them.
 A paragraph holding an insertion, a deletion or a move is read-only for the
 next edit, direct or tracked, until the change is accepted or rejected in
 Word (decision 6); changed properties alone leave it editable, as the DOCX

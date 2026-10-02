@@ -49,7 +49,7 @@ import {
  */
 
 /** A direct child of a container, or the children a complex field spans. */
-interface Unit {
+export interface Unit {
   readonly nodes: readonly XmlElement[];
   readonly kind: "zero" | "run" | "wrapper" | "field";
   /** Half-open text span; `start === end` for a unit without text. */
@@ -72,7 +72,10 @@ function topOf(node: XmlElement, container: XmlElement): XmlElement {
 }
 
 /** The units of a container's children for the items it holds. */
-function unitsOf(container: XmlElement, items: readonly RunItem[]): Unit[] {
+export function unitsOf(
+  container: XmlElement,
+  items: readonly RunItem[],
+): Unit[] {
   const byTop = new Map<XmlElement, RunItem[]>();
   for (const item of items) {
     const top = topOf(item.run, container);
@@ -123,7 +126,7 @@ function unitsOf(container: XmlElement, items: readonly RunItem[]): Unit[] {
   return units;
 }
 
-function rPrOf(part: XmlPart, item: RunItem | undefined): string {
+export function rPrOf(part: XmlPart, item: RunItem | undefined): string {
   return item ? sliceOf(part, item.rPr) : "";
 }
 
@@ -142,7 +145,7 @@ function endTagOf(part: XmlPart, node: XmlElement): string {
  * only when `includeStart` says so, which is how a caret or a range edge
  * hands such an item to exactly one side.
  */
-function contentOf(
+export function contentOf(
   part: XmlPart,
   items: readonly RunItem[],
   from: number,
@@ -534,8 +537,11 @@ export function replacedParagraph(
     );
     const inserted = (segment: string): string =>
       insertedRunXml(context, split.rPr, segment);
+    // The original mark (section properties included) ends the last
+    // paragraph; every mark before it is an insertion.
+    const originalPPr = sliceOf(part, record.pPr);
     const firstPPr = single
-      ? sliceOf(part, record.pPr)
+      ? originalPPr
       : markedParagraphProperties(context, record.pPr, "ins");
     items.push(
       patches.replaceElement(
@@ -564,7 +570,7 @@ export function replacedParagraph(
             record.node,
             id,
             last
-              ? copiedPPr
+              ? originalPPr
               : markedParagraphProperties(context, record.pPr, "ins"),
             inserted(segment) + (last ? split.after : ""),
           ),

@@ -170,6 +170,12 @@ export class PdfSession implements PdfEditSession {
         this.#applied = [];
         this.#undone = [];
         break;
+      case "restore":
+        // The checkpoint's content replaces whatever the stacks describe;
+        // the undo of a restore is the core's to replay, not the log's.
+        this.#applied = [];
+        this.#undone = [];
+        break;
     }
     this.#log.push({
       revision: receipt.revision,
@@ -297,11 +303,13 @@ export class PdfSession implements PdfEditSession {
     return this.#core.listCheckpoints();
   }
 
-  restoreCheckpoint(
+  async restoreCheckpoint(
     id: string,
     options?: HistoryOptions,
   ): Promise<EditReceipt> {
-    return this.#core.restoreCheckpoint(id, options);
+    const receipt = await this.#core.restoreCheckpoint(id, options);
+    this.#record("restore", [], receipt);
+    return receipt;
   }
 
   dropCheckpoint(id: string): void {

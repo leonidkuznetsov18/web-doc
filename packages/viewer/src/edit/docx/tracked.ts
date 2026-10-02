@@ -3,6 +3,7 @@ import { W_NS } from "./ids.js";
 import type { ParagraphRecord } from "./model.js";
 import type { DocxOperationContext, Issue } from "./operations.js";
 import { LINE_BREAK, TAB, type RunItem } from "./text.js";
+import { contentOf, rPrOf, unitsOf, type Unit } from "./text-ops.js";
 import type { DocxRevision } from "./types.js";
 import {
   escapeAttributeValue,
@@ -76,7 +77,11 @@ export function trackedRangeProblem(
         : item.start < end && start < item.end;
     if (!overlaps) continue;
     const top = topOf(item.run, record.node);
+    // An equation or an alternate-content block sits in the paragraph
+    // without a run; a revision cannot wrap it either.
+    const plainRun = item.run.local === "r" && item.run.namespace === W_NS;
     if (
+      !plainRun ||
       item.fieldRuns ||
       item.kind === "field" ||
       top !== item.run ||
@@ -85,7 +90,7 @@ export function trackedRangeProblem(
       unsupportedTracked(
         issue,
         path,
-        "A change touching a hyperlink, content control or field",
+        "A change touching a hyperlink, content control, field or equation",
       );
       return true;
     }
@@ -118,26 +123,31 @@ function runContentOf(part: XmlPart, run: XmlElement): string {
     .join("");
 }
 
-function rPrOf(part: XmlPart, run: XmlElement): string {
+/** `w:rPr` bytes of a run element. */
+function runPropertiesOf(part: XmlPart, run: XmlElement): string {
   const rPr = run.children.find(
     (child) => child.local === "rPr" && child.namespace === W_NS,
   );
   return sliceOf(part, rPr);
 }
 
-/** Runs' content in `[from, to)`, as `contentOf` of the direct edit does for one run. */
-function contentOf(
+/**
+ * The deleted part of a cut run: like `contentOf`, but a zero-width item
+ * (a note reference, an anchored drawing) belongs to the deletion only
+ * strictly inside `(from, to)`, so the kept head or tail keeps it instead
+ * and nothing is written twice.
+ */
+function deletedContentOf(
   part: XmlPart,
   items: readonly RunItem[],
   from: number,
   to: number,
-  includeStart: boolean,
 ): string {
   let out = "";
   for (const item of items) {
     if (item.start === item.end) {
-      const after = includeStart ? item.start >= from : item.start > from;
-      if (after && item.start <= to) out += sliceOf(part, item.child);
+      if (from < item.start && item.start < to)
+        out += sliceOf(part, item.child);
       continue;
     }
     const begin = Math.max(item.start, from);
@@ -165,10 +175,13 @@ export interface TrackedSplit {
 }
 
 /**
- * The paragraph's content around `[start, end)`: the runs the range covers
- * re-serialized as deleted, a cut run split into a kept head, a deleted
- * middle and a kept tail, everything else as its bytes. The caller places
- * the insertion between `deleted` and `after`.
+ * The paragraph's content around `[start, end)`, unit by unit as the direct
+ * edit walks it: the runs the range covers re-serialized as deleted, a cut
+ * run split into a kept head, a deleted middle and a kept tail, everything
+ * else as its bytes. New text takes the style of the first replaced run,
+ * else of the run before a caret, else of the run after it. The caller
+ * places the insertion between `deleted` and `after`. A wrapper or a field
+ * inside the range never reaches here: validation refuses it.
  */
 export function trackedSplit(
   context: DocxOperationContext,
@@ -178,59 +191,59 @@ export function trackedSplit(
   fallbackRPr: string,
 ): TrackedSplit {
   const part = context.model.document;
-  const container = record.node;
-  const byRun = new Map<XmlElement, RunItem[]>();
-  for (const item of record.text.items) {
-    const list = byRun.get(item.run) ?? [];
-    list.push(item);
-    byRun.set(item.run, list);
-  }
   let before = "";
   let after = "";
   const deletedRuns: string[] = [];
   let rPr: string | undefined;
   let lastRPr: string | undefined;
+  /** The change has been passed: zero-width children now follow it. */
   let passed = false;
-  for (const child of container.children) {
-    if (child.local === "pPr" && child.namespace === W_NS) continue;
-    const raw = sliceOf(part, child);
-    const items = byRun.get(child);
-    if (!items || items.length === 0) {
-      // Bookmarks, proofing marks and other zero-width children stay where
-      // they are: before the change until it, after it from then on.
-      if (passed) after += raw;
-      else before += raw;
+  const raw = (unit: Unit): string =>
+    unit.nodes.map((node) => sliceOf(part, node)).join("");
+  for (const unit of unitsOf(record.node, record.text.items)) {
+    if (unit.kind === "zero") {
+      if (passed) after += raw(unit);
+      else before += raw(unit);
       continue;
     }
-    const unitStart = items[0]!.start;
-    const unitEnd = items.at(-1)!.end;
-    if (unitEnd <= start && !(unitStart === unitEnd && unitStart === start)) {
-      before += raw;
-      lastRPr = rPrOf(part, child);
+    if (unit.end <= start) {
+      before += raw(unit);
+      lastRPr = rPrOf(part, unit.items.at(-1));
+      // A caret right after this unit: the new text follows its style.
+      if (start === end && unit.end === start) {
+        rPr ??= lastRPr;
+        passed = true;
+      }
       continue;
     }
-    if (unitStart >= end && (unitStart > start || start < end)) {
+    if (unit.start >= end) {
+      rPr ??= lastRPr ?? rPrOf(part, unit.items[0]);
       passed = true;
-      rPr ??= lastRPr ?? rPrOf(part, child);
-      after += raw;
+      after += raw(unit);
       continue;
     }
-    // The run overlaps the range: validation guaranteed it is a plain run.
-    const style = rPrOf(part, child);
-    const head = contentOf(part, items, unitStart, start, true);
-    const middle = contentOf(
-      part,
-      items,
-      Math.max(unitStart, start),
-      Math.min(unitEnd, end),
-      false,
-    );
-    const tail = contentOf(part, items, end, unitEnd, start < end);
-    if (head) before += runXml(style, head);
-    if (middle) deletedRuns.push(deletedRunXml(style, middle));
+    if (unit.kind !== "run")
+      throw new Error("A tracked change cannot cut a field or a wrapper");
+    const run = unit.nodes[0]!;
+    const style = runPropertiesOf(part, run);
+    if (unit.start >= start && unit.end <= end) {
+      // Covered whole: the run goes into the deletion as it is.
+      deletedRuns.push(deletedRunXml(style, runContentOf(part, run)));
+    } else {
+      const head = contentOf(part, unit.items, unit.start, start, true);
+      const middle = deletedContentOf(
+        part,
+        unit.items,
+        Math.max(unit.start, start),
+        Math.min(unit.end, end),
+      );
+      const tail = contentOf(part, unit.items, end, unit.end, start < end);
+      if (head) before += runXml(style, head);
+      if (middle) deletedRuns.push(deletedRunXml(style, middle));
+      if (tail) after += runXml(style, tail);
+    }
     rPr ??= style;
-    if (tail) after += runXml(style, tail);
-    if (unitEnd >= end) passed = true;
+    if (unit.end >= end) passed = true;
   }
   const deleted =
     deletedRuns.length > 0
@@ -296,7 +309,10 @@ export function deletedParagraphXml(
   for (const child of record.node.children) {
     if (child.local === "pPr" && child.namespace === W_NS) continue;
     if (child.local === "r" && child.namespace === W_NS) {
-      const run = deletedRunXml(rPrOf(part, child), runContentOf(part, child));
+      const run = deletedRunXml(
+        runPropertiesOf(part, child),
+        runContentOf(part, child),
+      );
       if (run) open.push(run);
       continue;
     }
@@ -324,8 +340,9 @@ export function revisionsOf(
   ): Pick<DocxRevision, "id" | "author" | "date"> => {
     const author = part.attribute(node, "w:author");
     const date = part.attribute(node, "w:date");
+    const raw = part.attribute(node, "w:id");
     return {
-      id: Number(part.attribute(node, "w:id") ?? -1),
+      id: raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : -1,
       ...(author === undefined ? {} : { author }),
       ...(date === undefined ? {} : { date }),
     };
