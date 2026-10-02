@@ -91,18 +91,19 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 
 ## Phases
 
-| Phase                      | Tasks   | Ends with                                                                                                                                          |
-| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0. Risk first              | T1      | PDFium mechanics proven in Node, or the spec updated                                                                                               |
-| 1. `edit-core`             | T2–T8   | Checkpoint A: core done on all browsers, human review                                                                                              |
-| 2. First PDF slice         | T9–T13  | Checkpoint B: insert and edit a text box in a real PDF, save, reload — demo                                                                        |
-| 3. PDF method set          | T14–T20 | Checkpoints C and D: all 15 operations                                                                                                             |
-| 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review                                                          |
-| 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821)                                                          |
-| 6. PDF overlay primitives  | T32–T37 | Checkpoint G: layout, suppressed render, selection and range mapping, range-scoped `replaceText`, geometry cache, browser test (Linear ACTION-825) |
-| 7. OOXML package layer     | T38–T43 | Checkpoint H: ZIP reader and writer, OPC model, XML scanner, patches and transactions, corpus and browser reopen (Linear ACTION-810)               |
-| 8. PPTX editing            | T44–T49 | Checkpoint I: inspection, text, shapes, images and tables, slides, browser round trip and latency on 10/100/500 slides (Linear ACTION-812)         |
-| 9. DOCX engine upgrade     | T50–T53 | Checkpoint J: spike, XML pre-pass (image fitting, paragraph ids), the approved bump to one engine copy, the run bridge (Linear ACTION-813)         |
+| Phase                      | Tasks   | Ends with                                                                                                                                                                                     |
+| -------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Risk first              | T1      | PDFium mechanics proven in Node, or the spec updated                                                                                                                                          |
+| 1. `edit-core`             | T2–T8   | Checkpoint A: core done on all browsers, human review                                                                                                                                         |
+| 2. First PDF slice         | T9–T13  | Checkpoint B: insert and edit a text box in a real PDF, save, reload — demo                                                                                                                   |
+| 3. PDF method set          | T14–T20 | Checkpoints C and D: all 15 operations                                                                                                                                                        |
+| 4. Hardening and readiness | T21–T22 | Checkpoint E: both definitions of done met, `npm run check` green, ready for merge review                                                                                                     |
+| 5. Contract revision 2     | T23–T30 | Checkpoint F: `edit-core` R2 and `pdf-edit` R2 done, latency recorded (Linear ACTION-821)                                                                                                     |
+| 6. PDF overlay primitives  | T32–T37 | Checkpoint G: layout, suppressed render, selection and range mapping, range-scoped `replaceText`, geometry cache, browser test (Linear ACTION-825)                                            |
+| 7. OOXML package layer     | T38–T43 | Checkpoint H: ZIP reader and writer, OPC model, XML scanner, patches and transactions, corpus and browser reopen (Linear ACTION-810)                                                          |
+| 8. PPTX editing            | T44–T49 | Checkpoint I: inspection, text, shapes, images and tables, slides, browser round trip and latency on 10/100/500 slides (Linear ACTION-812)                                                    |
+| 9. DOCX engine upgrade     | T50–T53 | Checkpoint J: spike, XML pre-pass (image fitting, paragraph ids), the approved bump to one engine copy, the run bridge (Linear ACTION-813)                                                    |
+| 10. DOCX editing           | T54–T58 | Checkpoint K: block index and inspection joined with the renderer's runs, text and formatting, structure and pictures, tables, round trip and latency on 10/100/500 pages (Linear ACTION-814) |
 
 ## Revision 2 decisions (ACTION-821)
 
@@ -216,6 +217,13 @@ listed here for explicit approval with the plan:
     `w14:paraId` get deterministic ids before the engine reads them;
     `docx-edit` recomputes the same ids from the original bytes, so saved
     files do not change for a read (05-docx-engine-upgrade decision 2).
+
+## Phase 10 decisions (ACTION-814)
+
+30. **The DOCX engine is spec-bound and waits for module 05.** `06-docx-edit.md`
+    (draft 2026-10-02) fixes the element model, the operation table and six
+    decisions; T54 starts after T52's bump and T53's run bridge, which the
+    inspection join depends on.
 
 ## Verification commands
 

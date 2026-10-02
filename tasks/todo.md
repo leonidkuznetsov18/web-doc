@@ -1631,3 +1631,25 @@ roadmap; Linear proofs.
 ### Checkpoint J: one engine copy
 
 - [ ] ACTION-813 Done except its release criterion
+
+## Phase 10 — DOCX editing (Linear ACTION-814)
+
+Spec: `docs/document-editing/todo/06-docx-edit.md` (draft 2026-10-02).
+Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
+
+- [ ] Task 54: Engine skeleton and inspection — block index, ids, text
+      model, styles, worker format switch, adapter provider for `docx`/`docm`,
+      geometry join with the viewer's runs, `elementsAt`, `findText`, identity,
+      restore; browser test on the corpus document.
+- [ ] Task 55: Text and formatting — `replaceText`, `setTextStyle`,
+      `setParagraphStyle`, schema-order merges, fields, hyperlinks, inline sdt,
+      paragraph splits, the id rule of `materialize`.
+- [ ] Task 56: Structure and pictures — `insertParagraph`, `deleteElement`,
+      `moveElement`, `insertImage`.
+- [ ] Task 57: Tables — `insertTable`, `setTableCell`.
+- [ ] Task 58: Round trip, latency on 10/100/500 pages, `npm run
+    fixtures:docx`, docs, `npm run check`, Linear proofs.
+
+### Checkpoint K: DOCX editing done
+
+- [ ] ACTION-814 Done except its release criterion
