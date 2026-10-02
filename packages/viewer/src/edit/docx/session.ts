@@ -1,5 +1,27 @@
 import type { TextRun } from "../../contracts.js";
-import type { EditSessionAccess, EditSessionCore } from "../engine.js";
+import { readDescription, readOutline } from "../ai/outline.js";
+import { resolveTargets } from "../ai/targets.js";
+import { buildToolSet, callTool as runTool } from "../ai/tools.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  EditCheckpoint,
+  OutlineOptions,
+  OutlineResult,
+  TargetCandidate,
+  TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
+} from "../ai/types.js";
+import { ViewerError } from "../../errors.js";
+import type {
+  EditEngine,
+  EditSessionAccess,
+  EditSessionCore,
+} from "../engine.js";
+import type { DocxEngineReads } from "./engine.js";
 import type {
   ApplyOptions,
   AssetOptions,
@@ -30,6 +52,7 @@ import type {
   DocxMoveElementOperation,
   DocxOperation,
   DocxReplaceTextOperation,
+  DocxRevision,
   DocxSaveOptions,
   DocxSetParagraphStyleOperation,
   DocxSetTableCellOperation,
@@ -52,6 +75,7 @@ type Placement = ReadonlyMap<string, ReadonlyMap<number, PageRect>>;
 export class DocxSession implements DocxEditSession {
   readonly format = "docx" as const;
   readonly #core: EditSessionCore;
+  #tools: ToolSet | undefined;
   readonly #access: EditSessionAccess;
 
   constructor(core: EditSessionCore, access: EditSessionAccess) {
@@ -206,6 +230,57 @@ export class DocxSession implements DocxEditSession {
           .slice(0, options.maxResults ?? placed.length)
       : placed;
     return Object.freeze({ ...found, items });
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#core.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#core.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
+  }
+
+  createCheckpoint(label?: string): Promise<EditCheckpoint> {
+    return this.#core.createCheckpoint(label);
+  }
+
+  listCheckpoints(): readonly EditCheckpoint[] {
+    return this.#core.listCheckpoints();
+  }
+
+  restoreCheckpoint(
+    id: string,
+    options?: HistoryOptions,
+  ): Promise<EditReceipt> {
+    return this.#core.restoreCheckpoint(id, options);
+  }
+
+  dropCheckpoint(id: string): void {
+    this.#core.dropCheckpoint(id);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
+  }
+
+  getRevisions(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadResult<DocxRevision>> {
+    return this.#core.readItems(options, (engine, signal) =>
+      docxReads(engine).revisions(elementId, signal),
+    );
   }
 
   replaceText(
@@ -631,4 +706,15 @@ function matchesQuery(element: DocxElement, query: ElementQuery): boolean {
   );
   if (!fragment) return false;
   return !query.intersects || rectsIntersect(fragment.bounds, query.intersects);
+}
+
+function docxReads(engine: EditEngine): DocxEngineReads {
+  const candidate = engine as Partial<DocxEngineReads>;
+  if (typeof candidate.revisions !== "function")
+    throw new ViewerError(
+      "edit-unsupported",
+      "The engine does not provide the DOCX reads",
+      { details: { format: "docx", reason: "no-reads" } },
+    );
+  return candidate as DocxEngineReads;
 }

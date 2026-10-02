@@ -1,5 +1,21 @@
 import type { TextSelection } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
+import { readDescription, readOutline } from "../ai/outline.js";
+import { resolveTargets } from "../ai/targets.js";
+import { buildToolSet, callTool as runTool } from "../ai/tools.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  EditCheckpoint,
+  OutlineOptions,
+  OutlineResult,
+  TargetCandidate,
+  TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
+} from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import { reportError } from "../session.js";
 import { rectContains } from "./engine/geometry.js";
@@ -61,6 +77,7 @@ import type {
 export class PdfSession implements PdfEditSession {
   readonly format = "pdf" as const;
   readonly #core: EditSessionCore;
+  #tools: ToolSet | undefined;
   /** Committed calls, oldest first, for `mapRange`; bounded by `LOG_LIMIT`. */
   readonly #log: MutationRecord[] = [];
   /** Batches applied and not undone, and those undone and not redone. */
@@ -150,6 +167,12 @@ export class PdfSession implements PdfEditSession {
         break;
       case "reset":
         involved = this.#applied.flat();
+        this.#applied = [];
+        this.#undone = [];
+        break;
+      case "restore":
+        // The checkpoint's content replaces whatever the stacks describe;
+        // the undo of a restore is the core's to replay, not the log's.
         this.#applied = [];
         this.#undone = [];
         break;
@@ -255,6 +278,50 @@ export class PdfSession implements PdfEditSession {
     options?: EditFindOptions,
   ): Promise<ReadResult<TextTarget>> {
     return this.#core.findText(query, options);
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#core.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#core.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
+  }
+
+  createCheckpoint(label?: string): Promise<EditCheckpoint> {
+    return this.#core.createCheckpoint(label);
+  }
+
+  listCheckpoints(): readonly EditCheckpoint[] {
+    return this.#core.listCheckpoints();
+  }
+
+  async restoreCheckpoint(
+    id: string,
+    options?: HistoryOptions,
+  ): Promise<EditReceipt> {
+    const receipt = await this.#core.restoreCheckpoint(id, options);
+    this.#record("restore", [], receipt);
+    return receipt;
+  }
+
+  dropCheckpoint(id: string): void {
+    this.#core.dropCheckpoint(id);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
   }
 
   getTextLayout(

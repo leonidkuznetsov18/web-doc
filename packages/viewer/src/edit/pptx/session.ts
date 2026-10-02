@@ -1,4 +1,20 @@
 import { ViewerError } from "../../errors.js";
+import { readDescription, readOutline } from "../ai/outline.js";
+import { resolveTargets } from "../ai/targets.js";
+import { buildToolSet, callTool as runTool } from "../ai/tools.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  EditCheckpoint,
+  OutlineOptions,
+  OutlineResult,
+  TargetCandidate,
+  TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
+} from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import type {
   ApplyOptions,
@@ -50,6 +66,7 @@ import type {
 export class PptxSession implements PptxEditSession {
   readonly format = "pptx" as const;
   readonly #core: EditSessionCore;
+  #tools: ToolSet | undefined;
 
   constructor(core: EditSessionCore) {
     this.#core = core;
@@ -136,6 +153,48 @@ export class PptxSession implements PptxEditSession {
     options?: EditFindOptions,
   ): Promise<ReadResult<TextTarget>> {
     return this.#core.findText(query, options);
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#core.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#core.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
+  }
+
+  createCheckpoint(label?: string): Promise<EditCheckpoint> {
+    return this.#core.createCheckpoint(label);
+  }
+
+  listCheckpoints(): readonly EditCheckpoint[] {
+    return this.#core.listCheckpoints();
+  }
+
+  restoreCheckpoint(
+    id: string,
+    options?: HistoryOptions,
+  ): Promise<EditReceipt> {
+    return this.#core.restoreCheckpoint(id, options);
+  }
+
+  dropCheckpoint(id: string): void {
+    this.#core.dropCheckpoint(id);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
   }
 
   getSlides(options?: ReadOptions): Promise<ReadResult<PptxSlideInfo>> {

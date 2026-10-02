@@ -5,6 +5,22 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
+import { readDescription, readOutline } from "./ai/outline.js";
+import { resolveTargets } from "./ai/targets.js";
+import { buildToolSet, callTool as runTool } from "./ai/tools.js";
+import type {
+  DescribeOptions,
+  DocumentDescription,
+  EditCheckpoint,
+  OutlineOptions,
+  OutlineResult,
+  TargetCandidate,
+  TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
+} from "./ai/types.js";
 import {
   assetIdOf,
   AssetStore,
@@ -20,7 +36,7 @@ import type {
   MaterializeOptions,
   RestoreTarget,
 } from "./engine.js";
-import { EditHistory, type HistoryEntry } from "./history.js";
+import { batchOf, EditHistory, modeOf, type HistoryEntry } from "./history.js";
 import {
   assertBatchSize,
   checkOperations,
@@ -115,15 +131,20 @@ export class EditSessionController implements EditSessionCore {
   readonly #original: Uint8Array;
   readonly #originalPageCount: number;
   readonly #ending = new AbortController();
-  readonly sessionId = newSessionId();
+  readonly sessionId = randomId();
   /** Bytes of the last committed state; what the viewer shows and what a broken session saves. */
   #committedBytes: Uint8Array;
   /** Materialized bytes of some committed states, by state id, so restores replay less. */
   readonly #checkpoints = new Map<number, Uint8Array>();
   #checkpointBytes = 0;
+  /** Named checkpoints by id, in creation order. */
+  readonly #named = new Map<string, NamedCheckpoint>();
+  /** State ids named checkpoints pin, with how many name each; never evicted. */
+  readonly #pinned = new Map<number, number>();
   /** Binary payloads of this session's batches, by content id. */
   readonly #assets = new AssetStore();
   #state: EditState;
+  #tools: ToolSet | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #revision = 0;
   #savedStateId = 0;
@@ -155,6 +176,10 @@ export class EditSessionController implements EditSessionCore {
     return this.#state;
   }
 
+  get limits(): ResourceLimits {
+    return this.#host.limits;
+  }
+
   applyJson(
     operations: readonly EditOperation[],
     options: ApplyOptions = {},
@@ -174,13 +199,16 @@ export class EditSessionController implements EditSessionCore {
     return this.#enqueue(options.signal, async (signal) => {
       this.#assertRevision(options);
       assertBatchSize(batch, this.#host.limits.maxEditOperations);
+      const modeIssues = checkChangeMode(this.format, options);
+      if (modeIssues.length > 0) throw invalidOperationError(modeIssues);
       const shapeIssues = checkOperations(batch, this.schemas);
       if (shapeIssues.length > 0) throw invalidOperationError(shapeIssues);
       const referenceIssues = checkBatchReferences(batch);
       if (referenceIssues.length > 0)
         throw invalidOperationError(referenceIssues);
       const interned = await this.#intern(batch, signal);
-      const engineIssues = await this.#engine.validate(interned, signal);
+      const mode = modeOf(options);
+      const engineIssues = await this.#engine.validate(interned, signal, mode);
       throwIfAborted(signal);
       if (engineIssues.length > 0) throw invalidOperationError(engineIssues);
       // The id the history will give this state; a dry run uses the same one,
@@ -188,6 +216,7 @@ export class EditSessionController implements EditSessionCore {
       const engineBatch: EngineBatch = {
         stateId: this.#history.nextStateId,
         operations: interned,
+        ...mode,
       };
 
       if (options.dryRun) {
@@ -222,6 +251,7 @@ export class EditSessionController implements EditSessionCore {
       );
       this.#history.push({
         operations: interned,
+        ...mode,
         ...(options.label === undefined ? {} : { label: options.label }),
         createdIds: change.createdIds,
         removedIds: change.removedIds,
@@ -411,6 +441,117 @@ export class EditSessionController implements EditSessionCore {
     return this.#enqueue(own, async (signal) =>
       this.#items(await this.#engine.findText(query, engineOptions, signal)),
     );
+  }
+
+  getOutline(options?: OutlineOptions): Promise<OutlineResult> {
+    return readOutline(this, this.#host.limits, options);
+  }
+
+  describe(options?: DescribeOptions): Promise<ReadItem<DocumentDescription>> {
+    return readDescription(this, this.#host.limits, options);
+  }
+
+  resolveTargets(
+    query: TargetQuery,
+    options?: ReadOptions,
+  ): Promise<ReadResult<TargetCandidate>> {
+    return resolveTargets(this, query, options);
+  }
+
+  createCheckpoint(label?: string): Promise<EditCheckpoint> {
+    return this.#enqueue(undefined, async () => {
+      const limit = this.#host.limits.maxEditCheckpoints;
+      if (this.#named.size >= limit)
+        throw new ViewerError(
+          "resource-limit",
+          "Too many edit checkpoints; drop one first",
+          { details: { limit } },
+        );
+      const stateId = this.#history.stateId;
+      const checkpoint: EditCheckpoint = Object.freeze({
+        id: randomId(),
+        ...(label === undefined ? {} : { label }),
+        revision: this.#revision,
+        createdAt: new Date().toISOString(),
+      });
+      const entries = this.#history.entriesAt(this.#history.position);
+      this.#named.set(checkpoint.id, {
+        checkpoint,
+        stateId,
+        pageCount: this.#history.pageCount,
+        entries,
+        batches: batchesFromOriginal(entries),
+      });
+      this.#pin(stateId, this.#committedBytes);
+      return checkpoint;
+    });
+  }
+
+  listCheckpoints(): readonly EditCheckpoint[] {
+    return Object.freeze(
+      [...this.#named.values()].map((named) => named.checkpoint),
+    );
+  }
+
+  restoreCheckpoint(
+    id: string,
+    options: HistoryOptions = {},
+  ): Promise<EditReceipt> {
+    return this.#enqueue(options.signal, async (signal) => {
+      this.#assertRevision(options);
+      const named = this.#named.get(id);
+      if (!named)
+        throw new ViewerError(
+          "invalid-operation",
+          `Unknown edit checkpoint ${id}`,
+          { details: { checkpointId: id } },
+        );
+      if (named.stateId === this.#history.stateId) return this.#noop();
+      const before = this.#history.pageCount;
+      const changedPages = allPages(Math.max(before, named.pageCount));
+      const shown = await this.#transaction(signal, "apply", async () => {
+        await this.#engine.restore(this.#targetFor(named.entries), signal);
+        return this.#show(signal, changedPages);
+      });
+      const diff = entryDiff(
+        this.#history.entriesAt(this.#history.position),
+        named.entries,
+      );
+      this.#history.push(
+        {
+          operations: [],
+          createdIds: diff.created,
+          removedIds: diff.removed,
+          changedPages: shown.changedPages,
+          pageCountBefore: before,
+          pageCountAfter: shown.pageCount,
+          base: { stateId: named.stateId, batches: named.batches },
+        },
+        named.stateId,
+      );
+      this.#commit("restore", shown.changedPages, shown);
+      return this.#receipt(false, 0, diff.created, {
+        removedIds: diff.removed,
+        changedPages: shown.changedPages,
+        pageCount: shown.pageCount,
+        warnings: [],
+      });
+    });
+  }
+
+  dropCheckpoint(id: string): void {
+    const named = this.#named.get(id);
+    if (!named) return;
+    this.#named.delete(id);
+    this.#unpin(named.stateId);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
   }
 
   readItem<T>(
@@ -651,7 +792,8 @@ export class EditSessionController implements EditSessionCore {
     shown: Shown,
   ): void {
     this.#committedBytes = shown.bytes;
-    if (reason === "apply") this.#keepCheckpoint(shown.bytes);
+    if (reason === "apply" || reason === "restore")
+      this.#keepCheckpoint(shown.bytes);
     else if (reason === "reset") this.#dropCheckpoints();
     this.#revision += 1;
     this.#state = this.#snapshot();
@@ -749,23 +891,72 @@ export class EditSessionController implements EditSessionCore {
       Math.floor(this.#host.limits.maxEditHistory / 4),
     );
     const stateId = this.#history.stateId;
-    // Entries dropped by a new change after an undo can never be restored.
-    const reachable = new Set(this.#history.stateIds);
+    // Entries dropped by a new change after an undo can never be restored;
+    // a pinned state stays whatever the history does.
+    const reachable = this.#reachable();
     for (const [id, kept] of this.#checkpoints)
-      if (!reachable.has(id)) this.#forgetCheckpoint(id, kept);
-    if (stateId % stride !== 0) return;
+      if (!reachable.has(id) && !this.#pinned.has(id))
+        this.#forgetCheckpoint(id, kept);
+    if (
+      stateId === 0 ||
+      this.#checkpoints.has(stateId) ||
+      stateId % stride !== 0
+    )
+      return;
+    this.#retain(stateId, bytes);
+  }
+
+  /** Stores a state's bytes when the budget, less the pinned states, can hold them. */
+  #retain(stateId: number, bytes: Uint8Array): void {
     const budget = this.#host.limits.maxEditCheckpointBytes;
     if (bytes.byteLength > budget) return;
-    const oldestFirst = [...this.#checkpoints.keys()].sort((a, b) => a - b);
+    const evictable = [...this.#checkpoints.keys()]
+      .filter((id) => !this.#pinned.has(id))
+      .sort((a, b) => a - b);
     while (
       this.#checkpointBytes + bytes.byteLength > budget &&
-      oldestFirst.length > 0
+      evictable.length > 0
     ) {
-      const id = oldestFirst.shift()!;
+      const id = evictable.shift()!;
       this.#forgetCheckpoint(id, this.#checkpoints.get(id)!);
     }
+    if (this.#checkpointBytes + bytes.byteLength > budget) return;
     this.#checkpoints.set(stateId, bytes);
     this.#checkpointBytes += bytes.byteLength;
+  }
+
+  /**
+   * Pins a state for a named checkpoint: its bytes are kept while any
+   * checkpoint names it, or rebuilt by replay when the budget cannot hold
+   * them. The original (state 0) needs no bytes.
+   */
+  #pin(stateId: number, bytes: Uint8Array): void {
+    if (stateId === 0) return;
+    this.#pinned.set(stateId, (this.#pinned.get(stateId) ?? 0) + 1);
+    if (!this.#checkpoints.has(stateId)) this.#retain(stateId, bytes);
+  }
+
+  #unpin(stateId: number): void {
+    const count = this.#pinned.get(stateId);
+    if (!count) return;
+    if (count > 1) {
+      this.#pinned.set(stateId, count - 1);
+      return;
+    }
+    this.#pinned.delete(stateId);
+    const kept = this.#checkpoints.get(stateId);
+    if (kept && !this.#reachable().has(stateId))
+      this.#forgetCheckpoint(stateId, kept);
+  }
+
+  /** State ids a replay may start from: every entry's, and the base of every restore. */
+  #reachable(): Set<number> {
+    const reachable = new Set<number>();
+    for (const entry of this.#history.allEntries) {
+      reachable.add(entry.stateId);
+      if (entry.base) reachable.add(entry.base.stateId);
+    }
+    return reachable;
   }
 
   #forgetCheckpoint(id: number, bytes: Uint8Array): void {
@@ -773,27 +964,38 @@ export class EditSessionController implements EditSessionCore {
     this.#checkpointBytes -= bytes.byteLength;
   }
 
+  /** After a reset nothing in the history is reachable; pinned states stay. */
   #dropCheckpoints(): void {
-    this.#checkpoints.clear();
-    this.#checkpointBytes = 0;
+    for (const [id, kept] of this.#checkpoints)
+      if (!this.#pinned.has(id)) this.#forgetCheckpoint(id, kept);
   }
 
   /**
    * The cheapest way to rebuild the state at `position`: the newest
-   * checkpoint at or before it, plus the batches after that checkpoint.
+   * retained bytes at or before it, plus the batches after them.
    */
   #restoreTarget(position = this.#history.position): RestoreTarget {
-    const entries = this.#history.entriesAt(position);
-    let last = entries.length - 1;
-    while (last >= 0 && !this.#checkpoints.has(entries[last]!.stateId))
-      last -= 1;
-    const batches = entries.slice(last + 1).map((entry) => ({
-      stateId: entry.stateId,
-      operations: entry.operations,
-    }));
-    return last >= 0
-      ? { base: this.#checkpoints.get(entries[last]!.stateId)!, batches }
-      : { batches };
+    return this.#targetFor(this.#history.entriesAt(position));
+  }
+
+  /**
+   * Walks `entries` from the end: the first with retained bytes is the base;
+   * a restore entry without them starts from the original plus the batches
+   * that built its checkpoint.
+   */
+  #targetFor(entries: readonly HistoryEntry[]): RestoreTarget {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      const after = (): readonly EngineBatch[] =>
+        batchesOf(entries.slice(index + 1));
+      const retained = this.#checkpoints.get(entry.stateId);
+      if (retained) return { base: retained, batches: after() };
+      // A restore entry carries its checkpoint's state id, so its bytes
+      // were just looked up; without them the checkpoint's batches rebuild
+      // it from the original.
+      if (entry.base) return { batches: [...entry.base.batches, ...after()] };
+    }
+    return { batches: batchesOf(entries) };
   }
 
   #stateToken(stateId: number): string {
@@ -959,6 +1161,50 @@ function checkBatchReferences(
   return issues;
 }
 
+/**
+ * Tracked changes exist in DOCX only and always name their author (decision
+ * 8 of the ai-edit module): the batch is refused before any engine work.
+ */
+function checkChangeMode(
+  format: EditableFormat,
+  options: ApplyOptions,
+): OperationIssue[] {
+  const issues: OperationIssue[] = [];
+  // A timestamp is written into the file where a format records one, so
+  // it must be a date-time the file can hold whatever the mode.
+  if (
+    options.timestamp !== undefined &&
+    (!DATE_TIME.test(options.timestamp) ||
+      Number.isNaN(Date.parse(options.timestamp)))
+  )
+    issues.push({
+      operationIndex: -1,
+      path: "/timestamp",
+      code: "invalid-value",
+      message: "The timestamp must be an ISO 8601 date-time",
+    });
+  if (options.changeMode !== "tracked") return issues;
+  if (format !== "docx")
+    issues.push({
+      operationIndex: -1,
+      path: "",
+      code: "unsupported-change-mode",
+      message: `${format.toUpperCase()} has no tracked changes; apply directly and review with checkpoints`,
+    });
+  else if (!options.author || options.author.trim().length === 0)
+    issues.push({
+      operationIndex: -1,
+      path: "/author",
+      code: "required",
+      message: "Tracked changes name their author; pass ApplyOptions.author",
+    });
+  return issues;
+}
+
+/** ISO 8601 as `xsd:dateTime` takes it. */
+const DATE_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/;
+
 /** The renderer owns the page count; an engine that disagrees is reported, not trusted. */
 function pageCountWarning(
   change: EngineChange,
@@ -975,8 +1221,72 @@ function pageCountWarning(
   ];
 }
 
-/** 128 random bits as URL-safe base64; unique across sessions and reloads. */
-function newSessionId(): string {
+/** A state the host named: what names it, where it sits and how to rebuild it. */
+interface NamedCheckpoint {
+  readonly checkpoint: EditCheckpoint;
+  readonly stateId: number;
+  readonly pageCount: number;
+  /** The entries applied in that state, folded ones first; for receipts. */
+  readonly entries: readonly HistoryEntry[];
+  /** The batches that build the state from the original, restores flattened. */
+  readonly batches: readonly EngineBatch[];
+}
+
+/** The engine batches of entries that carry operations; restore entries carry none. */
+function batchesOf(entries: readonly HistoryEntry[]): readonly EngineBatch[] {
+  return entries.filter((entry) => entry.operations.length > 0).map(batchOf);
+}
+
+/** The batches from the original to the state after `entries`, through the last restore. */
+function batchesFromOriginal(
+  entries: readonly HistoryEntry[],
+): readonly EngineBatch[] {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const base = entries[index]!.base;
+    if (base) return [...base.batches, ...batchesOf(entries.slice(index + 1))];
+  }
+  return batchesOf(entries);
+}
+
+/**
+ * The ids a move from the state after `current` to the state after `target`
+ * removes and creates: the entries past the common prefix are undone in
+ * reverse, then the target's are redone, each id netted out.
+ */
+function entryDiff(
+  current: readonly HistoryEntry[],
+  target: readonly HistoryEntry[],
+): { readonly created: string[]; readonly removed: string[] } {
+  let common = 0;
+  while (
+    common < current.length &&
+    common < target.length &&
+    current[common]!.stateId === target[common]!.stateId
+  )
+    common += 1;
+  const created = new Set<string>();
+  const removed = new Set<string>();
+  const create = (id: string): void => {
+    if (removed.has(id)) removed.delete(id);
+    else created.add(id);
+  };
+  const remove = (id: string): void => {
+    if (created.has(id)) created.delete(id);
+    else removed.add(id);
+  };
+  for (const entry of current.slice(common).reverse()) {
+    entry.createdIds.forEach(remove);
+    entry.removedIds.forEach(create);
+  }
+  for (const entry of target.slice(common)) {
+    entry.removedIds.forEach(remove);
+    entry.createdIds.forEach(create);
+  }
+  return { created: [...created], removed: [...removed] };
+}
+
+/** 128 random bits as 22 URL-safe base64 characters; unique across sessions and reloads. */
+function randomId(): string {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);

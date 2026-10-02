@@ -112,6 +112,12 @@ export interface ResourceLimits {
   readonly maxEditHistory: number;
   /** Memory for retained edit checkpoints; fewer are kept when a file is big. */
   readonly maxEditCheckpointBytes: number;
+  /** Nodes one `EditSession.getOutline()` returns; more is cut and reported. */
+  readonly maxOutlineNodes: number;
+  /** Upper bound of `describe()`'s character budget. */
+  readonly maxDescribeChars: number;
+  /** Named edit checkpoints alive at once in a session. */
+  readonly maxEditCheckpoints: number;
 }
 
 export type BinaryDocumentSource = ArrayBuffer | Uint8Array | Blob;

@@ -10,6 +10,13 @@ import type {
   Issue,
 } from "./operations.js";
 import type { RunItem } from "./text.js";
+import {
+  insertedRunXml,
+  markedParagraphProperties,
+  revisionAttributes,
+  trackedRangeProblem,
+  trackedSplit,
+} from "./tracked.js";
 import type {
   DocxReplaceTextOperation,
   DocxSetParagraphStyleOperation,
@@ -42,7 +49,7 @@ import {
  */
 
 /** A direct child of a container, or the children a complex field spans. */
-interface Unit {
+export interface Unit {
   readonly nodes: readonly XmlElement[];
   readonly kind: "zero" | "run" | "wrapper" | "field";
   /** Half-open text span; `start === end` for a unit without text. */
@@ -65,7 +72,10 @@ function topOf(node: XmlElement, container: XmlElement): XmlElement {
 }
 
 /** The units of a container's children for the items it holds. */
-function unitsOf(container: XmlElement, items: readonly RunItem[]): Unit[] {
+export function unitsOf(
+  container: XmlElement,
+  items: readonly RunItem[],
+): Unit[] {
   const byTop = new Map<XmlElement, RunItem[]>();
   for (const item of items) {
     const top = topOf(item.run, container);
@@ -116,7 +126,7 @@ function unitsOf(container: XmlElement, items: readonly RunItem[]): Unit[] {
   return units;
 }
 
-function rPrOf(part: XmlPart, item: RunItem | undefined): string {
+export function rPrOf(part: XmlPart, item: RunItem | undefined): string {
   return item ? sliceOf(part, item.rPr) : "";
 }
 
@@ -135,7 +145,7 @@ function endTagOf(part: XmlPart, node: XmlElement): string {
  * only when `includeStart` says so, which is how a caret or a range edge
  * hands such an item to exactly one side.
  */
-function contentOf(
+export function contentOf(
   part: XmlPart,
   items: readonly RunItem[],
   from: number,
@@ -436,6 +446,18 @@ export const replaceTextHandler: DocxOperationHandler<DocxReplaceTextOperation> 
         issue,
         true,
       );
+      if (
+        range &&
+        context.tracked &&
+        trackedRangeProblem(
+          target.record,
+          range.start,
+          range.end,
+          issue,
+          "/range",
+        )
+      )
+        return;
       if (!range || !text.includes("\n")) return;
       // A paragraph cannot be split inside a hyperlink or content control.
       const probe = splitAt(
@@ -498,43 +520,105 @@ export function replacedParagraph(
 } {
   const part = context.model.document;
   const segments = text.split("\n");
-  const split = splitAt(
-    part,
-    record.node,
-    record.text.items,
-    start,
-    end,
-    (rPr) => runXml(rPr, runContentXml(segments[0]!)),
-    paragraphMarkRPr(part, record),
-  );
-  const pPr = sliceOf(part, record.pPr);
   const single = segments.length === 1;
-  const first = paragraphXml(
-    record.node,
-    record.id,
-    pPr,
-    split.before + (single ? split.after : ""),
-  );
-  const items: XmlPatch[] = [patches.replaceElement(part, record.node, first)];
+  const items: XmlPatch[] = [];
   const createdIds: string[] = [];
   const copiedPPr = paragraphPropertiesWithoutSection(part, record.pPr);
-  segments.slice(1).forEach((segment, index) => {
-    const id = context.freshParagraphId();
-    createdIds.push(`p:${id}`);
-    const last = index === segments.length - 2;
+  if (context.tracked) {
+    // The removed runs stay as a deletion, the new text goes in as an
+    // insertion; a paragraph split marks the new paragraph marks inserted
+    // and leaves the original mark on the last paragraph.
+    const split = trackedSplit(
+      context,
+      record,
+      start,
+      end,
+      paragraphMarkRPr(part, record),
+    );
+    const inserted = (segment: string): string =>
+      insertedRunXml(context, split.rPr, segment);
+    // The original mark (section properties included) ends the last
+    // paragraph; every mark before it is an insertion.
+    const originalPPr = sliceOf(part, record.pPr);
+    const firstPPr = single
+      ? originalPPr
+      : markedParagraphProperties(context, record.pPr, "ins");
     items.push(
-      patches.insertAfter(
+      patches.replaceElement(
         part,
         record.node,
         paragraphXml(
           record.node,
-          id,
-          copiedPPr,
-          runXml(split.rPr, runContentXml(segment)) + (last ? split.after : ""),
+          record.id,
+          firstPPr,
+          split.before +
+            split.deleted +
+            inserted(segments[0]!) +
+            (single ? split.after : ""),
         ),
       ),
     );
-  });
+    segments.slice(1).forEach((segment, index) => {
+      const id = context.freshParagraphId();
+      createdIds.push(`p:${id}`);
+      const last = index === segments.length - 2;
+      items.push(
+        patches.insertAfter(
+          part,
+          record.node,
+          paragraphXml(
+            record.node,
+            id,
+            last
+              ? originalPPr
+              : markedParagraphProperties(context, record.pPr, "ins"),
+            inserted(segment) + (last ? split.after : ""),
+          ),
+        ),
+      );
+    });
+  } else {
+    const split = splitAt(
+      part,
+      record.node,
+      record.text.items,
+      start,
+      end,
+      (rPr) => runXml(rPr, runContentXml(segments[0]!)),
+      paragraphMarkRPr(part, record),
+    );
+    const pPr = sliceOf(part, record.pPr);
+    items.push(
+      patches.replaceElement(
+        part,
+        record.node,
+        paragraphXml(
+          record.node,
+          record.id,
+          pPr,
+          split.before + (single ? split.after : ""),
+        ),
+      ),
+    );
+    segments.slice(1).forEach((segment, index) => {
+      const id = context.freshParagraphId();
+      createdIds.push(`p:${id}`);
+      const last = index === segments.length - 2;
+      items.push(
+        patches.insertAfter(
+          part,
+          record.node,
+          paragraphXml(
+            record.node,
+            id,
+            copiedPPr,
+            runXml(split.rPr, runContentXml(segment)) +
+              (last ? split.after : ""),
+          ),
+        ),
+      );
+    });
+  }
   const dropped = droppedInlines(
     context.model,
     record,
@@ -589,7 +673,13 @@ function restyled(
 ): string {
   let out = "";
   const changed = (rPr: XmlElement | undefined): string =>
-    changedRunProperties(part, rPr, change, context.model.styles);
+    changedRunProperties(
+      part,
+      rPr,
+      change,
+      context.model.styles,
+      context.tracked ? revisionAttributes(context) : undefined,
+    );
   for (const unit of unitsOf(container, items)) {
     const raw = unit.nodes.map((node) => sliceOf(part, node)).join("");
     const overlaps =
@@ -706,6 +796,7 @@ export const setTextStyleHandler: DocxOperationHandler<DocxSetTextStyleOperation
               record.pPr,
               operation.style,
               context.model.styles,
+              context.tracked ? revisionAttributes(context) : undefined,
             )
           : sliceOf(part, record.pPr);
       return commitParagraph(context, target, [
@@ -732,7 +823,12 @@ export const setParagraphStyleHandler: DocxOperationHandler<DocxSetParagraphStyl
         (style.spacing === undefined || Object.keys(style.spacing).length === 0)
       )
         return { createdIds: [], warnings: [] };
-      const pPr = changedParagraphProperties(part, record.pPr, style);
+      const pPr = changedParagraphProperties(
+        part,
+        record.pPr,
+        style,
+        context.tracked ? revisionAttributes(context) : undefined,
+      );
       const node = record.node;
       const content = node.selfClosing
         ? ""

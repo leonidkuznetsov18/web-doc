@@ -4,6 +4,7 @@ import type { EditWorkerOperation } from "../worker-protocol.js";
 import type {
   EditEngine,
   EditEngineContext,
+  BatchMode,
   EngineBatch,
   EngineChange,
   MaterializedDocument,
@@ -42,8 +43,9 @@ export abstract class WorkerEngineClient implements EditEngine {
   validate(
     operations: readonly EditOperation[],
     signal: AbortSignal,
+    mode: BatchMode = {},
   ): Promise<readonly OperationIssue[]> {
-    return this.request("edit-validate", { operations }, signal);
+    return this.request("edit-validate", { operations, mode }, signal);
   }
 
   /** Plain operation arrays, as the unit tests pass them, become the next batch. */

@@ -17,10 +17,12 @@ import type {
 export interface MutationRecord {
   /** The revision the call produced. */
   readonly revision: number;
-  readonly kind: "apply" | "undo" | "redo" | "reset";
+  readonly kind: "apply" | "undo" | "redo" | "reset" | "restore";
   /**
    * The operations the call applied (apply, redo) or took back (undo, reset);
-   * for a reset every batch of the session, in order.
+   * for a reset every batch of the session, in order. A checkpoint restore
+   * carries none: its receipt's ids say what went and what came back, and
+   * offsets inside surviving elements are left as they were.
    */
   readonly operations: readonly EditOperation[];
   readonly receipt: EditReceipt;

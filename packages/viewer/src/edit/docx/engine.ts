@@ -2,6 +2,7 @@ import type { ResourceLimits, ViewerWarning } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { AssetStore } from "../assets.js";
 import type {
+  BatchMode,
   EditEngine,
   EngineBatch,
   EngineChange,
@@ -25,10 +26,15 @@ import { docxHandlers } from "./handlers.js";
 import { freshParagraphId, paragraphsOf } from "./ids.js";
 import { DocxModel, type AnyRecord } from "./model.js";
 import type { DocxStyles } from "./style.js";
-import { issueCollector, type DocxOperationContext } from "./operations.js";
+import {
+  issueCollector,
+  type DocxOperationContext,
+  type TrackedChange,
+} from "./operations.js";
 import { docxOperationSchemas } from "./schemas.js";
-import type { DocxElement, DocxOperation } from "./types.js";
-import { namespacePatches } from "./write.js";
+import { revisionsOf } from "./tracked.js";
+import type { DocxElement, DocxOperation, DocxRevision } from "./types.js";
+import { attributeProblem, namespacePatches } from "./write.js";
 
 /*
  * The DOCX edit engine: the package layer under a block index of the body
@@ -65,7 +71,69 @@ function unauthoredIdsOf(bytes: Uint8Array): string[] {
   return [...text.matchAll(/<p id="([0-9A-F]{8})"\/>/g)].map((m) => m[1]!);
 }
 
-export class DocxEditEngine implements EditEngine {
+/** Reads the DOCX session adds on top of the core, served by the engine and the worker client alike. */
+export interface DocxEngineReads {
+  revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]>;
+}
+
+/** The tracked-change record of a batch, when it writes revisions. */
+function trackedOf(mode: BatchMode): TrackedChange | undefined {
+  if (mode.changeMode !== "tracked") return undefined;
+  return {
+    author: mode.author ?? "",
+    ...(mode.timestamp === undefined ? {} : { date: mode.timestamp }),
+  };
+}
+
+/** ISO 8601 as `xsd:dateTime` takes it; what `w:date` carries. */
+const DATE_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/;
+
+/**
+ * What a tracked batch must carry before any revision is written: an author
+ * the file can hold (the core requires one too; the engine used on its own
+ * does the same) and a date the file can hold.
+ */
+function trackedModeIssues(
+  tracked: TrackedChange | undefined,
+): OperationIssue[] {
+  if (!tracked) return [];
+  const issues: OperationIssue[] = [];
+  const author = attributeProblem(tracked.author);
+  if (tracked.author.trim().length === 0)
+    issues.push({
+      operationIndex: -1,
+      path: "/author",
+      code: "required",
+      message: "Tracked changes name their author; pass ApplyOptions.author",
+    });
+  else if (author)
+    issues.push({
+      operationIndex: -1,
+      path: "/author",
+      code: "invalid-value",
+      message: `The author holds ${author}`,
+    });
+  if (tracked.date !== undefined) {
+    const date = attributeProblem(tracked.date);
+    if (
+      date ||
+      !DATE_TIME.test(tracked.date) ||
+      Number.isNaN(Date.parse(tracked.date))
+    )
+      issues.push({
+        operationIndex: -1,
+        path: "/timestamp",
+        code: "invalid-value",
+        message: date
+          ? `The timestamp holds ${date}`
+          : "The timestamp must be an ISO 8601 date-time",
+      });
+  }
+  return issues;
+}
+
+export class DocxEditEngine implements EditEngine, DocxEngineReads {
   readonly schemas = docxOperationSchemas;
   readonly #original: Uint8Array;
   readonly #limits: ResourceLimits;
@@ -145,9 +213,13 @@ export class DocxEditEngine implements EditEngine {
   async validate(
     operations: readonly EditOperation[],
     signal: AbortSignal,
+    mode: BatchMode = {},
   ): Promise<readonly OperationIssue[]> {
     const issues: OperationIssue[] = [];
-    const base = await this.#context(0, signal);
+    const tracked = trackedOf(mode);
+    const modeIssues = trackedModeIssues(tracked);
+    if (modeIssues.length > 0) return modeIssues;
+    const base = await this.#context(0, signal, 0, new Set(), tracked);
     for (const [index, operation] of operations.entries()) {
       const context = { ...base, operationIndex: index };
       const handler = docxHandlers.get(operation.op);
@@ -203,6 +275,9 @@ export class DocxEditEngine implements EditEngine {
       ? { stateId: this.#nextStateId(), operations: input }
       : (input as EngineBatch);
     this.#stateId = Math.max(this.#stateId, batch.stateId);
+    const tracked = trackedOf(batch);
+    const modeIssues = trackedModeIssues(tracked);
+    if (modeIssues.length > 0) throw invalidOperationError(modeIssues);
     const snapshot = this.#pkg.snapshot();
     const unauthored = this.#unauthored ? [...this.#unauthored] : undefined;
     const createdIds: string[] = [];
@@ -227,6 +302,7 @@ export class DocxEditEngine implements EditEngine {
           signal,
           index,
           issued,
+          tracked,
         );
         const issues: OperationIssue[] = [];
         await handler.validate(
@@ -290,10 +366,12 @@ export class DocxEditEngine implements EditEngine {
     signal: AbortSignal | undefined,
     operationIndex = 0,
     issued: Set<string> = new Set(),
+    tracked?: TrackedChange,
   ): Promise<DocxOperationContext> {
     const model = await this.model(signal);
     const taken = new Set([...model.takenIds, ...issued]);
     let count = 0;
+    let revisions = 0;
     return {
       pkg: this.#pkg,
       model,
@@ -308,7 +386,23 @@ export class DocxEditEngine implements EditEngine {
         taken.add(id);
         return id;
       },
+      ...(tracked ? { tracked } : {}),
+      nextRevisionId: () => {
+        revisions += 1;
+        return model.maxRevisionId + revisions;
+      },
     };
+  }
+
+  /** The revisions of a paragraph; none for another element or an unknown id. */
+  async revisions(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<readonly DocxRevision[]> {
+    const model = await this.model(signal);
+    const record = model.byId.get(id);
+    if (!record || record.kind !== "paragraph") return [];
+    return revisionsOf(model.document, record.node);
   }
 
   async materialize(

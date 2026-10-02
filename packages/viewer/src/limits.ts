@@ -15,6 +15,9 @@ export const defaultResourceLimits: Readonly<ResourceLimits> = Object.freeze({
   maxEditOperations: 500,
   maxEditHistory: 200,
   maxEditCheckpointBytes: 64 * 1024 * 1024,
+  maxOutlineNodes: 5000,
+  maxDescribeChars: 200_000,
+  maxEditCheckpoints: 20,
 });
 
 export function resolveLimits(

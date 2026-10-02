@@ -6,7 +6,7 @@ import type {
   WorkerOperation,
 } from "../../worker-protocol.js";
 import { DocxEditEngine } from "../docx/engine.js";
-import type { EngineBatch } from "../engine.js";
+import type { BatchMode, EngineBatch } from "../engine.js";
 import type {
   EditFindOptions,
   EditOperation,
@@ -32,6 +32,17 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         "No package is open for editing",
       );
     return state;
+  };
+
+  const docx = (): DocxEditEngine => {
+    const current = engine();
+    if (!(current instanceof DocxEditEngine))
+      throw new ViewerError(
+        "edit-unsupported",
+        "The open document is not a Word document",
+        { details: { format: "pptx", reason: "no-reads" } },
+      );
+    return current;
   };
 
   const pptx = (): PptxEditEngine => {
@@ -72,10 +83,11 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         return result;
       }
       case "edit-validate": {
-        const { operations } = payload as {
+        const { operations, mode } = payload as {
           readonly operations: readonly EditOperation[];
+          readonly mode?: BatchMode;
         };
-        return engine().validate(operations, signal);
+        return engine().validate(operations, signal, mode);
       }
       case "edit-apply": {
         const { batch } = payload as { readonly batch: EngineBatch };
@@ -141,6 +153,11 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         return pptx().slides(signal);
       case "edit-pptx-layouts":
         return pptx().layouts(signal);
+      case "edit-docx-revisions":
+        return docx().revisions(
+          (payload as { readonly id: string }).id,
+          signal,
+        );
       case "edit-dispose":
         await state?.dispose();
         state = undefined;

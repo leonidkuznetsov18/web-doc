@@ -76,6 +76,19 @@ export type BlockRecord = ParagraphRecord | TableRecord;
 export type AnyRecord = ParagraphRecord | TableRecord | InlineRecord;
 
 export class DocxModel {
+  #maxRevisionId: number | undefined;
+
+  /** The largest `w:id` of the main part, over revisions and range markup alike; 0 without any. */
+  get maxRevisionId(): number {
+    if (this.#maxRevisionId === undefined) {
+      let max = 0;
+      for (const match of this.document.text.matchAll(/ w:id="(\d{1,9})"/g))
+        max = Math.max(max, Number(match[1]));
+      this.#maxRevisionId = max;
+    }
+    return this.#maxRevisionId;
+  }
+
   private constructor(
     readonly revision: number,
     readonly mainPart: string,

@@ -7,6 +7,7 @@ import type {
 } from "../contracts.js";
 import type { EditSession } from "./sessions.js";
 import type {
+  ChangeMode,
   EditableFormat,
   EditElement,
   EditFindOptions,
@@ -47,6 +48,8 @@ export interface EditSessionCore extends EditSessionBase<
   EditOperation,
   EditElement
 > {
+  /** The host's limits, for reads a typed session builds over the core. */
+  readonly limits: ResourceLimits;
   readItem<T>(
     options: ReadOptions | undefined,
     task: (engine: EditEngine, signal: AbortSignal) => Promise<T | undefined>,
@@ -88,8 +91,18 @@ export interface MaterializedDocument {
   readonly warnings: readonly ViewerWarning[];
 }
 
+/** How a batch is written; travels with the batch to the engine and into the history, so a replay writes it the same way. */
+export interface BatchMode {
+  /** Default `direct`; `tracked` writes revisions where the format has them. */
+  readonly changeMode?: ChangeMode;
+  /** The author of tracked changes. */
+  readonly author?: string;
+  /** ISO 8601, the date of tracked changes. */
+  readonly timestamp?: string;
+}
+
 /** A batch with the identity the core assigned to the state after it. */
-export interface EngineBatch {
+export interface EngineBatch extends BatchMode {
   /** Unique within the session and never reused; engines derive created ids from it. */
   readonly stateId: number;
   readonly operations: readonly EditOperation[];
@@ -133,6 +146,7 @@ export interface EditEngine {
   validate(
     operations: readonly EditOperation[],
     signal: AbortSignal,
+    mode?: BatchMode,
   ): Promise<readonly OperationIssue[]>;
   /**
    * Applies an already validated batch to the working copy. Same-batch

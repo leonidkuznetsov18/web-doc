@@ -52,6 +52,9 @@ describe("editing contracts", () => {
   it("adds edit limits with defaults and validates them", () => {
     assert.equal(defaultResourceLimits.maxEditOperations, 500);
     assert.equal(defaultResourceLimits.maxEditHistory, 200);
+    assert.equal(defaultResourceLimits.maxOutlineNodes, 5000);
+    assert.equal(defaultResourceLimits.maxDescribeChars, 200_000);
+    assert.equal(defaultResourceLimits.maxEditCheckpoints, 20);
     assert.equal(resolveLimits({}, { maxEditHistory: 5 }).maxEditHistory, 5);
     assert.throws(
       () => resolveLimits({}, { maxEditOperations: 0 }),

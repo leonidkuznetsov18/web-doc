@@ -1,7 +1,7 @@
-import type { EngineBatch } from "./engine.js";
+import type { BatchMode, EngineBatch } from "./engine.js";
 import type { EditOperation } from "./types.js";
 
-export interface HistoryEntry {
+export interface HistoryEntry extends BatchMode {
   readonly operations: readonly EditOperation[];
   readonly label?: string;
   /** Ids the batch created; an undo removes them again. */
@@ -16,6 +16,20 @@ export interface HistoryEntry {
   readonly pageCountAfter: number;
   /** Identifies the content after this batch; equal ids mean equal content. */
   readonly stateId: number;
+  /**
+   * A restore to a named checkpoint: the content after this entry is the
+   * checkpoint's, so a replay starts from its retained bytes or from the
+   * original plus `batches`, never from the entries before.
+   */
+  readonly base?: HistoryBase;
+}
+
+/** Where a restore entry's content comes from. */
+export interface HistoryBase {
+  /** The checkpoint's state id; its bytes may be retained under it. */
+  readonly stateId: number;
+  /** The batches that build the checkpoint's state from the original. */
+  readonly batches: readonly EngineBatch[];
 }
 
 /**
@@ -70,7 +84,12 @@ export class EditHistory {
 
   /** State ids of every entry still in the history, folded and redo tail included. */
   get stateIds(): readonly number[] {
-    return [...this.#folded, ...this.#entries].map((entry) => entry.stateId);
+    return this.allEntries.map((entry) => entry.stateId);
+  }
+
+  /** Every entry still in the history: folded ones, then the undoable ones and the redo tail. */
+  get allEntries(): readonly HistoryEntry[] {
+    return [...this.#folded, ...this.#entries];
   }
 
   /** The entry `undo()` would revert, if any. */
@@ -90,10 +109,7 @@ export class EditHistory {
 
   /** Batches applied to the original when `position` undoable entries are applied. */
   batchesAt(position: number): readonly EngineBatch[] {
-    return this.entriesAt(position).map((entry) => ({
-      stateId: entry.stateId,
-      operations: entry.operations,
-    }));
+    return this.entriesAt(position).map(batchOf);
   }
 
   /** Entries applied when `position` undoable entries are applied, folded ones first. */
@@ -105,10 +121,15 @@ export class EditHistory {
     return this.#position;
   }
 
-  push(entry: Omit<HistoryEntry, "stateId">): HistoryEntry {
+  /**
+   * Appends an entry with a fresh state id, or with `stateId` when the entry
+   * reproduces a known state (a restore to a checkpoint): the same id means
+   * the same content, so `dirty` stays exact.
+   */
+  push(entry: Omit<HistoryEntry, "stateId">, stateId?: number): HistoryEntry {
     const stored: HistoryEntry = Object.freeze({
       ...entry,
-      stateId: this.#nextStateId++,
+      stateId: stateId ?? this.#nextStateId++,
     });
     // A new change after an undo drops the redo tail.
     this.#entries.length = this.#position;
@@ -134,4 +155,22 @@ export class EditHistory {
     this.#entries = [];
     this.#position = 0;
   }
+}
+
+/** The engine batch an entry replays as: its operations and how they were written. */
+export function batchOf(entry: HistoryEntry): EngineBatch {
+  return {
+    stateId: entry.stateId,
+    operations: entry.operations,
+    ...modeOf(entry),
+  };
+}
+
+/** The write mode fields of a batch or an entry, only those set. */
+export function modeOf(mode: BatchMode): BatchMode {
+  return {
+    ...(mode.changeMode === undefined ? {} : { changeMode: mode.changeMode }),
+    ...(mode.author === undefined ? {} : { author: mode.author }),
+    ...(mode.timestamp === undefined ? {} : { timestamp: mode.timestamp }),
+  };
 }

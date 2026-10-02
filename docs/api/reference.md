@@ -190,8 +190,10 @@ with code `aborted`. See [headless rendering](./headless.md).
 
 The session API — operations, schemas, history, saving, inspection, events and
 errors — is described in the [editing API](./editing.md). The limits
-`maxEditOperations` (500), `maxEditHistory` (200) and `maxEditCheckpointBytes`
-(64 MiB) join `ResourceLimits`.
+`maxEditOperations` (500), `maxEditHistory` (200), `maxEditCheckpointBytes`
+(64 MiB), `maxOutlineNodes` (5 000), `maxDescribeChars` (200 000) and
+`maxEditCheckpoints` (20) join `ResourceLimits`; the [AI editing](./ai-editing.md)
+page covers the last three.
 
 ## Events
 

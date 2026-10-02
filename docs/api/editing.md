@@ -150,6 +150,14 @@ different count adds a `fidelity-degraded` warning instead of being trusted.
 Each call reopens the document once, so prefer one batch of several operations
 over several calls.
 
+`ApplyOptions.changeMode` chooses how the batch is written: `direct` (the
+default) replaces content in place; `tracked` writes Word revisions for a
+person to accept or reject, with `author` (required) and `timestamp` (the
+revision's date; an ISO 8601 date-time whenever given, else
+`invalid-value` at `/timestamp`). DOCX is the only format with a tracked form; the others
+refuse it with `unsupported-change-mode`, as does a DOCX operation without a
+tracked form. The [AI editing](./ai-editing.md) page describes it.
+
 ### Receipts
 
 ```ts
@@ -316,7 +324,7 @@ outside any page, and for spreadsheets. A result stays valid until the next
 | Event             | Payload                                                                                                                                                                                                                      |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `editstatechange` | `EditState` plus `active` and `format`; emitted on start, on every change, when `dirty` flips through `markSaved()`, and on end.                                                                                             |
-| `documentchange`  | `{ sessionId, revision, reason: "apply" \| "undo" \| "redo" \| "reset", changedPages, pageCount }`, after `editstatechange`.                                                                                                 |
+| `documentchange`  | `{ sessionId, revision, reason: "apply" \| "undo" \| "redo" \| "reset" \| "restore", changedPages, pageCount }`, after `editstatechange`.                                                                                    |
 | `layoutchange`    | `{ sessionId, revision, pages }` once the viewport has painted pages of that revision; `pageToClient()` and `clientToPage()` describe the new content from then on. A headless viewer emits it right after `documentchange`. |
 
 ## Errors
@@ -349,6 +357,9 @@ issues, so a client handles one error shape per batch. `aborted`,
 | `maxEditOperations`      | 500     | Operations in one `apply()` call                                       |
 | `maxEditHistory`         | 200     | Undoable batches kept; older ones are folded into the starting point   |
 | `maxEditCheckpointBytes` | 64 MiB  | Memory for retained history checkpoints; fewer are kept for a big file |
+| `maxOutlineNodes`        | 5 000   | Nodes one `getOutline()` returns; more is cut and reported             |
+| `maxDescribeChars`       | 200 000 | Upper bound of `describe()`'s character budget                         |
+| `maxEditCheckpoints`     | 20      | Named checkpoints alive at once (see [AI editing](./ai-editing.md))    |
 
 Binary payloads count against `maxInputBytes`; the engine work of one call
 counts against `maxOperationMs`.
@@ -868,17 +879,18 @@ target.
 Positions in a flow document are other elements, never page points. Font
 sizes and spacing are points.
 
-| Method                                            | Effect                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `replaceText({ target, text, range? })`           | Replaces the whole text of a paragraph, or the part a range covers (a collapsed range inserts). Newlines in `text` split the paragraph: the new paragraphs copy its properties (never a section break), get fresh ids reported in `createdIds`, and the text after the range moves to the last of them. `\t`, `\v` and `\f` write a tab, a line break and a page break. |
-| `setTextStyle({ target, range?, style })`         | Changes `fontFamily`, `fontSize`, `bold`, `italic`, `underline`, `color` (`#RRGGBB`, `"auto"` or `{ theme }` with a Word theme colour name such as `accent1` or `text1`) and `highlight` (a Word highlight name or `"none"`) on the runs a range covers, splitting runs at its ends; a range that reaches the paragraph end also sets the paragraph mark, so text typed after it inherits the change. |
-| `setParagraphStyle({ target, style })`            | Changes `align` (`left`, `center`, `right`, `justify`) and `spacing` (`before` and `after` in points, `line` as a multiple of single spacing); other paragraph properties keep their bytes.                                                                                                                                                 |
-| `insertParagraph({ before \| after, text, style? })` | Adds paragraphs next to a paragraph or table of the body or of a cell (one per line of `text`, ids in `createdIds`): a paragraph reference lends its properties without any section break and its first run's style, a table reference gives a plain paragraph; `style` merges into that. Inserting after the last paragraph keeps the body's section properties last. |
-| `deleteElement({ target })`                       | Removes a paragraph, a table or an inline picture. The last paragraph of the body or of a cell (`last-paragraph`) and a paragraph that ends a section (`section-break`) are refused; a body that would end with a table gets an empty paragraph (in `createdIds`). A picture's relationship goes with it when nothing else uses it; media parts stay. `removedIds` lists every element removed, a table's cell paragraphs included. |
-| `moveElement({ target, before \| after })`        | Moves a paragraph or a table next to another element of the same body or cell, bytes intact and id kept; a paragraph that ends a section cannot move.                                                                                                                                                                                       |
-| `insertImage({ before \| after, data, mimeType, size })` | Adds a paragraph holding an inline PNG or JPEG at `size` points (the display pre-pass fits it to the column like any other picture). The bytes are stored once under `word/media` and related from the document; `createdIds` names the paragraph, then the picture. |
-| `insertTable({ before \| after, rows, columnWidths? })` | Adds a table next to a paragraph or table of the body (not inside a cell): a grid over the section's content width from the relative `columnWidths` (equal when omitted), the `TableGrid` style when the document defines it or single borders otherwise, one paragraph per cell with the cell's text (newlines become line breaks), and an empty paragraph after the table when the next block would be a table or the end of the body. `createdIds` names the table, then every cell paragraph, then that trailing paragraph. 1–100 rows, 1–20 columns. |
-| `setTableCell({ target, row, column, text })`     | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                     |
+| Method                                                   | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replaceText({ target, text, range? })`                  | Replaces the whole text of a paragraph, or the part a range covers (a collapsed range inserts). Newlines in `text` split the paragraph: the new paragraphs copy its properties (never a section break), get fresh ids reported in `createdIds`, and the text after the range moves to the last of them. `\t`, `\v` and `\f` write a tab, a line break and a page break.                                                                                                                                                                                   |
+| `setTextStyle({ target, range?, style })`                | Changes `fontFamily`, `fontSize`, `bold`, `italic`, `underline`, `color` (`#RRGGBB`, `"auto"` or `{ theme }` with a Word theme colour name such as `accent1` or `text1`) and `highlight` (a Word highlight name or `"none"`) on the runs a range covers, splitting runs at its ends; a range that reaches the paragraph end also sets the paragraph mark, so text typed after it inherits the change.                                                                                                                                                     |
+| `setParagraphStyle({ target, style })`                   | Changes `align` (`left`, `center`, `right`, `justify`) and `spacing` (`before` and `after` in points, `line` as a multiple of single spacing); other paragraph properties keep their bytes.                                                                                                                                                                                                                                                                                                                                                               |
+| `insertParagraph({ before \| after, text, style? })`     | Adds paragraphs next to a paragraph or table of the body or of a cell (one per line of `text`, ids in `createdIds`): a paragraph reference lends its properties without any section break and its first run's style, a table reference gives a plain paragraph; `style` merges into that. Inserting after the last paragraph keeps the body's section properties last.                                                                                                                                                                                    |
+| `deleteElement({ target })`                              | Removes a paragraph, a table or an inline picture. The last paragraph of the body or of a cell (`last-paragraph`) and a paragraph that ends a section (`section-break`) are refused; a body that would end with a table gets an empty paragraph (in `createdIds`). A picture's relationship goes with it when nothing else uses it; media parts stay. `removedIds` lists every element removed, a table's cell paragraphs included.                                                                                                                       |
+| `moveElement({ target, before \| after })`               | Moves a paragraph or a table next to another element of the same body or cell, bytes intact and id kept; a paragraph that ends a section cannot move.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `insertImage({ before \| after, data, mimeType, size })` | Adds a paragraph holding an inline PNG or JPEG at `size` points (the display pre-pass fits it to the column like any other picture). The bytes are stored once under `word/media` and related from the document; `createdIds` names the paragraph, then the picture.                                                                                                                                                                                                                                                                                      |
+| `insertTable({ before \| after, rows, columnWidths? })`  | Adds a table next to a paragraph or table of the body (not inside a cell): a grid over the section's content width from the relative `columnWidths` (equal when omitted), the `TableGrid` style when the document defines it or single borders otherwise, one paragraph per cell with the cell's text (newlines become line breaks), and an empty paragraph after the table when the next block would be a table or the end of the body. `createdIds` names the table, then every cell paragraph, then that trailing paragraph. 1–100 rows, 1–20 columns. |
+| `setTableCell({ target, row, column, text })`            | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                                                                                                                                                                                                                              |
+| `getRevisions(elementId, options?)`                      | A read: the tracked changes a paragraph holds, in document order (`ins`, `del`, `moveFrom`, `moveTo`, `rPrChange`, `pPrChange` with `id`, `author`, `date`, `scope` and the text they cover); empty for other elements.                                                                                                                                                                                                                                                                                                                                   |
 
 A table is named after its first paragraph, so an insertion, a move or a
 deletion that changes which paragraph comes first in its first cell
@@ -898,12 +910,12 @@ like the run after it, else like the paragraph mark.
 
 ### Elements
 
-| Kind        | What it is                                               | Id                                                      |
-| ----------- | -------------------------------------------------------- | ------------------------------------------------------- |
-| `paragraph` | A `w:p` of the body or of a table cell                   | `p:<id>`                                                |
-| `table`     | A `w:tbl` of the body; `table.rows` carries the cell text | `tbl:<id of its first paragraph>`                       |
-| `image`     | An inline picture (`wp:inline`) inside a paragraph       | `img:<paragraph id>.<n>`, `n` counting the pictures     |
-| `other`     | An anchored drawing, an embedded object, an equation     | `other:<paragraph id>.<n>`; listed, never edited        |
+| Kind        | What it is                                                | Id                                                  |
+| ----------- | --------------------------------------------------------- | --------------------------------------------------- |
+| `paragraph` | A `w:p` of the body or of a table cell                    | `p:<id>`                                            |
+| `table`     | A `w:tbl` of the body; `table.rows` carries the cell text | `tbl:<id of its first paragraph>`                   |
+| `image`     | An inline picture (`wp:inline`) inside a paragraph        | `img:<paragraph id>.<n>`, `n` counting the pictures |
+| `other`     | An anchored drawing, an embedded object, an equation      | `other:<paragraph id>.<n>`; listed, never edited    |
 
 A paragraph's `<id>` is its `w14:paraId` when the file has one (Word
 writes one on every paragraph), otherwise a deterministic id from its
@@ -927,10 +939,14 @@ and colours); `paragraphStyle` carries the style id, alignment, spacing
 numbering.
 
 A paragraph that cannot be edited in place says why in `readOnlyReason`:
-`tracked-changes` (it holds `w:ins`, `w:del` or a move), `section-break`
-(its `w:pPr` carries a `w:sectPr`) or `unsupported-content` (all its text
-comes from fields). Such a paragraph only accepts the insertion operations
-that place a sibling next to it.
+`tracked-changes` (it holds `w:ins`, `w:del` or a move, on its runs or on
+its paragraph mark), `section-break` (its `w:pPr` carries a `w:sectPr`) or
+`unsupported-content` (all its text comes from fields). Such a paragraph
+only accepts the insertion operations that place a sibling next to it.
+Changed properties alone (`w:rPrChange`, `w:pPrChange`) leave a paragraph
+editable. `getRevisions(elementId)` lists a paragraph's revisions (kind,
+id, author, date, the text they cover) in document order; see
+[tracked changes](./ai-editing.md#tracked-changes).
 
 ### Geometry
 
@@ -996,15 +1012,15 @@ the viewer knew that paragraph's page before the change.
 Besides the shared codes (`required`, `type`, `unknown-operation`,
 `unknown-target`, `unknown-asset`), DOCX validation reports:
 
-| Code                  | Where                           | Meaning                                                                                                                     |
-| --------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `invalid-target`      | `/target`, `/before`, `/after`  | The element is not of the kind the operation takes, is read-only, or the reference is not in the same body or cell.        |
-| `invalid-range`       | `/range`, `/text`               | Ends off the target, out of order or out of bounds, a split surrogate pair, a cut field, a cut hyperlink or content-control edge, or a paragraph break inside one. |
-| `invalid-text`        | `/text`, `/rows/<r>/<c>`        | Control characters XML cannot carry, or a lone surrogate.                                                                   |
-| `invalid-value`       | `/style/color`, `/style/fontFamily`, `/before`, `/rows`, `/columnWidths`, `/data` | A colour that is not `#RRGGBB`, `auto` or a theme colour name; a bad font name; neither or both of `before` and `after`; ragged rows; one weight per column missing; bytes that are not the declared image type. |
-| `last-paragraph`      | `/target`                       | The last paragraph of the body or of a cell cannot be deleted.                                                              |
-| `section-break`       | `/target`                       | A paragraph that ends a section cannot be deleted or moved.                                                                 |
-| `range`               | `/row`, `/column`               | The row or column lies outside the table.                                                                                   |
+| Code             | Where                                                                             | Meaning                                                                                                                                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid-target` | `/target`, `/before`, `/after`                                                    | The element is not of the kind the operation takes, is read-only, or the reference is not in the same body or cell.                                                                                              |
+| `invalid-range`  | `/range`, `/text`                                                                 | Ends off the target, out of order or out of bounds, a split surrogate pair, a cut field, a cut hyperlink or content-control edge, or a paragraph break inside one.                                               |
+| `invalid-text`   | `/text`, `/rows/<r>/<c>`                                                          | Control characters XML cannot carry, or a lone surrogate.                                                                                                                                                        |
+| `invalid-value`  | `/style/color`, `/style/fontFamily`, `/before`, `/rows`, `/columnWidths`, `/data` | A colour that is not `#RRGGBB`, `auto` or a theme colour name; a bad font name; neither or both of `before` and `after`; ragged rows; one weight per column missing; bytes that are not the declared image type. |
+| `last-paragraph` | `/target`                                                                         | The last paragraph of the body or of a cell cannot be deleted.                                                                                                                                                   |
+| `section-break`  | `/target`                                                                         | A paragraph that ends a section cannot be deleted or moved.                                                                                                                                                      |
+| `range`          | `/row`, `/column`                                                                 | The row or column lies outside the table.                                                                                                                                                                        |
 
 ### Performance
 
@@ -1036,3 +1052,6 @@ expect a long document to take seconds per commit.
   one re-render for the viewer.
 - Treat `invalid-operation` issues as structured feedback: `operationIndex`
   and `path` point at the exact field to fix.
+- Start a turn with `describe()` or `getOutline()`: the document as a prompt
+  sees it, ids first. The [AI editing](./ai-editing.md) page documents the
+  grammar and the budget.

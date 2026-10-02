@@ -225,6 +225,14 @@ listed here for explicit approval with the plan:
     decisions; T54 starts after T52's bump and T53's run bridge, which the
     inspection join depends on.
 
+## Phase 11 decisions (`ai-edit`, module 07)
+
+31. **The AI module is additive and host-agnostic.** `07-ai-edit.md` (draft
+    2026-10-02) adds outline, description, target resolution, named
+    checkpoints, a tool set with an executor, and DOCX tracked changes to the
+    sessions of modules 01–06 without changing any existing shape; T59 starts
+    after Leonid approves the spec and its recommended answers.
+
 ## Verification commands
 
 ```bash
@@ -234,6 +242,8 @@ node --test packages/viewer/.test-dist/test/<file>.test.js   # one compiled test
 npm run test:e2e -- tests/e2e/edit-core.spec.ts       # Chromium, builds first
 npm run test:e2e -- tests/e2e/edit-pdf.spec.ts
 npm run test:e2e -- tests/e2e/edit-pptx.spec.ts
+npm run test:e2e -- tests/e2e/edit-docx.spec.ts
+npm run test:e2e -- tests/e2e/edit-ai.spec.ts
 npm run test:e2e:matrix                               # at checkpoints
 npm run licenses && npm run report:size && npm run test:pack
 npm run check                                         # at the final checkpoint

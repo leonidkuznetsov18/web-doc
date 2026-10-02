@@ -6,7 +6,9 @@ import {
   type OoxmlEditProviderOptions,
 } from "../ooxml/worker.js";
 import { WorkerEngineClient } from "../worker-engine.js";
+import type { DocxEngineReads } from "./engine.js";
 import { docxOperationSchemas } from "./schemas.js";
+import type { DocxRevision } from "./types.js";
 
 export type DocxEditProviderOptions = OoxmlEditProviderOptions;
 
@@ -31,8 +33,15 @@ export async function loadDocxEditEngine(
   }
 }
 
-export class DocxEditEngineClient extends WorkerEngineClient {
+export class DocxEditEngineClient
+  extends WorkerEngineClient
+  implements DocxEngineReads
+{
   readonly schemas = docxOperationSchemas;
+
+  revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]> {
+    return this.request("edit-docx-revisions", { id }, signal);
+  }
 
   async start(original: Uint8Array): Promise<void> {
     const data = original.slice().buffer;
