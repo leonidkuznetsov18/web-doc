@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "packageVersion": "0.8.0",
+  "packageVersion": "0.9.0",
   "state": "ready",
-  "reason": "semantic-release-0.8.0",
+  "reason": "semantic-release-0.9.0",
   "blockedChannels": [],
   "requiredTasks": []
 }
