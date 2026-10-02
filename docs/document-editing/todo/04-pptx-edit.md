@@ -734,3 +734,10 @@ mapping; tasks 44–49 of `tasks/todo.md`.
   green at the T49 commit; the size report lists the one new asset,
   `workers/ooxml-edit-worker.js` (175 KB, 41 KB gzip), fetched only on the
   first `edit()` of a deck.
+- **Keynote import check (2026-10-02)**: every fixture of `npm run
+  fixtures:pptx` (16 files) opened in Keynote 14 through AppleScript
+  without an error, with the expected slide count and first text (for
+  example `everything.pptx`: 4 slides, "Everything at once";
+  `replaceText.pptx`: "Replaced title"). Import warnings are not
+  observable from a script, and PowerPoint is not installed on the build
+  machine: that check stays manual.
