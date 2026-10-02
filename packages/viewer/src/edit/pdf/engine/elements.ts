@@ -42,6 +42,12 @@ export interface ObjectRecord {
   readonly id: string;
   readonly type: number;
   readonly mark?: MarkParams;
+  /**
+   * The id a mark the file still carries names, on an object listed as plain
+   * because the mark failed its check: a new id must not take it, or saving
+   * would join the new object to this one.
+   */
+  readonly staleMarkId?: string;
 }
 
 /**
