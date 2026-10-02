@@ -1691,4 +1691,4 @@ Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`
 ### Checkpoint L: AI tooling done
 
 - [x] Unit, matrix and `npm run check` green; docs written (2026-10-02).
-- [ ] Release published (Leonid); the module's Linear ticket Done.
+- [x] Release published (web-doc 0.8.0, 2026-10-02); ACTION-858 Done.
