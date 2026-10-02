@@ -7,6 +7,7 @@ import type {
 import { abortError, ViewerError } from "../errors.js";
 import { readDescription, readOutline } from "./ai/outline.js";
 import { resolveTargets } from "./ai/targets.js";
+import { buildToolSet, callTool as runTool } from "./ai/tools.js";
 import type {
   DescribeOptions,
   DocumentDescription,
@@ -15,6 +16,10 @@ import type {
   OutlineResult,
   TargetCandidate,
   TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
 } from "./ai/types.js";
 import {
   assetIdOf,
@@ -139,6 +144,7 @@ export class EditSessionController implements EditSessionCore {
   /** Binary payloads of this session's batches, by content id. */
   readonly #assets = new AssetStore();
   #state: EditState;
+  #tools: ToolSet | undefined;
   #queue: Promise<unknown> = Promise.resolve();
   #revision = 0;
   #savedStateId = 0;
@@ -193,6 +199,8 @@ export class EditSessionController implements EditSessionCore {
     return this.#enqueue(options.signal, async (signal) => {
       this.#assertRevision(options);
       assertBatchSize(batch, this.#host.limits.maxEditOperations);
+      const modeIssues = checkChangeMode(this.format, options);
+      if (modeIssues.length > 0) throw invalidOperationError(modeIssues);
       const shapeIssues = checkOperations(batch, this.schemas);
       if (shapeIssues.length > 0) throw invalidOperationError(shapeIssues);
       const referenceIssues = checkBatchReferences(batch);
@@ -533,6 +541,14 @@ export class EditSessionController implements EditSessionCore {
     if (!named) return;
     this.#named.delete(id);
     this.#unpin(named.stateId);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
   }
 
   readItem<T>(
@@ -1142,6 +1158,36 @@ function checkBatchReferences(
       });
   });
   return issues;
+}
+
+/**
+ * Tracked changes exist in DOCX only and always name their author (decision
+ * 8 of the ai-edit module): the batch is refused before any engine work.
+ */
+function checkChangeMode(
+  format: EditableFormat,
+  options: ApplyOptions,
+): OperationIssue[] {
+  if (options.changeMode !== "tracked") return [];
+  if (format !== "docx")
+    return [
+      {
+        operationIndex: -1,
+        path: "",
+        code: "unsupported-change-mode",
+        message: `${format.toUpperCase()} has no tracked changes; apply directly and review with checkpoints`,
+      },
+    ];
+  if (!options.author || options.author.trim().length === 0)
+    return [
+      {
+        operationIndex: -1,
+        path: "/author",
+        code: "required",
+        message: "Tracked changes name their author; pass ApplyOptions.author",
+      },
+    ];
+  return [];
 }
 
 /** The renderer owns the page count; an engine that disagrees is reported, not trusted. */

@@ -1675,7 +1675,7 @@ Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`
       `restoreCheckpoint` (a history entry), `dropCheckpoint`, pins over the
       R2 retention, `maxEditCheckpoints`; unit tests on the fake engine and
       a PDF session.
-- [ ] Task 62: Tool set — `session.tools` from the operation schemas,
+- [x] Task 62: Tool set — `session.tools` from the operation schemas,
       `callTool()` with validation and the refusal paths, `describeReceipt`;
       unit tests for every tool.
 - [ ] Task 63: DOCX tracked changes — `changeMode: "tracked"` for

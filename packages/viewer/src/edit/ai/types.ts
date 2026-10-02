@@ -1,7 +1,10 @@
 import type {
+  ChangeMode,
   EditableFormat,
   EditReceipt,
   HistoryOptions,
+  JsonSchema,
+  OperationIssue,
   ReadItem,
   ReadOptions,
   ReadResult,
@@ -118,7 +121,49 @@ export interface EditCheckpoint {
   readonly createdAt: string;
 }
 
-/** The AI-facing reads and the checkpoints every edit session has. */
+/** One tool as a model provider takes it: a name, a description and a JSON Schema (draft 2020-12). */
+export interface ToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonSchema;
+}
+
+/** The tools of a session; the same names on every format, the operations of its own. */
+export interface ToolSet {
+  /** Raised when a tool's shape changes incompatibly. */
+  readonly version: number;
+  readonly format: EditableFormat;
+  readonly definitions: readonly ToolDefinition[];
+}
+
+/** A model's call: the tool's name and its JSON arguments, validated against the tool's schema. */
+export interface ToolCall {
+  readonly name: string;
+  readonly arguments: unknown;
+}
+
+/** What a tool call produced, for the model and the chat. */
+export interface ToolResult {
+  readonly ok: boolean;
+  /** JSON for the model: a description, an outline, candidates, a receipt, or the issues of a refused call. */
+  readonly content: unknown;
+  /** One or two sentences for the model and the chat: "Replaced the title of slide 2." */
+  readonly text: string;
+  /** Why a call was refused, in the shape `apply()` reports. */
+  readonly issues?: readonly OperationIssue[];
+}
+
+export interface ToolCallOptions {
+  /** Checked before any tool that changes the document, like `ApplyOptions.expectedRevision`. */
+  readonly expectedRevision?: number;
+  /** How `document_apply` writes: in place, or as tracked changes where the format has them. */
+  readonly changeMode?: ChangeMode;
+  /** The author of tracked changes; required with `changeMode: "tracked"`. */
+  readonly author?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The AI-facing reads, the checkpoints and the tools every edit session has. */
 export interface EditSessionReads {
   /** The body elements in reading order, shaped for a prompt. */
   getOutline(options?: OutlineOptions): Promise<OutlineResult>;
@@ -149,4 +194,13 @@ export interface EditSessionReads {
   restoreCheckpoint(id: string, options?: HistoryOptions): Promise<EditReceipt>;
   /** Forgets a checkpoint; unknown ids are ignored. */
   dropCheckpoint(id: string): void;
+  /** The tool definitions of this session, for a model provider's tool list. */
+  readonly tools: ToolSet;
+  /**
+   * Runs one tool call. A model's mistake (an unknown tool, bad arguments, a
+   * refused batch, a stale revision) comes back as `ok: false` with issues
+   * and a text to act on; only the session's own errors (`lifecycle-error`,
+   * `aborted`) throw.
+   */
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult>;
 }

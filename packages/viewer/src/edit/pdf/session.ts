@@ -2,6 +2,7 @@ import type { TextSelection } from "../../contracts.js";
 import { ViewerError } from "../../errors.js";
 import { readDescription, readOutline } from "../ai/outline.js";
 import { resolveTargets } from "../ai/targets.js";
+import { buildToolSet, callTool as runTool } from "../ai/tools.js";
 import type {
   DescribeOptions,
   DocumentDescription,
@@ -10,6 +11,10 @@ import type {
   OutlineResult,
   TargetCandidate,
   TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
 } from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import { reportError } from "../session.js";
@@ -72,6 +77,7 @@ import type {
 export class PdfSession implements PdfEditSession {
   readonly format = "pdf" as const;
   readonly #core: EditSessionCore;
+  #tools: ToolSet | undefined;
   /** Committed calls, oldest first, for `mapRange`; bounded by `LOG_LIMIT`. */
   readonly #log: MutationRecord[] = [];
   /** Batches applied and not undone, and those undone and not redone. */
@@ -300,6 +306,14 @@ export class PdfSession implements PdfEditSession {
 
   dropCheckpoint(id: string): void {
     this.#core.dropCheckpoint(id);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
   }
 
   getTextLayout(

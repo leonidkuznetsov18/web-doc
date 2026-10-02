@@ -199,6 +199,86 @@ names them, they count against the budget, and when the budget cannot hold
 them the restore replays the checkpoint's batches from the original instead.
 The content is the same either way.
 
+## Tools
+
+```ts
+const session = await viewer.edit();
+// Hand the definitions to the model provider: OpenAI `parameters`,
+// Anthropic `input_schema`; the schemas are plain JSON Schema 2020-12.
+const tools = session.tools.definitions.map((tool) => ({
+  name: tool.name,
+  description: tool.description,
+  input_schema: tool.inputSchema,
+}));
+// Run what the model calls; `content` goes back to the model, `text` to the chat.
+const result = await session.callTool(
+  { name: call.name, arguments: call.input },
+  { expectedRevision: revision, signal },
+);
+```
+
+`session.tools` is the editing API as a model provider lists tools: the same
+eight names on every format, the operations of the session's format in
+`document_apply`. `callTool()` validates the call against the tool's schema,
+runs it on the session and answers with JSON for the model and a sentence
+for the chat. A model's mistake never throws: an unknown tool, bad
+arguments, a refused batch or a stale revision come back as `ok: false` with
+`issues` in the shape `apply()` reports and a `text` the model can act on.
+Only the session's own errors throw (`lifecycle-error`, `aborted`).
+
+| Tool                  | Arguments                                                  | What it does                                                                                  |
+| --------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `document_describe`   | `OutlineOptions` + `maxChars`                              | `describe()`; the usual first call of a turn. `content` is the description with the revision. |
+| `document_outline`    | `OutlineOptions`                                           | `getOutline()`, as JSON (`nodes`, `nodeCount`, `truncated`, `revision`).                      |
+| `document_find`       | `TargetQuery`                                              | `resolveTargets()`; `content.candidates`, the best first.                                     |
+| `document_inspect`    | `{ id }`                                                   | `getElement()` with text, styles and table rows, geometry left out.                           |
+| `document_preview`    | `{ operations }`                                           | `apply()` with `dryRun: true`: the receipt an apply would give, or the issues.                |
+| `document_apply`      | `{ operations, label? }`                                   | `apply()`; `expectedRevision`, `changeMode` and `author` come from `ToolCallOptions`.         |
+| `document_undo`       | `{}`                                                       | `undo()`.                                                                                     |
+| `document_checkpoint` | `{ action: "create" \| "restore" \| "list", id?, label? }` | The checkpoint methods; `restore` takes `expectedRevision`.                                   |
+
+The `operations` of a batch validate against the session's operation
+schemas as one `oneOf`, so a model gets the same `invalid-operation` issues
+as any client, with `operationIndex` and `path`. Binary payloads travel as
+asset references: the host registers the bytes with `addAsset()` and the
+tool schema narrows `data` to `asset:<sha-256>`; a base64 payload in a tool
+call is refused with `unknown-asset` and guidance in `text`. A preview is
+not required before an apply (decision 9); `document_apply`'s description
+recommends one for batches above one operation, and says which change mode
+the format has.
+
+`ToolCallOptions` carries what the host decides per turn: `expectedRevision`
+(checked by every tool that changes the document), `changeMode` and `author`
+for `document_apply` (see tracked changes), and a `signal`.
+
+### Receipts in words
+
+`describeReceipt(format, operations, receipt)` (exported) is what
+`document_apply` and `document_preview` put in `text`: one sentence per
+operation in the format's words, with the id each creating operation got
+when the receipt names one per creation, then what else the receipt
+reports.
+
+```text
+Added a text box on page 1 (p0:n1). Deleted p0:o3. Removed p0:o3. Revision 3; changed pages 1, 2; 2 pages.
+Preview, nothing changed: Added a paragraph after p:1A000000 (p:2B000000). Would repaint 8 pages (1–8); 8 pages after.
+Deleted slide 3. Moved slide 1 to 4. Removed sld3:2, sld3:3. Revision 3; changed slides 1, 2, 3, 4; 4 slides.
+```
+
+### An agent turn
+
+1. `document_checkpoint { action: "create", label: "turn" }` so the whole
+   turn can be rejected at once.
+2. `document_describe {}`: the document with ids; keep `content.revision`.
+3. `document_find { text: "…" }` for what the person quoted; take the best
+   candidate's `elementId` and `range`.
+4. `document_preview { operations }` for a batch above one operation, then
+   `document_apply { operations }` with `expectedRevision` from step 2.
+5. On `ok: false`, read `issues` (`operationIndex`, `path`, `code`) and
+   `text`, fix the batch and send it again; on `edit-conflict`, describe
+   again first.
+6. To reject the turn: `document_checkpoint { action: "restore", id }`.
+
 ## Limits
 
 | Limit                | Default | Meaning                                                  |

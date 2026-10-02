@@ -1,6 +1,7 @@
 import { ViewerError } from "../../errors.js";
 import { readDescription, readOutline } from "../ai/outline.js";
 import { resolveTargets } from "../ai/targets.js";
+import { buildToolSet, callTool as runTool } from "../ai/tools.js";
 import type {
   DescribeOptions,
   DocumentDescription,
@@ -9,6 +10,10 @@ import type {
   OutlineResult,
   TargetCandidate,
   TargetQuery,
+  ToolCall,
+  ToolCallOptions,
+  ToolResult,
+  ToolSet,
 } from "../ai/types.js";
 import type { EditEngine, EditSessionCore } from "../engine.js";
 import type {
@@ -61,6 +66,7 @@ import type {
 export class PptxSession implements PptxEditSession {
   readonly format = "pptx" as const;
   readonly #core: EditSessionCore;
+  #tools: ToolSet | undefined;
 
   constructor(core: EditSessionCore) {
     this.#core = core;
@@ -181,6 +187,14 @@ export class PptxSession implements PptxEditSession {
 
   dropCheckpoint(id: string): void {
     this.#core.dropCheckpoint(id);
+  }
+
+  get tools(): ToolSet {
+    return (this.#tools ??= buildToolSet(this.format, this.schemas));
+  }
+
+  callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
+    return runTool(this, this.tools, call, options);
   }
 
   getSlides(options?: ReadOptions): Promise<ReadResult<PptxSlideInfo>> {
