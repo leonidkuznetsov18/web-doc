@@ -79,9 +79,20 @@ export function toElement(model: DocxModel, record: AnyRecord): DocxElement {
     id: record.elementId,
     kind: record.kind,
     parentId: record.paragraph.elementId,
+    ...(record.kind === "image" && record.extent
+      ? {
+          imageSize: {
+            width: record.extent.cx / EMU_PER_PX,
+            height: record.extent.cy / EMU_PER_PX,
+          },
+        }
+      : {}),
     operations: operationsOf(record.kind, false),
   };
 }
+
+/** EMU per CSS pixel at 96 dpi. */
+const EMU_PER_PX = 9525;
 
 function paragraphElement(
   model: DocxModel,

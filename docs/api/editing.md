@@ -873,8 +873,17 @@ sizes and spacing are points.
 | `replaceText({ target, text, range? })`           | Replaces the whole text of a paragraph, or the part a range covers (a collapsed range inserts). Newlines in `text` split the paragraph: the new paragraphs copy its properties (never a section break), get fresh ids reported in `createdIds`, and the text after the range moves to the last of them. `\t`, `\v` and `\f` write a tab, a line break and a page break. |
 | `setTextStyle({ target, range?, style })`         | Changes `fontFamily`, `fontSize`, `bold`, `italic`, `underline`, `color` (`#RRGGBB`, `"auto"` or `{ theme }` with a Word theme colour name such as `accent1` or `text1`) and `highlight` (a Word highlight name or `"none"`) on the runs a range covers, splitting runs at its ends; a range that reaches the paragraph end also sets the paragraph mark, so text typed after it inherits the change. |
 | `setParagraphStyle({ target, style })`            | Changes `align` (`left`, `center`, `right`, `justify`) and `spacing` (`before` and `after` in points, `line` as a multiple of single spacing); other paragraph properties keep their bytes.                                                                                                                                                 |
+| `insertParagraph({ before \| after, text, style? })` | Adds paragraphs next to a paragraph or table of the body or of a cell (one per line of `text`, ids in `createdIds`): a paragraph reference lends its properties without any section break and its first run's style, a table reference gives a plain paragraph; `style` merges into that. Inserting after the last paragraph keeps the body's section properties last. |
+| `deleteElement({ target })`                       | Removes a paragraph, a table or an inline picture. The last paragraph of the body or of a cell (`last-paragraph`) and a paragraph that ends a section (`section-break`) are refused; a body that would end with a table gets an empty paragraph (in `createdIds`). A picture's relationship goes with it when nothing else uses it; media parts stay. `removedIds` lists every element removed, a table's cell paragraphs included. |
+| `moveElement({ target, before \| after })`        | Moves a paragraph or a table next to another element of the same body or cell, bytes intact and id kept; a paragraph that ends a section cannot move.                                                                                                                                                                                       |
+| `insertImage({ before \| after, data, mimeType, size })` | Adds a paragraph holding an inline PNG or JPEG at `size` points (the display pre-pass fits it to the column like any other picture). The bytes are stored once under `word/media` and related from the document; `createdIds` names the paragraph, then the picture. |
 
-Every method targets a paragraph that is not read-only. The text model
+A table is named after its first paragraph, so an insertion, a move or a
+deletion that changes which paragraph comes first in its first cell
+renames the table: the receipt's `remappedIds` maps the old id to the new
+one.
+
+Every text method targets a paragraph that is not read-only. The text model
 offsets of `range` are those of the element's `text`. A range that starts
 or ends inside a field, or that cuts one edge of a hyperlink or an inline
 content control, is `invalid-range`; a range that lies inside a hyperlink
@@ -933,9 +942,13 @@ paragraph's. `bounds` and `pageIndex` are those of the first fragment.
 A query with `pageIndex` reads that page's runs and returns the elements
 with a fragment on it (`intersects` then filters by that fragment). A query
 without `pageIndex` lists every body element but reads only the pages the
-viewer has already laid out; an element on no laid-out page, and a
-paragraph that draws no run (an empty one), has `pageIndex` −1, empty
-`bounds` and an empty `fragments` list. `elementsAt()` reads the page's
+viewer has already laid out; an element on no laid-out page has
+`pageIndex` −1, empty `bounds` and an empty `fragments` list. A paragraph
+that draws no run (an empty one, or one holding only pictures) is placed by
+estimate: right after the placed paragraph before it in the same body or
+cell, else right before the one after it, a picture paragraph with its
+largest picture's declared extent (`imageSize` on the picture element) and
+an empty paragraph with a line of its neighbour's height. `elementsAt()` reads the page's
 runs and returns the paragraph under the point followed by its table.
 `findText()` searches the paragraphs' logical text in document order and
 places each match from the runs: the page that holds the paragraph is

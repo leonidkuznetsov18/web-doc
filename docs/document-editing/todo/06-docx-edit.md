@@ -464,10 +464,12 @@ Proposed in the draft; open for review.
   through their paragraph, page-scoped queries reading one page, page-less
   queries reading only cached pages, `elementsAt` through run boxes
   (paragraph then table), `findText` placing matches from the runs with
-  pages located cache-first. Known limits recorded in the docs: an empty
-  paragraph has no run and so no page until T55 writes geometry hints; a
+  pages located cache-first. Known limits recorded in the docs: a
   picture's box is its paragraph's (the renderer lists no picture
-  geometry). Tests: `docx-edit-inspect.test.ts` (10: ids against the
+  geometry); since T56 a paragraph that draws no run (empty, or pictures
+  only) is placed by estimate next to its placed neighbour, a picture
+  paragraph sized from its largest picture's extent (`imageSize` on the
+  picture element). Tests: `docx-edit-inspect.test.ts` (10: ids against the
   pre-pass, text model, read-only reasons, styles, search, identity,
   restore, broken package, schema conformance, corpus) and
   `docx-edit-session.test.ts` (5: join, cached pages, hit test, search
@@ -511,3 +513,30 @@ Proposed in the draft; open for review.
   split, `getPageText` after each, `documentchange` pages, reload of the
   saved bytes, undo to identical bytes, stable id of the untouched
   paragraph). Unit 394/394.
+- **T56 (2026-10-02)**: `insertParagraph`, `deleteElement`, `moveElement`
+  and `insertImage` in `src/edit/docx/structure-ops.ts`. Insertion is
+  one `insertBefore`/`insertAfter` patch per paragraph next to the
+  reference's node (a paragraph reference lends its `w:pPr` without
+  `w:sectPr` and its first run's `w:rPr`, a table reference a plain
+  paragraph; `style` merges in); the body's `w:sectPr` stays last by
+  construction. Deletion removes the block (or the `w:drawing` of a
+  picture, with the relationship only it used) and reports every element
+  under it in `removedIds` and every `w:p` in `removedParagraphIds` so the
+  engine's id list stays right; the last paragraph of a body or cell and
+  a section-break paragraph are refused (`last-paragraph`,
+  `section-break`); a body that would end with a table gains an empty
+  paragraph. A move cuts the block's bytes and re-inserts them with a
+  `w14:paraId` written on every paragraph in them (nested ones included),
+  so ids survive the move and the unauthored list only shrinks. Pictures
+  are a new paragraph with `wp:inline`, `wp:docPr` ids above any in the
+  part, bytes stored once under `word/media` (identical bytes reuse the
+  part), the `wp` and `r` namespaces declared on the root when missing.
+  A table is named after its first paragraph, so an insertion before it,
+  a move within the first cell or a deletion of it renames the table;
+  the operation reports `remappedIds` and the engine chains them through
+  a batch (`EngineChange.remappedIds`). Reflow starts at the reference or
+  the earlier of a move's two elements. Tests:
+  `docx-edit-structure.test.ts` (5) and the browser round trip in
+  `edit-docx.spec.ts` (insert with style, move before, picture after,
+  `getPageText` order, delete, reload, reset to identical bytes). Unit
+  399/399.

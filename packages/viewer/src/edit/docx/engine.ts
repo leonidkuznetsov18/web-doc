@@ -182,6 +182,7 @@ export class DocxEditEngine implements EditEngine {
     const warnings: ViewerWarning[] = [];
     const createdByOperation: string[][] = [];
     const issued = new Set<string>();
+    const remappedIds: Record<string, string> = {};
     let reflowFrom: string | undefined;
     try {
       for (const [index, raw] of batch.operations.entries()) {
@@ -219,6 +220,14 @@ export class DocxEditEngine implements EditEngine {
         removedIds.push(...(result.removedIds ?? []));
         warnings.push(...result.warnings);
         reflowFrom ??= result.reflowFrom;
+        // A table renamed twice in one batch maps its first id to its last.
+        for (const [from, to] of Object.entries(result.remappedIds ?? {})) {
+          const origin =
+            Object.entries(remappedIds).find(
+              ([, value]) => value === from,
+            )?.[0] ?? from;
+          remappedIds[origin] = to;
+        }
       }
     } catch (error) {
       // Everything the batch did, ids included, is undone.
@@ -236,6 +245,7 @@ export class DocxEditEngine implements EditEngine {
       // turns it into pages.
       changedPages: [],
       ...(reflowFrom === undefined ? {} : { reflowFrom }),
+      ...(Object.keys(remappedIds).length > 0 ? { remappedIds } : {}),
       warnings,
     };
   }

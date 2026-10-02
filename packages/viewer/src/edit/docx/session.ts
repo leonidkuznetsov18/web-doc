@@ -473,6 +473,82 @@ function withFragments(
   };
 }
 
+/** Characters a paragraph may hold without the renderer drawing a text run for it. */
+const INVISIBLE = /^[\ufffc\s]*$/;
+
+/**
+ * A paragraph that draws no run (empty, or holding only pictures) is
+ * placed by estimate right after the placed paragraph before it in the
+ * same body or cell, else right before the one after it: a picture
+ * paragraph takes its largest picture's extent, an empty one a line of
+ * its neighbour's height. Nothing is estimated for a paragraph with text,
+ * whose runs simply lie on a page not read yet.
+ */
+function estimateRunless(
+  elements: readonly DocxElement[],
+  placed: Map<string, DocxElement>,
+): void {
+  const paragraphs = elements.filter((element) => element.kind === "paragraph");
+  const sizeOf = (
+    paragraph: DocxElement,
+  ): { width: number; height: number } | undefined => {
+    const pictures = elements.filter(
+      (candidate) =>
+        candidate.kind === "image" &&
+        candidate.parentId === paragraph.id &&
+        candidate.imageSize,
+    );
+    if (pictures.length === 0) return undefined;
+    return {
+      width: Math.max(...pictures.map((picture) => picture.imageSize!.width)),
+      height: Math.max(...pictures.map((picture) => picture.imageSize!.height)),
+    };
+  };
+  for (const [index, paragraph] of paragraphs.entries()) {
+    const current = placed.get(paragraph.id)!;
+    if (current.pageIndex >= 0 || !INVISIBLE.test(paragraph.text ?? ""))
+      continue;
+    const sibling = (step: number): ElementFragment | undefined => {
+      for (
+        let at = index + step;
+        at >= 0 && at < paragraphs.length;
+        at += step
+      ) {
+        const other = paragraphs[at]!;
+        if (other.parentId !== paragraph.parentId) continue;
+        const fragments = placed.get(other.id)?.fragments ?? [];
+        const fragment = step < 0 ? fragments.at(-1) : fragments[0];
+        if (fragment) return fragment;
+        if (!INVISIBLE.test(other.text ?? "")) return undefined;
+      }
+      return undefined;
+    };
+    const before = sibling(-1);
+    const after = before ? undefined : sibling(1);
+    const anchor = before ?? after;
+    if (!anchor) continue;
+    const size = sizeOf(paragraph) ?? {
+      width: anchor.bounds.width,
+      height: anchor.bounds.height,
+    };
+    const bounds = before
+      ? {
+          x: before.bounds.x,
+          y: before.bounds.y + before.bounds.height,
+          ...size,
+        }
+      : {
+          x: after!.bounds.x,
+          y: Math.max(0, after!.bounds.y - size.height),
+          ...size,
+        };
+    placed.set(
+      paragraph.id,
+      withFragments(paragraph, [{ pageIndex: anchor.pageIndex, bounds }]),
+    );
+  }
+}
+
 /** Joins the engine's elements with the runs' placement. */
 export function placeElements(
   elements: readonly DocxElement[],
@@ -486,6 +562,7 @@ export function placeElements(
         element.id,
         withFragments(element, fragmentsOf(placement.get(element.id.slice(2)))),
       );
+  estimateRunless(elements, placed);
   for (const element of elements) {
     if (element.kind === "table") {
       const pages = new Map<number, PageRect>();

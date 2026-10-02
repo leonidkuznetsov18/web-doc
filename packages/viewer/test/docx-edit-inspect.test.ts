@@ -103,12 +103,28 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
         assert.deepEqual(element.bounds, { x: 0, y: 0, width: 0, height: 0 });
         assert.deepEqual(element.fragments, []);
         assert.deepEqual(element.story, { kind: "body" });
-        // Only the shipped handlers are offered; tables and pictures wait.
+        // Only the shipped handlers are offered; tables' own operations wait.
         assert.deepEqual(
           element.operations,
-          element.kind === "paragraph"
-            ? ["replaceText", "setTextStyle", "setParagraphStyle"]
-            : [],
+          {
+            paragraph: [
+              "replaceText",
+              "setTextStyle",
+              "setParagraphStyle",
+              "insertParagraph",
+              "insertImage",
+              "moveElement",
+              "deleteElement",
+            ],
+            table: [
+              "insertParagraph",
+              "insertImage",
+              "moveElement",
+              "deleteElement",
+            ],
+            image: ["deleteElement"],
+            other: [],
+          }[element.kind],
         );
       }
       assert.equal(

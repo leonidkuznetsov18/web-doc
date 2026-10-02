@@ -1,5 +1,11 @@
 import type { DocxOperationHandler } from "./operations.js";
 import {
+  deleteElementHandler,
+  insertImageHandler,
+  insertParagraphHandler,
+  moveElementHandler,
+} from "./structure-ops.js";
+import {
   replaceTextHandler,
   setParagraphStyleHandler,
   setTextStyleHandler,
@@ -13,4 +19,8 @@ export const docxHandlers: ReadonlyMap<string, DocxOperationHandler> = new Map<
   ["replaceText", replaceTextHandler as DocxOperationHandler],
   ["setTextStyle", setTextStyleHandler as DocxOperationHandler],
   ["setParagraphStyle", setParagraphStyleHandler as DocxOperationHandler],
+  ["insertParagraph", insertParagraphHandler as DocxOperationHandler],
+  ["deleteElement", deleteElementHandler as DocxOperationHandler],
+  ["moveElement", moveElementHandler as DocxOperationHandler],
+  ["insertImage", insertImageHandler as DocxOperationHandler],
 ]);

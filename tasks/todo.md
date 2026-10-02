@@ -1646,8 +1646,9 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
       `setParagraphStyle`, schema-order merges, fields, hyperlinks, inline sdt,
       paragraph splits, the id rule of `materialize`. (2026-10-02; also the
       reflow plumbing: `reflowFrom` → `pageOf` → pages to the end)
-- [ ] Task 56: Structure and pictures — `insertParagraph`, `deleteElement`,
-      `moveElement`, `insertImage`.
+- [x] Task 56: Structure and pictures — `insertParagraph`, `deleteElement`,
+      `moveElement`, `insertImage`. (2026-10-02; table ids follow their first
+      paragraph and are reported through `remappedIds`)
 - [ ] Task 57: Tables — `insertTable`, `setTableCell`.
 - [ ] Task 58: Round trip, latency on 10/100/500 pages, `npm run
     fixtures:docx`, docs, `npm run check`, Linear proofs.

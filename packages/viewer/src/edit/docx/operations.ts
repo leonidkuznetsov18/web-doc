@@ -34,6 +34,8 @@ export interface DocxOperationResult {
   readonly removedParagraphIds?: readonly string[];
   /** The paragraph id the document reflows from. */
   readonly reflowFrom?: string;
+  /** Old id → new id, for a table whose first paragraph changed. */
+  readonly remappedIds?: Readonly<Record<string, string>>;
 }
 
 export type Issue = (path: string, code: string, message: string) => void;

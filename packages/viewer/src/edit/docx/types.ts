@@ -102,6 +102,8 @@ export interface DocxElement extends EditElement {
   readonly table?: { readonly rows: readonly (readonly string[])[] };
   /** Present for a paragraph whose text cannot be edited in place. */
   readonly readOnlyReason?: DocxReadOnlyReason;
+  /** Present for an inline picture: its declared extent in page space (CSS pixels). */
+  readonly imageSize?: { readonly width: number; readonly height: number };
 }
 
 export interface DocxTextStyleChange {

@@ -224,6 +224,10 @@ export const IMPLEMENTED_OPERATIONS: readonly string[] = [
   "replaceText",
   "setTextStyle",
   "setParagraphStyle",
+  "insertParagraph",
+  "deleteElement",
+  "moveElement",
+  "insertImage",
 ];
 
 export const docxOperationSchemas: OperationSchemaSet = Object.freeze({

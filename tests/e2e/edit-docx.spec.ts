@@ -379,3 +379,104 @@ test("replaces and restyles paragraph text so the renderer shows it, repaints fr
   // The untouched paragraph kept its id through every edit and undo.
   expect(result.thirdAfter).toBe(result.third);
 });
+
+test("inserts, moves and deletes paragraphs and pictures that the renderer draws in the new order", async ({
+  page,
+}) => {
+  const bytes = buildDocx({
+    body:
+      paragraph("Alpha paragraph") +
+      paragraph("Beta paragraph") +
+      paragraph("Gamma paragraph") +
+      sectPr(),
+  });
+  // A 1×1 PNG, so the renderer has real pixels to decode.
+  const png = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    ),
+    (c) => c.charCodeAt(0),
+  );
+  await loadDocument(page, bytes, "structure.docx");
+  const result = await page.evaluate(
+    async ({ data, png }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const [alpha, beta, gamma] = (await session.getElements({ pageIndex: 0 }))
+        .items as Element[];
+      const inserted = await session.insertParagraph({
+        after: alpha!.id,
+        text: "Inserted after alpha",
+        style: { italic: true },
+      });
+      const moved = await session.moveElement({
+        target: gamma!.id,
+        before: alpha!.id,
+      });
+      const picture = await session.insertImage({
+        after: beta!.id,
+        data: new Uint8Array(png),
+        mimeType: "image/png",
+        size: { width: 48, height: 48 },
+      });
+      const afterInserts = await viewer.getPageText(0);
+      const placed = (await session.getElements({ pageIndex: 0 }))
+        .items as Element[];
+      const deleted = await session.deleteElement({ target: beta!.id });
+      const afterDelete = await viewer.getPageText(0);
+      const saved = await session.save();
+      const client = (await import("/main.js")) as any;
+      const fresh = client.ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href),
+        fontPolicy: { mode: "offline" },
+      }).createViewer();
+      await fresh.load(saved.bytes, { fileName: "structured.docx" });
+      const reloaded = await fresh.getPageText(0);
+      await fresh.destroy();
+      await session.reset();
+      const restored = await session.save();
+      const identical =
+        restored.bytes.length === data.length &&
+        restored.bytes.every(
+          (byte: number, index: number) => byte === data[index],
+        );
+      return {
+        inserted: inserted.createdIds,
+        movedPages: moved.changedPages,
+        picture: picture.createdIds,
+        afterInserts,
+        order: placed.map((element) => [element.kind, element.text]),
+        imagePlaced: placed.find((element) => element.kind === "image")!,
+        deleted: deleted.removedIds,
+        afterDelete,
+        reloaded,
+        identical,
+      };
+    },
+    { data: Array.from(bytes), png: Array.from(png) },
+  );
+  expect(result.inserted).toHaveLength(1);
+  expect(result.movedPages).toEqual([0]);
+  expect(result.picture).toHaveLength(2);
+  const alphaAt = result.afterInserts.indexOf("Alpha");
+  const gammaAt = result.afterInserts.indexOf("Gamma");
+  const insertedAt = result.afterInserts.indexOf("Inserted after alpha");
+  expect(gammaAt).toBeGreaterThanOrEqual(0);
+  expect(gammaAt).toBeLessThan(alphaAt);
+  expect(insertedAt).toBeGreaterThan(alphaAt);
+  expect(result.order).toEqual([
+    ["paragraph", "Gamma paragraph"],
+    ["paragraph", "Alpha paragraph"],
+    ["paragraph", "Inserted after alpha"],
+    ["paragraph", "Beta paragraph"],
+    ["paragraph", "\ufffc"],
+    ["image", undefined],
+  ]);
+  // The picture's paragraph is placed from the runs; the picture takes it.
+  expect(result.imagePlaced.pageIndex).toBe(0);
+  expect(result.deleted).toEqual([expect.stringMatching(/^p:/)]);
+  expect(result.afterDelete).not.toContain("Beta paragraph");
+  expect(result.reloaded).toContain("Inserted after alpha");
+  expect(result.reloaded).not.toContain("Beta paragraph");
+  expect(result.identical).toBe(true);
+});

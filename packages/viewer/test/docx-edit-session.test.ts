@@ -66,6 +66,7 @@ describe("DOCX edit session: geometry join (docx-edit T54)", () => {
           ["paragraph", 0],
           ["paragraph", 0],
           ["paragraph", 0],
+          ["paragraph", 0],
         ],
       );
       assert.deepEqual(page0[0]!.bounds, {
@@ -83,14 +84,19 @@ describe("DOCX edit session: geometry join (docx-edit T54)", () => {
       assert.deepEqual(page0[4]!.fragments, [
         { pageIndex: 0, bounds: { x: 72, y: 130, width: 84, height: 12 } },
       ]);
-      // The empty paragraph draws no run and "Last" is on page 1.
-      assert.equal(page0.length, 5);
+      // The empty paragraph draws no run: it is placed by estimate right
+      // after the last placed paragraph before it; "Last" is on page 1.
+      assert.equal(page0.length, 6);
+      assert.deepEqual(page0[5]!.fragments, [
+        { pageIndex: 0, bounds: { x: 72, y: 142, width: 84, height: 12 } },
+      ]);
 
       const page1 = (await session.getElements({ pageIndex: 1 })).items;
       assert.deepEqual(
         page1.map((element) => [element.text, element.pageIndex]),
         [
           ["Long paragraph that continues", 1],
+          ["", 1],
           ["Last", 1],
         ],
       );
@@ -103,10 +109,14 @@ describe("DOCX edit session: geometry join (docx-edit T54)", () => {
       assert.equal(long2.pageIndex, 0);
       assert.equal(long2.fragments!.length, 2);
       assert.deepEqual(long2.bounds, { x: 72, y: 130, width: 84, height: 12 });
+      // With both pages known, the estimate follows the long paragraph's
+      // last fragment on page 1.
       const empty = all[5]!;
       assert.equal(empty.text, "");
-      assert.equal(empty.pageIndex, -1);
-      assert.deepEqual(empty.fragments, []);
+      assert.equal(empty.pageIndex, 1);
+      assert.deepEqual(empty.fragments, [
+        { pageIndex: 1, bounds: { x: 72, y: 84, width: 84, height: 12 } },
+      ]);
 
       const intersecting = (
         await session.getElements({
@@ -234,6 +244,10 @@ describe("DOCX edit session: geometry join (docx-edit T54)", () => {
         "replaceText",
         "setTextStyle",
         "setParagraphStyle",
+        "insertParagraph",
+        "deleteElement",
+        "moveElement",
+        "insertImage",
       ]);
       await assert.rejects(
         session.applyJson([
