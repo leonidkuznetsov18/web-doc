@@ -1671,7 +1671,7 @@ Spec approved 2026-10-02 (decisions 8–10). Commits carry `[linear:ACTION-858]`
 - [x] Task 60: Target resolution — `resolveTargets()` with the exact,
       normalized, fuzzy and kind-only passes over `findText()` and the
       elements' text, ranges on candidates, citation queries; unit tests.
-- [ ] Task 61: Named checkpoints — `createCheckpoint`, `listCheckpoints`,
+- [x] Task 61: Named checkpoints — `createCheckpoint`, `listCheckpoints`,
       `restoreCheckpoint` (a history entry), `dropCheckpoint`, pins over the
       R2 retention, `maxEditCheckpoints`; unit tests on the fake engine and
       a PDF session.

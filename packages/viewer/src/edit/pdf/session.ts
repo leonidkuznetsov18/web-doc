@@ -5,6 +5,7 @@ import { resolveTargets } from "../ai/targets.js";
 import type {
   DescribeOptions,
   DocumentDescription,
+  EditCheckpoint,
   OutlineOptions,
   OutlineResult,
   TargetCandidate,
@@ -280,6 +281,25 @@ export class PdfSession implements PdfEditSession {
     options?: ReadOptions,
   ): Promise<ReadResult<TargetCandidate>> {
     return resolveTargets(this, query, options);
+  }
+
+  createCheckpoint(label?: string): Promise<EditCheckpoint> {
+    return this.#core.createCheckpoint(label);
+  }
+
+  listCheckpoints(): readonly EditCheckpoint[] {
+    return this.#core.listCheckpoints();
+  }
+
+  restoreCheckpoint(
+    id: string,
+    options?: HistoryOptions,
+  ): Promise<EditReceipt> {
+    return this.#core.restoreCheckpoint(id, options);
+  }
+
+  dropCheckpoint(id: string): void {
+    this.#core.dropCheckpoint(id);
   }
 
   getTextLayout(

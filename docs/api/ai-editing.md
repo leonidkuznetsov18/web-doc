@@ -162,11 +162,49 @@ operations take.
 Without text and without `kinds` the result is empty; with text that
 nothing resembles it is empty as well, never an error.
 
+## Checkpoints
+
+```ts
+const checkpoint = await session.createCheckpoint("before the agent's turn");
+// … the agent applies a few batches …
+if (!accepted) await session.restoreCheckpoint(checkpoint.id);
+session.dropCheckpoint(checkpoint.id);
+```
+
+A checkpoint pins a state the host names, typically before an agent's turn,
+so the whole turn can be reviewed and rejected at once. It is session state:
+gone with the session, like the history.
+
+| Method                            | What it does                                                                                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createCheckpoint(label?)`        | Pins the current state; queued like a change, so it names the state after the calls before it. Rejects with `resource-limit` past `maxEditCheckpoints`. |
+| `listCheckpoints()`               | Every checkpoint alive, in creation order: `{ id, label?, revision, createdAt }`.                                                                       |
+| `restoreCheckpoint(id, options?)` | Back to the checkpoint's content as one history entry. Takes `expectedRevision` like `undo()`. Rejects with `invalid-operation` for an unknown id.      |
+| `dropCheckpoint(id)`              | Forgets it; unknown ids are ignored.                                                                                                                    |
+
+A restore is a change: it bumps the revision, emits `editstatechange` and
+`documentchange` with reason `restore` and every page of the larger of the
+two states, and returns a receipt whose `removedIds` and `createdIds` are
+the net of the batches between the two states. `undo()` then returns to the
+state before the restore, `redo()` to the checkpoint again; restoring the
+state the session is in is a no-op. A checkpoint survives `undo()`, `redo()`
+and `reset()`, and can be restored from a branch the history has dropped (a
+new change after an undo). Restoring a checkpoint of a state that was saved
+makes `dirty` false again, since the content is the same.
+
+The session already retains the bytes of some states for fast undo (the
+editing API's checkpoints, within `maxEditCheckpointBytes`). A named
+checkpoint pins its state's bytes: they are never evicted while a checkpoint
+names them, they count against the budget, and when the budget cannot hold
+them the restore replays the checkpoint's batches from the original instead.
+The content is the same either way.
+
 ## Limits
 
-| Limit              | Default | Meaning                                                  |
-| ------------------ | ------- | -------------------------------------------------------- |
-| `maxOutlineNodes`  | 5 000   | Nodes a `getOutline()` returns; more is cut and reported |
-| `maxDescribeChars` | 200 000 | Upper bound of `DescribeOptions.maxChars`                |
+| Limit                | Default | Meaning                                                  |
+| -------------------- | ------- | -------------------------------------------------------- |
+| `maxOutlineNodes`    | 5 000   | Nodes a `getOutline()` returns; more is cut and reported |
+| `maxDescribeChars`   | 200 000 | Upper bound of `DescribeOptions.maxChars`                |
+| `maxEditCheckpoints` | 20      | Named checkpoints alive at once                          |
 
-Both join `ResourceLimits` and are raised through `ViewerClient.create({ limits })`.
+All three join `ResourceLimits` and are raised through `ViewerClient.create({ limits })`.

@@ -116,6 +116,8 @@ export interface ResourceLimits {
   readonly maxOutlineNodes: number;
   /** Upper bound of `describe()`'s character budget. */
   readonly maxDescribeChars: number;
+  /** Named edit checkpoints alive at once in a session. */
+  readonly maxEditCheckpoints: number;
 }
 
 export type BinaryDocumentSource = ArrayBuffer | Uint8Array | Blob;

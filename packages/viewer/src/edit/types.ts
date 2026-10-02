@@ -310,7 +310,13 @@ export interface EditStateChange extends EditState {
   readonly format?: EditableFormat;
 }
 
-export type DocumentChangeReason = "apply" | "undo" | "redo" | "reset";
+export type DocumentChangeReason =
+  | "apply"
+  | "undo"
+  | "redo"
+  | "reset"
+  /** `restoreCheckpoint()`: the content of a named checkpoint, as one history entry. */
+  | "restore";
 
 export interface DocumentChange {
   readonly sessionId: string;

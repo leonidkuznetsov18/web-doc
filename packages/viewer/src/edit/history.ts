@@ -16,6 +16,20 @@ export interface HistoryEntry {
   readonly pageCountAfter: number;
   /** Identifies the content after this batch; equal ids mean equal content. */
   readonly stateId: number;
+  /**
+   * A restore to a named checkpoint: the content after this entry is the
+   * checkpoint's, so a replay starts from its retained bytes or from the
+   * original plus `batches`, never from the entries before.
+   */
+  readonly base?: HistoryBase;
+}
+
+/** Where a restore entry's content comes from. */
+export interface HistoryBase {
+  /** The checkpoint's state id; its bytes may be retained under it. */
+  readonly stateId: number;
+  /** The batches that build the checkpoint's state from the original. */
+  readonly batches: readonly EngineBatch[];
 }
 
 /**
@@ -70,7 +84,12 @@ export class EditHistory {
 
   /** State ids of every entry still in the history, folded and redo tail included. */
   get stateIds(): readonly number[] {
-    return [...this.#folded, ...this.#entries].map((entry) => entry.stateId);
+    return this.allEntries.map((entry) => entry.stateId);
+  }
+
+  /** Every entry still in the history: folded ones, then the undoable ones and the redo tail. */
+  get allEntries(): readonly HistoryEntry[] {
+    return [...this.#folded, ...this.#entries];
   }
 
   /** The entry `undo()` would revert, if any. */
@@ -105,10 +124,15 @@ export class EditHistory {
     return this.#position;
   }
 
-  push(entry: Omit<HistoryEntry, "stateId">): HistoryEntry {
+  /**
+   * Appends an entry with a fresh state id, or with `stateId` when the entry
+   * reproduces a known state (a restore to a checkpoint): the same id means
+   * the same content, so `dirty` stays exact.
+   */
+  push(entry: Omit<HistoryEntry, "stateId">, stateId?: number): HistoryEntry {
     const stored: HistoryEntry = Object.freeze({
       ...entry,
-      stateId: this.#nextStateId++,
+      stateId: stateId ?? this.#nextStateId++,
     });
     // A new change after an undo drops the redo tail.
     this.#entries.length = this.#position;

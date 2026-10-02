@@ -1,5 +1,7 @@
 import type {
   EditableFormat,
+  EditReceipt,
+  HistoryOptions,
   ReadItem,
   ReadOptions,
   ReadResult,
@@ -105,7 +107,18 @@ export interface TargetCandidate {
   readonly snippet: string;
 }
 
-/** The AI-facing reads every edit session has. */
+/** A state the host named, to come back to; session state, gone with the session. */
+export interface EditCheckpoint {
+  /** 22 URL-safe characters, unique in the session. */
+  readonly id: string;
+  readonly label?: string;
+  /** The revision it names. */
+  readonly revision: number;
+  /** ISO 8601. */
+  readonly createdAt: string;
+}
+
+/** The AI-facing reads and the checkpoints every edit session has. */
 export interface EditSessionReads {
   /** The body elements in reading order, shaped for a prompt. */
   getOutline(options?: OutlineOptions): Promise<OutlineResult>;
@@ -121,4 +134,19 @@ export interface EditSessionReads {
     query: TargetQuery,
     options?: ReadOptions,
   ): Promise<ReadResult<TargetCandidate>>;
+  /**
+   * Pins the current state under a new id. Rejects with `resource-limit`
+   * past `maxEditCheckpoints`.
+   */
+  createCheckpoint(label?: string): Promise<EditCheckpoint>;
+  /** Every checkpoint alive, in creation order. */
+  listCheckpoints(): readonly EditCheckpoint[];
+  /**
+   * Back to the checkpoint's content as one history entry: undoable, a new
+   * revision, `documentchange` with reason `restore`. Rejects with
+   * `invalid-operation` for an unknown id.
+   */
+  restoreCheckpoint(id: string, options?: HistoryOptions): Promise<EditReceipt>;
+  /** Forgets a checkpoint; unknown ids are ignored. */
+  dropCheckpoint(id: string): void;
 }
