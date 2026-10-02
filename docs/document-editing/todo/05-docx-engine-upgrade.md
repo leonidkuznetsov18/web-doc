@@ -192,7 +192,10 @@ Proposed in the draft; the bump itself awaits approval.
   Unit tests (`docx-prepass.test.ts`, 6) cover sections, tables, `w:sdt`,
   authored ids, existing bookmarks, empty paragraphs, unreadable input and
   the fixture; `docx-inline-images.spec.ts` passes through the pre-pass on
-  the shipped engine; the spike now renders the pre-passed fixture
+  the shipped engine; after the review, ids and bookmark numbers are unique
+  across every story part of a document (one counter threads body,
+  headers, footers, footnotes and endnotes) and empty paragraphs are
+  rewritten as one element patch; the spike now renders the pre-passed fixture
   identically on 0.88 (SSIM 1.000 for both fixtures) and resolves all 228
   runs of `sample.docx` to their paragraph through the bookmark bridge.
 

@@ -239,11 +239,11 @@ function walkTree(
         );
         if (!record) break;
         walk.records.push(record);
-        if (node.local === "grpSp" && record.xfrm)
+        if (node.local === "grpSp")
           walkTree(
             context,
             node,
-            multiply(parents, groupMatrix(record.xfrm)),
+            record.xfrm ? multiply(parents, groupMatrix(record.xfrm)) : parents,
             record,
             readOnly,
             walk,

@@ -1,21 +1,23 @@
 import { resolveBinary } from "../assets.js";
 import { patches } from "../ooxml/patch.js";
+import { escapeText } from "../ooxml/xml.js";
 import type { XmlElement, XmlPart } from "../ooxml/xml.js";
 import type { ShapeRecord } from "./elements.js";
 import { extensionForMime } from "../ooxml/opc.js";
 import { relativeTarget } from "../ooxml/transaction.js";
 import { pxToEmu } from "./geometry.js";
 import { RELATIONSHIP_TYPES } from "./model.js";
-import type {
-  Issue,
-  PptxOperationContext,
-  PptxOperationHandler,
-  PptxOperationResult,
+import {
+  committedParts,
+  type Issue,
+  type PptxOperationContext,
+  type PptxOperationHandler,
+  type PptxOperationResult,
 } from "./operations.js";
-import { nextShapeId, paragraphsXml } from "./shape-ops.js";
+import { paragraphsXml } from "./shape-ops.js";
 import { readTextModel } from "./text.js";
 import { replacedBodyContent } from "./text-ops.js";
-import { textProblem } from "./text-write.js";
+import { normalizeText, textProblem } from "./text-write.js";
 import type {
   PptxInsertImageOperation,
   PptxInsertTableOperation,
@@ -70,7 +72,7 @@ export const insertImageHandler: PptxOperationHandler<PptxInsertImageOperation> 
       const elements = await context.elements(operation.pageIndex);
       const { part, slide } = elements;
       const tree = part.find("spTree")!;
-      const id = nextShapeId(elements);
+      const id = context.allocateShapeId(elements);
       const bytes = resolveBinary(operation.data, context.assets);
       const transaction = context.pkg.transaction();
       // The same bytes already in the package are related, not stored again.
@@ -100,6 +102,7 @@ export const insertImageHandler: PptxOperationHandler<PptxInsertImageOperation> 
         createdIds: [`${slide.key}:${id}`],
         changedPages: [operation.pageIndex],
         warnings: change.warnings,
+        parts: committedParts(change),
       };
     },
   };
@@ -176,7 +179,7 @@ export const insertTableHandler: PptxOperationHandler<PptxInsertTableOperation> 
         );
       operation.rows.forEach((row, rowIndex) =>
         row.forEach((cell, columnIndex) => {
-          const problem = textProblem(cell);
+          const problem = textProblem(normalizeText(cell));
           if (problem)
             issue(
               `/rows/${rowIndex}/${columnIndex}`,
@@ -190,7 +193,7 @@ export const insertTableHandler: PptxOperationHandler<PptxInsertTableOperation> 
       const elements = await context.elements(operation.pageIndex);
       const { part, slide } = elements;
       const tree = part.find("spTree")!;
-      const id = nextShapeId(elements);
+      const id = context.allocateShapeId(elements);
       const { rect, rows } = operation;
       const columns = rows[0]!.length;
       const weights =
@@ -217,7 +220,7 @@ export const insertTableHandler: PptxOperationHandler<PptxInsertTableOperation> 
       const styleId = await defaultTableStyle(context);
       const tblPr = `<a:tblPr firstRow="${style.firstRow === false ? 0 : 1}" bandRow="${style.bandRow === false ? 0 : 1}"${
         styleId
-          ? `><a:tableStyleId>${styleId}</a:tableStyleId></a:tblPr>`
+          ? `><a:tableStyleId>${escapeText(styleId)}</a:tableStyleId></a:tblPr>`
           : "/>"
       }`;
       const grid = `<a:tblGrid>${gridWidths.map((w) => `<a:gridCol w="${w}"/>`).join("")}</a:tblGrid>`;
@@ -227,7 +230,7 @@ export const insertTableHandler: PptxOperationHandler<PptxInsertTableOperation> 
             `<a:tr h="${rowHeights[rowIndex]}">${row
               .map(
                 (cell) =>
-                  `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/>${paragraphsXml(part, cell, undefined)}</a:txBody><a:tcPr/></a:tc>`,
+                  `<a:tc><a:txBody><a:bodyPr/><a:lstStyle/>${paragraphsXml(part, normalizeText(cell), undefined)}</a:txBody><a:tcPr/></a:tc>`,
               )
               .join("")}</a:tr>`,
         )
@@ -243,6 +246,7 @@ export const insertTableHandler: PptxOperationHandler<PptxInsertTableOperation> 
         createdIds: [`${slide.key}:${id}`],
         changedPages: [operation.pageIndex],
         warnings: change.warnings,
+        parts: committedParts(change),
       };
     },
   };
@@ -295,7 +299,7 @@ async function cellTarget(
 export const setTableCellHandler: PptxOperationHandler<PptxSetTableCellOperation> =
   {
     async validate(operation, context, issue) {
-      const problem = textProblem(operation.text);
+      const problem = textProblem(normalizeText(operation.text));
       if (problem) issue("/text", "invalid-text", `The text holds ${problem}`);
       await cellTarget(operation, context, issue);
     },
@@ -317,7 +321,7 @@ export const setTableCellHandler: PptxOperationHandler<PptxSetTableCellOperation
               part,
               txBody,
               model,
-              operation.text,
+              normalizeText(operation.text),
               0,
               model.text.length,
               true,
@@ -325,7 +329,7 @@ export const setTableCellHandler: PptxOperationHandler<PptxSetTableCellOperation
           ),
         ]);
       } else {
-        const xml = `<a:txBody><a:bodyPr/><a:lstStyle/>${paragraphsXml(part, operation.text, undefined)}</a:txBody>`;
+        const xml = `<a:txBody><a:bodyPr/><a:lstStyle/>${paragraphsXml(part, normalizeText(operation.text), undefined)}</a:txBody>`;
         const tcPr = cell.children.find((child) => child.local === "tcPr");
         transaction.patch(part, [
           tcPr
@@ -338,6 +342,7 @@ export const setTableCellHandler: PptxOperationHandler<PptxSetTableCellOperation
         createdIds: [],
         changedPages: [record.element.pageIndex],
         warnings: change.warnings,
+        parts: committedParts(change),
       };
       return result;
     },

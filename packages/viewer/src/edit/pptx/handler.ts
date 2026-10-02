@@ -44,12 +44,15 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
             `The OOXML edit worker does not serve ${open.format} yet`,
             { details: { format: open.format, reason: "no-engine" } },
           );
-        await state?.dispose();
-        state = await PptxEditEngine.open(
+        // The live engine stays until the next one opened, so a failed or
+        // aborted open leaves the worker serving what it served before.
+        const next = await PptxEditEngine.open(
           new Uint8Array(open.data),
           open.limits,
           signal,
         );
+        await state?.dispose();
+        state = next;
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
         return result;
       }

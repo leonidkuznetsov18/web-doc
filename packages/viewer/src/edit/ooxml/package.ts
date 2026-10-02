@@ -262,7 +262,6 @@ export class OoxmlPackage {
     }
     const revision = this.#overlay.revision + 1;
     this.#overlay = Object.freeze({ revision, changed, added, removed });
-    this.#snapshots.set(revision, this.#overlay);
     return { revision };
   }
 
@@ -272,6 +271,12 @@ export class OoxmlPackage {
     return { revision: this.#overlay.revision };
   }
 
+  /**
+   * Swaps the overlay back. Parts scanned after the snapshot describe a
+   * state that is gone (and a later commit could reach the same revision
+   * number with other content), so the scan cache is dropped. Other
+   * snapshots stay: a caller may restore a later one again.
+   */
   restore(snapshot: PackageSnapshot): void {
     const overlay = this.#snapshots.get(snapshot.revision);
     if (!overlay)
@@ -279,6 +284,13 @@ export class OoxmlPackage {
         details: { revision: snapshot.revision },
       });
     this.#overlay = overlay;
+    this.#xml.clear();
+  }
+
+  /** Forgets a snapshot that will not be restored, so its overlay can be collected. */
+  release(snapshot: PackageSnapshot): void {
+    if (this.#overlay.revision !== snapshot.revision)
+      this.#snapshots.delete(snapshot.revision);
   }
 
   /** The package bytes: the original (copied) when nothing changed. */

@@ -766,11 +766,12 @@ interface PptxShapeStyle {
 Ids are `<slide key>:<shape id>`, for example `sld3:7`: the number of the
 slide part and `p:cNvPr/@id`. They are stable across reordering and across
 sessions on the same file, so a host can persist them. A file with duplicate
-ids on one slide gets `#2`, `#3` suffixes on the later duplicates. New
-elements take the next free id of their slide and a new slide the next free
-slide number, as PowerPoint allocates them, so a replay reproduces them; a
-slide number is reissued only after a slide the session created was deleted
-and its elements reported in `removedIds`.
+ids on one slide gets `#2`, `#3` suffixes on the later duplicates. A new
+element takes an id above every id its slide holds or held in the session
+(an id is never reused after a deletion, and a replay issues the same
+ids); a new slide takes the next free slide number, as PowerPoint allocates
+them, so a slide number is reissued only after a slide the session created
+was deleted and its elements reported in `removedIds`.
 
 `textStyle` describes the first run with text, resolved through the
 placeholder chain (run, the shape's list style, the layout placeholder, the
@@ -801,6 +802,11 @@ for its old text; `replaceText` and `setTextStyle` drop that scale, so the
 text shows unscaled until PowerPoint lays the shape out again — it may
 overflow the box in the viewer until then.
 
+Text is written as given, except that `\r\n` and `\r` become `\n` (the
+element's `text` reads back normalized) and a range may not split a
+surrogate pair (`invalid-range`). Slide-space coordinates are bounded to
+±2.8 billion pixels (DrawingML's own limit) by the schemas.
+
 ### What stays unchanged
 
 Everything an operation does not touch keeps its bytes: other shapes, other
@@ -808,6 +814,14 @@ slides, layouts, masters, themes, notes, comments, animations, transitions,
 custom XML and extension lists. Layouts, masters and notes are not editable.
 Table cells accept text changes only. Fonts are written by name; nothing is
 embedded, and PowerPoint substitutes a missing face.
+
+Two cases do reach beyond the element: deleting a shape that a slide's
+animations target removes the slide's `p:timing` with it (an animation
+pointing at a missing shape makes PowerPoint repair the file) and reports
+a `fidelity-degraded` warning with `details.reason: "animations-removed"`;
+and slide operations keep the deck's sections (`p14:sectionLst`) and custom
+shows in step, so a new slide joins the section of the slide before it and
+a deleted slide leaves both lists.
 
 ### PPTX issue codes
 

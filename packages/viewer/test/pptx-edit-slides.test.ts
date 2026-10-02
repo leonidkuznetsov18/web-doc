@@ -341,7 +341,7 @@ describe("PPTX slide operations (pptx-edit)", () => {
     );
     const change = await run(engine, [{ op: "deleteSlide", pageIndex: 0 }]);
     assert.deepEqual(change.removedIds, ["sld1:2", "sld1:3"]);
-    assert.deepEqual(change.changedPages, [0, 1]);
+    assert.deepEqual(change.changedPages, [0]);
     assert.equal(change.pageCount, 1);
     assert.deepEqual(change.warnings, []);
     assert.deepEqual(await keys(engine), ["sld2"]);

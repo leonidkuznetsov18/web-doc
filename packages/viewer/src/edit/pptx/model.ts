@@ -9,6 +9,9 @@ import type { XmlElement, XmlPart } from "../ooxml/xml.js";
  * slide is read on demand.
  */
 
+export const PRESENTATION_NS =
+  "http://schemas.openxmlformats.org/presentationml/2006/main";
+
 const OFFICE_RELATIONSHIPS =
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 
@@ -140,6 +143,8 @@ export class DeckModel {
 
     const slides: SlideRecord[] = [];
     for (const node of presentation.findAll("sldId")) {
+      // Section lists (p14:sldId) name slides too; only p:sldIdLst lists them.
+      if (node.namespace !== PRESENTATION_NS) continue;
       const rId = presentation.attribute(node, "r:id");
       const id = presentation.attribute(node, "id");
       const part = rId ? rels.byId(rId)?.targetPart : undefined;
@@ -153,6 +158,12 @@ export class DeckModel {
         ?.targetPart;
       const layout = layoutPart ? layoutByPart.get(layoutPart) : undefined;
       const number = partNumber(part);
+      if (slides.some((slide) => slide.number === number))
+        throw new ViewerError(
+          "invalid-file",
+          `Two slide parts share the number ${number}`,
+          { details: { part } },
+        );
       slides.push({
         key: `sld${number}`,
         number,

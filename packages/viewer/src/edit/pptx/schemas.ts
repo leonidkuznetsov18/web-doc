@@ -8,28 +8,41 @@ import type { JsonSchema, OperationSchemaSet } from "../types.js";
  */
 
 const definitions: Readonly<Record<string, JsonSchema>> = {
+  // DrawingML coordinates are bounded (ST_Coordinate: ±27,273,042,316,900 EMU).
+  coordinate: {
+    type: "number",
+    minimum: -2_800_000_000,
+    maximum: 2_800_000_000,
+  },
+  extent: { type: "number", exclusiveMinimum: 0, maximum: 2_800_000_000 },
   rect: {
     type: "object",
     required: ["x", "y", "width", "height"],
     additionalProperties: false,
     properties: {
-      x: { type: "number" },
-      y: { type: "number" },
-      width: { type: "number", exclusiveMinimum: 0 },
-      height: { type: "number", exclusiveMinimum: 0 },
+      x: { $ref: "#/$defs/coordinate" },
+      y: { $ref: "#/$defs/coordinate" },
+      width: { $ref: "#/$defs/extent" },
+      height: { $ref: "#/$defs/extent" },
     },
   },
   point: {
     type: "object",
     required: ["x", "y"],
     additionalProperties: false,
-    properties: { x: { type: "number" }, y: { type: "number" } },
+    properties: {
+      x: { $ref: "#/$defs/coordinate" },
+      y: { $ref: "#/$defs/coordinate" },
+    },
   },
   offset: {
     type: "object",
     required: ["dx", "dy"],
     additionalProperties: false,
-    properties: { dx: { type: "number" }, dy: { type: "number" } },
+    properties: {
+      dx: { $ref: "#/$defs/coordinate" },
+      dy: { $ref: "#/$defs/coordinate" },
+    },
   },
   target: { type: "string", minLength: 1, maxLength: 200 },
   textPosition: {

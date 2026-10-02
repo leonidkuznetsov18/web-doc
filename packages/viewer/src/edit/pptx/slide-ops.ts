@@ -1,6 +1,7 @@
 import { patches, type XmlPatch } from "../ooxml/patch.js";
 import { encodePart, escapeAttribute } from "../ooxml/xml.js";
-import type { XmlElement } from "../ooxml/xml.js";
+import type { XmlElement, XmlPart } from "../ooxml/xml.js";
+import type { ViewerWarning } from "../../contracts.js";
 import type { OoxmlPackage } from "../ooxml/package.js";
 import {
   relativeTarget,
@@ -9,11 +10,12 @@ import {
 import { relationshipsPartOf } from "../ooxml/names.js";
 import { readPlaceholders } from "./elements.js";
 import { partNumber, RELATIONSHIP_TYPES, type LayoutRecord } from "./model.js";
-import type {
-  Issue,
-  PptxOperationContext,
-  PptxOperationHandler,
-  PptxOperationResult,
+import {
+  committedParts,
+  type Issue,
+  type PptxOperationContext,
+  type PptxOperationHandler,
+  type PptxOperationResult,
 } from "./operations.js";
 import type {
   PptxDeleteSlideOperation,
@@ -100,21 +102,74 @@ function nextSlideId(context: PptxOperationContext): number {
   return max + 1;
 }
 
-/** Patches that put a `p:sldId` at `index` of the list. */
+/** The presentation part scanned at the current revision. */
+function presentationOf(context: PptxOperationContext): Promise<XmlPart> {
+  return context.pkg.xml(context.model.presentationPart);
+}
+
+/** The `p:sldId` of a slide in a fresh scan of the presentation. */
+function sldIdOf(
+  presentation: XmlPart,
+  slide: { readonly rId: string },
+): XmlElement | undefined {
+  return presentation
+    .findAll("sldId")
+    .find((node) => presentation.attribute(node, "r:id") === slide.rId);
+}
+
+/**
+ * Patches that put a `p:sldId` at `index` of the list and, when the deck
+ * has sections (`p14:sectionLst`), the slide's id after the id of the
+ * slide before the position, or first in the first section.
+ */
 function sldIdPatches(
   context: PptxOperationContext,
+  presentation: XmlPart,
   index: number,
   xml: string,
+  slideId: number,
 ): XmlPatch[] {
-  const presentation = context.model.presentation;
   const list = presentation.find("sldIdLst");
-  if (!list) throw new Error("The presentation has no slide list");
   const at = context.model.slides[index];
-  return [
-    at
-      ? patches.insertBefore(presentation, at.node, xml)
-      : patches.appendChild(presentation, list, xml),
-  ];
+  const anchor = at ? sldIdOf(presentation, at) : undefined;
+  const items: XmlPatch[] = [];
+  if (anchor) items.push(patches.insertBefore(presentation, anchor, xml));
+  else if (list) items.push(patches.appendChild(presentation, list, xml));
+  else {
+    // A presentation without a slide list gets one where the schema puts
+    // it: before p:sldSz, else at the end of the root.
+    const sldSz = presentation.root.children.find(
+      (child) => child.local === "sldSz",
+    );
+    const fragment = `<p:sldIdLst>${xml}</p:sldIdLst>`;
+    items.push(
+      sldSz
+        ? patches.insertBefore(presentation, sldSz, fragment)
+        : patches.appendChild(presentation, presentation.root, fragment),
+    );
+  }
+  const sections = presentation.find("sectionLst");
+  if (sections) {
+    const entry = `<p14:sldId id="${slideId}"/>`;
+    const before = context.model.slides[index - 1];
+    const previous = before
+      ? presentation
+          .findAll("sldId", sections)
+          .find((node) => presentation.attribute(node, "id") === before.id)
+      : undefined;
+    const firstList = presentation.find("sldIdLst", sections);
+    if (previous)
+      items.push(patches.insertAfter(presentation, previous, entry));
+    else if (firstList) {
+      const first = firstList.children[0];
+      items.push(
+        first
+          ? patches.insertBefore(presentation, first, entry)
+          : patches.appendChild(presentation, firstList, entry),
+      );
+    }
+  }
+  return items;
 }
 
 /** Registers a new slide part with the presentation; returns its sldId XML. */
@@ -122,13 +177,14 @@ async function registerSlide(
   context: PptxOperationContext,
   transaction: PackageTransaction,
   part: string,
-): Promise<string> {
+): Promise<{ readonly xml: string; readonly id: number }> {
   const rId = await transaction.addRelationship(
     context.model.presentationPart,
     RELATIONSHIP_TYPES.slide,
     relativeTarget(context.model.presentationPart, part),
   );
-  return `<p:sldId id="${nextSlideId(context)}" r:id=${escapeAttribute(rId)}/>`;
+  const id = nextSlideId(context);
+  return { xml: `<p:sldId id="${id}" r:id=${escapeAttribute(rId)}/>`, id };
 }
 
 function slideRange(from: number, to: number): number[] {
@@ -146,6 +202,12 @@ export const insertSlideHandler: PptxOperationHandler<PptxInsertSlideOperation> 
         !context.model.layoutById(operation.layout)
       )
         issue("/layout", "unknown-layout", `No layout ${operation.layout}`);
+      if (operation.layout === undefined && context.model.layouts.length === 0)
+        issue(
+          "/layout",
+          "unknown-layout",
+          "The deck has no layout to instantiate",
+        );
     },
     async apply(operation, context) {
       const { model, pkg } = context;
@@ -193,21 +255,42 @@ export const insertSlideHandler: PptxOperationHandler<PptxInsertSlideOperation> 
         RELATIONSHIP_TYPES.slideLayout,
         relativeTarget(part, layout.part),
       );
-      const sldId = await registerSlide(context, transaction, part);
+      const registered = await registerSlide(context, transaction, part);
+      const presentation = await presentationOf(context);
       transaction.patch(
-        model.presentation,
-        sldIdPatches(context, operation.index, sldId),
+        presentation,
+        sldIdPatches(
+          context,
+          presentation,
+          operation.index,
+          registered.xml,
+          registered.id,
+        ),
       );
       const change = await transaction.commit();
       return {
         createdIds,
         changedPages: slideRange(operation.index, model.pageCount),
         warnings: change.warnings,
+        parts: committedParts(change),
       };
     },
   };
 
 /** Copies a part and, recursively, the parts only it may own; returns the copy's name. */
+function relationshipXml(
+  item: {
+    readonly id: string;
+    readonly type: string;
+    readonly targetMode: string;
+  },
+  target: string,
+): string {
+  return `<Relationship Id=${escapeAttribute(item.id)} Type=${escapeAttribute(item.type)} Target=${escapeAttribute(target)}${
+    item.targetMode === "External" ? ' TargetMode="External"' : ""
+  }/>`;
+}
+
 async function clonePart(
   context: PptxOperationContext,
   transaction: PackageTransaction,
@@ -215,6 +298,7 @@ async function clonePart(
   target: string,
   contentType: string | undefined,
   seen: Map<string, string>,
+  warnings: ViewerWarning[],
 ): Promise<void> {
   const { pkg } = context;
   seen.set(source, target);
@@ -231,6 +315,20 @@ async function clonePart(
       !SHARED_TARGETS.has(item.type)
     ) {
       let clone = seen.get(item.targetPart);
+      if (!clone && !pkg.has(item.targetPart)) {
+        // A target the package lacks is copied as written, and the host hears.
+        warnings.push({
+          code: "fidelity-degraded",
+          message: `Relationship ${item.id} of ${source} points at a missing part ${item.targetPart}`,
+          details: {
+            reason: "dangling-relationship",
+            part: source,
+            id: item.id,
+          },
+        });
+        copied.push(relationshipXml(item, item.target));
+        continue;
+      }
       if (!clone) {
         const match = /^(.*?)(\d*)(\.[^./]+)$/.exec(item.targetPart);
         clone = match
@@ -243,15 +341,12 @@ async function clonePart(
           clone,
           await pkg.contentTypeOf(item.targetPart),
           seen,
+          warnings,
         );
       }
       targetValue = relativeTarget(target, clone);
     }
-    copied.push(
-      `<Relationship Id=${escapeAttribute(item.id)} Type=${escapeAttribute(item.type)} Target=${escapeAttribute(targetValue)}${
-        item.targetMode === "External" ? ' TargetMode="External"' : ""
-      }/>`,
-    );
+    copied.push(relationshipXml(item, targetValue));
   }
   transaction.setPart(
     relationshipsPartOf(target),
@@ -280,6 +375,7 @@ export const duplicateSlideHandler: PptxOperationHandler<PptxDuplicateSlideOpera
       const number = nextSlideNumber(pkg);
       const part = `/ppt/slides/slide${number}.xml`;
       const transaction = pkg.transaction();
+      const warnings: ViewerWarning[] = [];
       await clonePart(
         context,
         transaction,
@@ -287,11 +383,19 @@ export const duplicateSlideHandler: PptxOperationHandler<PptxDuplicateSlideOpera
         part,
         SLIDE_CONTENT_TYPE,
         new Map(),
+        warnings,
       );
-      const sldId = await registerSlide(context, transaction, part);
+      const registered = await registerSlide(context, transaction, part);
+      const presentation = await presentationOf(context);
       transaction.patch(
-        model.presentation,
-        sldIdPatches(context, index, sldId),
+        presentation,
+        sldIdPatches(
+          context,
+          presentation,
+          index,
+          registered.xml,
+          registered.id,
+        ),
       );
       const elements = await context.elements(operation.pageIndex);
       const change = await transaction.commit();
@@ -301,7 +405,8 @@ export const duplicateSlideHandler: PptxOperationHandler<PptxDuplicateSlideOpera
             `sld${number}:${record.element.id.slice(source.key.length + 1)}`,
         ),
         changedPages: slideRange(index, model.pageCount),
-        warnings: change.warnings,
+        warnings: [...warnings, ...change.warnings],
+        parts: committedParts(change),
       };
     },
   };
@@ -326,9 +431,24 @@ export const deleteSlideHandler: PptxOperationHandler<PptxDeleteSlideOperation> 
       const slide = model.slideAt(operation.pageIndex);
       const elements = await context.elements(operation.pageIndex);
       const transaction = pkg.transaction();
-      transaction.patch(model.presentation, [
-        patches.removeElement(model.presentation, slide.node),
-      ]);
+      const presentation = await presentationOf(context);
+      const entry = sldIdOf(presentation, slide);
+      if (!entry)
+        throw new Error(`Slide ${slide.key} is not in the slide list`);
+      const items: XmlPatch[] = [patches.removeElement(presentation, entry)];
+      // Custom shows and sections name the slide too; their entries go with it.
+      for (const node of presentation.findAll("sld"))
+        if (
+          node.parent?.local === "sldLst" &&
+          presentation.attribute(node, "r:id") === slide.rId
+        )
+          items.push(patches.removeElement(presentation, node));
+      const sections = presentation.find("sectionLst");
+      if (sections)
+        for (const node of presentation.findAll("sldId", sections))
+          if (presentation.attribute(node, "id") === slide.id)
+            items.push(patches.removeElement(presentation, node));
+      transaction.patch(presentation, items);
       transaction.removeRelationship(model.presentationPart, slide.rId);
       const relationships = await pkg.relationships(slide.part);
       for (const notes of relationships.byType(RELATIONSHIP_TYPES.notesSlide))
@@ -336,11 +456,16 @@ export const deleteSlideHandler: PptxOperationHandler<PptxDeleteSlideOperation> 
           transaction.removePart(notes.targetPart);
       transaction.removePart(slide.part);
       const change = await transaction.commit();
+      const last = model.pageCount - 2;
       return {
         createdIds: [],
         removedIds: elements.records.map((record) => record.element.id),
-        changedPages: slideRange(operation.pageIndex, model.pageCount - 1),
+        changedPages:
+          operation.pageIndex <= last
+            ? slideRange(operation.pageIndex, last)
+            : [],
         warnings: change.warnings,
+        parts: committedParts(change),
       };
     },
   };
@@ -355,13 +480,15 @@ export const moveSlideHandler: PptxOperationHandler<PptxMoveSlideOperation> = {
     const { model, pkg } = context;
     const { from, to } = operation;
     if (from === to) return { createdIds: [], changedPages: [], warnings: [] };
-    const presentation = model.presentation;
-    const moving = model.slideAt(from);
-    const anchor: XmlElement = model.slideAt(to).node;
-    const xml = presentation.text.slice(moving.node.start, moving.node.end);
+    const presentation = await presentationOf(context);
+    const moving = sldIdOf(presentation, model.slideAt(from));
+    const anchor = sldIdOf(presentation, model.slideAt(to));
+    if (!moving || !anchor)
+      throw new Error("A slide is missing from the slide list");
+    const xml = presentation.text.slice(moving.start, moving.end);
     const transaction = pkg.transaction();
     transaction.patch(presentation, [
-      patches.removeElement(presentation, moving.node),
+      patches.removeElement(presentation, moving),
       to > from
         ? patches.insertAfter(presentation, anchor, xml)
         : patches.insertBefore(presentation, anchor, xml),
@@ -371,6 +498,7 @@ export const moveSlideHandler: PptxOperationHandler<PptxMoveSlideOperation> = {
       createdIds: [],
       changedPages: slideRange(Math.min(from, to), Math.max(from, to)),
       warnings: change.warnings,
+      parts: committedParts(change),
     };
     return result;
   },

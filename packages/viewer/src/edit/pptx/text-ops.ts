@@ -2,11 +2,12 @@ import { patches } from "../ooxml/patch.js";
 import type { XmlElement, XmlPart } from "../ooxml/xml.js";
 import type { TextRange } from "../types.js";
 import type { ShapeRecord } from "./elements.js";
-import type {
-  Issue,
-  PptxOperationContext,
-  PptxOperationHandler,
-  PptxOperationResult,
+import {
+  committedParts,
+  type Issue,
+  type PptxOperationContext,
+  type PptxOperationHandler,
+  type PptxOperationResult,
 } from "./operations.js";
 import type { ParagraphInfo, RunInfo, TextModel } from "./text.js";
 import {
@@ -16,6 +17,7 @@ import {
   changedRunProperties,
   colorProblem,
   itemsOfSegment,
+  normalizeText,
   paragraphAt,
   paragraphXml,
   renamedProperties,
@@ -100,6 +102,17 @@ function checkRange(
     );
     return undefined;
   }
+  const text = target.model.text;
+  for (const offset of [start.offset, end.offset])
+    if (
+      offset > 0 &&
+      offset < length &&
+      (text.charCodeAt(offset) & 0xfc00) === 0xdc00 &&
+      (text.charCodeAt(offset - 1) & 0xfc00) === 0xd800
+    ) {
+      issue("/range", "invalid-range", "A range cannot split a surrogate pair");
+      return undefined;
+    }
   for (const paragraph of target.model.paragraphs)
     for (const run of paragraph.runs)
       if (
@@ -181,13 +194,14 @@ function commitBody(
     createdIds: [],
     changedPages: [target.record.element.pageIndex],
     warnings: change.warnings,
+    parts: committedParts(change),
   }));
 }
 
 export const replaceTextHandler: PptxOperationHandler<PptxReplaceTextOperation> =
   {
     async validate(operation, context, issue) {
-      const problem = textProblem(operation.text);
+      const problem = textProblem(normalizeText(operation.text));
       if (problem) issue("/text", "invalid-text", `The text holds ${problem}`);
       const target = await textTarget(operation.target, context, issue);
       if (target) checkRange(target, operation.target, operation.range, issue);
@@ -207,7 +221,7 @@ export const replaceTextHandler: PptxOperationHandler<PptxReplaceTextOperation> 
           target.part,
           target.txBody,
           target.model,
-          operation.text,
+          normalizeText(operation.text),
           start,
           end,
           !operation.range,
@@ -327,6 +341,9 @@ export const setTextStyleHandler: PptxOperationHandler<PptxSetTextStyleOperation
       const { style } = operation;
       const { align, ...runChange } = style;
       const changesRuns = Object.keys(runChange).length > 0;
+      // Nothing to write: the body keeps its bytes and its autofit scale.
+      if (!changesRuns && align === undefined)
+        return { createdIds: [], changedPages: [], warnings: [] };
       const paragraphs = model.paragraphs;
       if (paragraphs.length === 0)
         return { createdIds: [], changedPages: [], warnings: [] };

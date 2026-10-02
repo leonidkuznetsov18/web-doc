@@ -1,6 +1,7 @@
 import type { ResourceLimits, ViewerWarning } from "../../contracts.js";
 import type { AssetSource } from "../assets.js";
 import type { OoxmlPackage } from "../ooxml/package.js";
+import type { CommittedChange } from "../ooxml/transaction.js";
 import type { OperationIssue } from "../types.js";
 import type { ShapeRecord, SlideElements } from "./elements.js";
 import type { DeckModel } from "./model.js";
@@ -27,6 +28,12 @@ export interface PptxOperationContext {
   elements(pageIndex: number): Promise<SlideElements>;
   /** The element an id names, at the current revision. */
   locate(id: string): Promise<ShapeRecord | undefined>;
+  /**
+   * A `p:cNvPr` id for an element created on a slide: above every id the
+   * slide holds and above every id the session already issued there, so
+   * an id is never reused after a deletion.
+   */
+  allocateShapeId(elements: SlideElements): number;
 }
 
 export interface PptxOperationResult {
@@ -34,6 +41,12 @@ export interface PptxOperationResult {
   readonly removedIds?: readonly string[];
   readonly changedPages: readonly number[];
   readonly warnings: readonly ViewerWarning[];
+  /** Parts the operation's transaction changed, added and removed; absent means "everything may have". */
+  readonly parts?: {
+    readonly changed: readonly string[];
+    readonly added: readonly string[];
+    readonly removed: readonly string[];
+  };
 }
 
 export type Issue = (path: string, code: string, message: string) => void;
@@ -56,4 +69,15 @@ export function issueCollector(
 ): Issue {
   return (path, code, message) =>
     issues.push({ operationIndex, path, code, message });
+}
+
+/** The parts a transaction touched, in the shape an operation result carries. */
+export function committedParts(
+  change: CommittedChange,
+): NonNullable<PptxOperationResult["parts"]> {
+  return {
+    changed: change.changedParts,
+    added: change.addedParts,
+    removed: change.removedParts,
+  };
 }

@@ -118,20 +118,29 @@ export async function prepareDocxForDisplay(
       generatedIds += generated;
     };
     const document = await pkg.xml(main, signal);
+    const relationships = await pkg.relationships(main, signal);
+    const stories: XmlPart[] = [];
+    for (const type of STORY_RELATIONSHIPS)
+      for (const item of relationships.byType(type))
+        if (item.targetPart && pkg.has(item.targetPart))
+          stories.push(await pkg.xml(item.targetPart, signal));
+    // Ids are unique across the document: every part is read before any is marked.
+    const state: IdState = {
+      taken: new Set(),
+      generated: 0,
+      bookmarkId: BOOKMARK_ID_BASE,
+    };
+    for (const part of [document, ...stories]) collectIds(part, state);
     const documentPatches: XmlPatch[] = [
       ...fitInlinePictures(document, (count) => (scaledImages += count)),
     ];
-    documentPatches.push(...paragraphIdPatches(document, counted));
+    documentPatches.push(...paragraphIdPatches(document, state, counted));
     if (documentPatches.length > 0)
       transaction.patch(document, documentPatches);
-    const relationships = await pkg.relationships(main, signal);
-    for (const type of STORY_RELATIONSHIPS)
-      for (const item of relationships.byType(type)) {
-        if (!item.targetPart || !pkg.has(item.targetPart)) continue;
-        const part = await pkg.xml(item.targetPart, signal);
-        const items = paragraphIdPatches(part, counted);
-        if (items.length > 0) transaction.patch(part, items);
-      }
+    for (const part of stories) {
+      const items = paragraphIdPatches(part, state, counted);
+      if (items.length > 0) transaction.patch(part, items);
+    }
     if (scaledImages === 0 && markedParagraphs === 0) return unchanged;
     await transaction.commit(signal);
     return {
@@ -280,44 +289,65 @@ function fitPicturesUnder(
  * paragraph without one. The bookmark pair goes right after `w:pPr`, where
  * the schema allows it, with ids above any the part already uses.
  */
+/** Ids and bookmark numbers shared by every story part of one document. */
+interface IdState {
+  readonly taken: Set<string>;
+  generated: number;
+  bookmarkId: number;
+}
+
+/** Collects the ids and bookmark numbers a part already uses. */
+function collectIds(part: XmlPart, state: IdState): void {
+  for (const node of part.findAll("bookmarkStart")) {
+    if (node.namespace !== W_NS) continue;
+    const id = Number(part.attribute(node, "w:id") ?? NaN);
+    if (Number.isInteger(id) && id >= state.bookmarkId)
+      state.bookmarkId = id + 1;
+    const name = part.attribute(node, "w:name") ?? "";
+    if (name.startsWith(PARAGRAPH_BOOKMARK_PREFIX))
+      state.taken.add(
+        name.slice(PARAGRAPH_BOOKMARK_PREFIX.length).toUpperCase(),
+      );
+  }
+  for (const paragraph of part.findAll("p")) {
+    if (paragraph.namespace !== W_NS) continue;
+    const existing = part.attribute(paragraph, "w14:paraId");
+    if (existing) state.taken.add(existing.toUpperCase());
+  }
+}
+
+/**
+ * Patches that mark every `w:p` of a part with a hidden bookmark carrying
+ * its id: `_wd` plus the file's `w14:paraId`, or a generated id for a
+ * paragraph without one, unique across the document's story parts. The
+ * bookmark pair goes right after `w:pPr`, where the schema allows it, with
+ * ids above any the document already uses.
+ */
 function paragraphIdPatches(
   part: XmlPart,
+  state: IdState,
   count: (marked: number, generated: number) => void,
 ): XmlPatch[] {
   const paragraphs = part
     .findAll("p")
     .filter((node) => node.namespace === W_NS);
   if (paragraphs.length === 0) return [];
-  const taken = new Set<string>();
-  let bookmarkId = BOOKMARK_ID_BASE;
-  for (const node of part.findAll("bookmarkStart")) {
-    if (node.namespace !== W_NS) continue;
-    const id = Number(part.attribute(node, "w:id") ?? NaN);
-    if (Number.isInteger(id) && id >= bookmarkId) bookmarkId = id + 1;
-    const name = part.attribute(node, "w:name") ?? "";
-    if (name.startsWith(PARAGRAPH_BOOKMARK_PREFIX))
-      taken.add(name.slice(PARAGRAPH_BOOKMARK_PREFIX.length).toUpperCase());
-  }
-  for (const paragraph of paragraphs) {
-    const existing = part.attribute(paragraph, "w14:paraId");
-    if (existing) taken.add(existing.toUpperCase());
-  }
   const items: XmlPatch[] = [];
   let generated = 0;
-  let marked = 0;
   for (const paragraph of paragraphs) {
     const authored = part.attribute(paragraph, "w14:paraId");
     const id = authored
       ? authored.toUpperCase()
-      : generatedParagraphId(generated, taken);
+      : generatedParagraphId(state.generated, state.taken);
     if (!authored) {
-      taken.add(id);
+      state.taken.add(id);
+      state.generated += 1;
       generated += 1;
     }
     const name = `${PARAGRAPH_BOOKMARK_PREFIX}${id}`;
-    const start = `<w:bookmarkStart w:id="${bookmarkId}" w:name="${name}"/>`;
-    const end = `<w:bookmarkEnd w:id="${bookmarkId}"/>`;
-    bookmarkId += 1;
+    const start = `<w:bookmarkStart w:id="${state.bookmarkId}" w:name="${name}"/>`;
+    const end = `<w:bookmarkEnd w:id="${state.bookmarkId}"/>`;
+    state.bookmarkId += 1;
     const pPr = paragraph.children.find(
       (child) => child.local === "pPr" && child.namespace === W_NS,
     );
@@ -326,15 +356,32 @@ function paragraphIdPatches(
         patches.insertAfter(part, pPr, start),
         patches.insertAfter(part, pPr, end),
       );
-    else if (paragraph.selfClosing || paragraph.children.length === 0)
-      items.push(patches.replaceContent(part, paragraph, start + end));
-    else
+    else if (paragraph.selfClosing) {
+      // `<w:p …/>` opened around the bookmarks, as one element.
+      const xml = part.text.slice(paragraph.start, paragraph.end);
+      items.push(
+        patches.replaceElement(
+          part,
+          paragraph,
+          `${xml.slice(0, -2)}>${start}${end}</w:p>`,
+        ),
+      );
+    } else if (paragraph.children.length === 0) {
+      const xml = part.text.slice(paragraph.start, paragraph.end);
+      const open = paragraph.contentStart - paragraph.start;
+      items.push(
+        patches.replaceElement(
+          part,
+          paragraph,
+          `${xml.slice(0, open)}${start}${end}${xml.slice(open)}`,
+        ),
+      );
+    } else
       items.push(
         patches.insertBefore(part, paragraph.children[0]!, start),
         patches.insertBefore(part, paragraph.children[0]!, end),
       );
-    marked += 1;
   }
-  count(marked, generated);
+  count(paragraphs.length, generated);
   return items;
 }

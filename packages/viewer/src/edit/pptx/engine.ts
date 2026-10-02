@@ -30,7 +30,11 @@ import {
 import { frameContains, rectsIntersect } from "./geometry.js";
 import { DeckModel, type SlideRecord } from "./model.js";
 import { pptxHandlers } from "./handlers.js";
-import { issueCollector, type PptxOperationContext } from "./operations.js";
+import {
+  issueCollector,
+  type PptxOperationContext,
+  type PptxOperationResult,
+} from "./operations.js";
 import { pptxOperationSchemas } from "./schemas.js";
 import type {
   PptxElement,
@@ -52,11 +56,15 @@ export interface PptxEngineReads {
 }
 
 interface Inspection {
-  readonly revision: number;
+  /** The package revision the index describes; moved forward when a commit touched slides only. */
+  revision: number;
   readonly model: DeckModel;
   readonly placeholders: Map<string, Promise<PlaceholderTable>>;
   readonly slides: Map<string, Promise<SlideElements>>;
 }
+
+const SLIDE_PART = /^\/ppt\/slides\/slide(\d+)\.xml$/i;
+const SLIDE_RELS = /^\/ppt\/slides\/_rels\/slide(\d+)\.xml\.rels$/i;
 
 export class PptxEditEngine implements EditEngine, PptxEngineReads {
   readonly schemas = pptxOperationSchemas;
@@ -111,15 +119,60 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
   #inspect(signal?: AbortSignal): Promise<Inspection> {
     this.#assertAlive();
     const revision = this.#pkg.revision;
-    if (!this.#inspection) {
-      this.#inspection = this.#buildInspection(revision, signal);
-      return this.#inspection;
-    }
-    return this.#inspection.then((current) => {
-      if (current.revision === revision) return current;
-      this.#inspection = this.#buildInspection(revision, signal);
-      return this.#inspection;
+    if (!this.#inspection) return this.#startInspection(revision, signal);
+    return this.#inspection.then((current) =>
+      current.revision === revision
+        ? current
+        : this.#startInspection(revision, signal),
+    );
+  }
+
+  /** Builds the index; a failed or aborted build is not kept. */
+  #startInspection(
+    revision: number,
+    signal?: AbortSignal,
+  ): Promise<Inspection> {
+    const pending = this.#buildInspection(revision, signal);
+    this.#inspection = pending;
+    pending.catch(() => {
+      if (this.#inspection === pending) this.#inspection = undefined;
     });
+    return pending;
+  }
+
+  /**
+   * After a commit: a change confined to slide parts keeps the deck index
+   * (the presentation, every layout and master, every slide's
+   * relationships); anything else — the presentation, parts added or
+   * removed other than media — rebuilds it on the next read.
+   */
+  async #afterCommit(parts: PptxOperationResult["parts"]): Promise<void> {
+    const current = this.#inspection
+      ? await this.#inspection.catch(() => undefined)
+      : undefined;
+    if (!parts || !current) {
+      this.#inspection = undefined;
+      return;
+    }
+    for (const name of parts.changed)
+      if (!SLIDE_PART.test(name) && !SLIDE_RELS.test(name)) {
+        this.#inspection = undefined;
+        return;
+      }
+    if (parts.added.length > 0 || parts.removed.length > 0) {
+      const structural = [...parts.added, ...parts.removed].some(
+        (name) => !/^\/ppt\/media\//i.test(name),
+      );
+      if (structural) {
+        this.#inspection = undefined;
+        return;
+      }
+    }
+    // Every cached slide was scanned at the old revision; a patch on such a
+    // scan is refused, so the slides are read again on demand while the
+    // deck index (presentation, layouts, masters) is kept.
+    current.slides.clear();
+    current.revision = this.#pkg.revision;
   }
 
   async #buildInspection(
@@ -201,6 +254,7 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
       : (input as EngineBatch);
     this.#stateId = Math.max(this.#stateId, batch.stateId);
     const snapshot = this.#pkg.snapshot();
+    const issuedIds = new Map(this.#issuedIds);
     const createdIds: string[] = [];
     const removedIds: string[] = [];
     const changedPages = new Set<number>();
@@ -225,17 +279,32 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
         );
         if (issues.length > 0) throw invalidOperationError(issues);
         const result = await handler.apply(operation, context);
+        await this.#afterCommit(result.parts);
         createdByOperation.push([...result.createdIds]);
         createdIds.push(...result.createdIds);
         removedIds.push(...(result.removedIds ?? []));
+        // A removed id is never issued again on its slide.
+        for (const id of result.removedIds ?? []) {
+          const match = /^(sld\d+):(\d+)/.exec(id);
+          if (!match) continue;
+          const key = match[1]!;
+          this.#issuedIds.set(
+            key,
+            Math.max(this.#issuedIds.get(key) ?? 0, Number(match[2])),
+          );
+        }
         for (const page of result.changedPages) changedPages.add(page);
         warnings.push(...result.warnings);
       }
     } catch (error) {
+      // Everything the batch did, including the ids it issued, is undone.
       this.#pkg.restore(snapshot);
+      this.#issuedIds = issuedIds;
       this.#inspection = undefined;
+      this.#modelSync = undefined;
       throw error;
     }
+    this.#pkg.release(snapshot);
     const model = await this.model(signal);
     return {
       createdIds,
@@ -247,6 +316,8 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
   }
 
   #stateId = 0;
+  /** Highest `p:cNvPr` id issued per slide key in this session; replays rebuild it. */
+  #issuedIds = new Map<string, number>();
 
   #nextStateId(): number {
     this.#stateId += 1;
@@ -269,6 +340,7 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
       operationIndex,
       elements: (pageIndex) => this.#slideElements(pageIndex, signal),
       locate: (id) => this.#locate(id, signal),
+      allocateShapeId: (elements) => this.#allocateShapeId(elements),
     };
   }
 
@@ -309,6 +381,8 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
       signal,
     });
     this.#inspection = undefined;
+    this.#modelSync = undefined;
+    this.#issuedIds = new Map();
     await this.model(signal);
     for (const batch of target.batches) await this.apply(batch, signal);
   }
@@ -456,10 +530,32 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
     const slide = inspection.model.slideAt(pageIndex);
     let pending = inspection.slides.get(slide.key);
     if (!pending) {
-      pending = this.#readSlide(inspection, slide, pageIndex, signal);
-      inspection.slides.set(slide.key, pending);
+      const started = this.#readSlide(inspection, slide, pageIndex, signal);
+      pending = started;
+      inspection.slides.set(slide.key, started);
+      // An aborted or failed read must not stand in for the slide.
+      started.catch(() => {
+        if (inspection.slides.get(slide.key) === started)
+          inspection.slides.delete(slide.key);
+      });
     }
     return pending;
+  }
+
+  /** One above every id on the slide and every id issued there this session. */
+  #allocateShapeId(elements: SlideElements): number {
+    let max = 1;
+    for (const record of elements.records) max = Math.max(max, record.cNvPrId);
+    const tree = elements.part.find("spTree");
+    if (tree)
+      for (const node of elements.part.findAll("cNvPr", tree)) {
+        const id = Number(elements.part.attribute(node, "id") ?? NaN);
+        if (Number.isInteger(id)) max = Math.max(max, id);
+      }
+    const issued = this.#issuedIds.get(elements.slide.key) ?? 0;
+    const next = Math.max(max, issued) + 1;
+    this.#issuedIds.set(elements.slide.key, next);
+    return next;
   }
 
   async #readSlide(
@@ -474,8 +570,13 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
       if (!part) return undefined;
       let pending = inspection.placeholders.get(part);
       if (!pending) {
-        pending = readPlaceholders(this.#pkg, part, signal);
-        inspection.placeholders.set(part, pending);
+        const started = readPlaceholders(this.#pkg, part, signal);
+        pending = started;
+        inspection.placeholders.set(part, started);
+        started.catch(() => {
+          if (inspection.placeholders.get(part) === started)
+            inspection.placeholders.delete(part);
+        });
       }
       return pending;
     };

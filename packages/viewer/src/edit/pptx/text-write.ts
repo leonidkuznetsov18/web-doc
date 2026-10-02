@@ -79,7 +79,6 @@ export const THEME_COLORS = new Set([
   "accent6",
   "hlink",
   "folHlink",
-  "phClr",
 ]);
 
 export const COLOR_MODIFIERS = new Set([
@@ -95,7 +94,7 @@ export const COLOR_MODIFIERS = new Set([
 ]);
 
 /** Characters XML 1.0 cannot carry; a lone surrogate is caught separately. */
-const FORBIDDEN = /[\u0000-\u0008\u000e-\u001f￾￿]/;
+const FORBIDDEN = /[\u0000-\u0008\u000c\u000e-\u001f\ufffe\uffff]/;
 
 const LONE_SURROGATE =
   /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
@@ -235,7 +234,15 @@ function escapeAttributeValue(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("\t", "&#9;")
+    .replaceAll("\n", "&#10;")
+    .replaceAll("\r", "&#13;");
+}
+
+/** Text as the engine stores it: Windows and classic Mac line ends become "\n". */
+export function normalizeText(text: string): string {
+  return text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
 }
 
 /** `a:pPr` bytes with `algn` set, created when the paragraph has none. */

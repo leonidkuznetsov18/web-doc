@@ -705,6 +705,27 @@ mapping; tasks 44–49 of `tasks/todo.md`.
   because its full preflight of the deck takes four seconds; the decision 10
   amendment removed that.
 
+- **Review fixes (2026-10-02, after the code review and the test audit at
+  the end of the plan)**: a rolled-back batch no longer survives in the
+  package's scan cache (`OoxmlPackage.restore` drops scans and later
+  snapshots; the engine releases the snapshot of a committed batch); an
+  aborted read no longer stands in for a slide; ranges cannot split a
+  surrogate pair; `\r\n`/`\r` are normalized to `\n` and form feeds are
+  refused; coordinates are bounded by the schemas; a box that would
+  collapse a rotated frame is refused; a deleted shape takes the slide's
+  animations that target it, with a warning; shape ids are never reused
+  after a deletion (a per-slide high-water mark replays reproduce);
+  `duplicateSlide` keeps a dangling relationship with a warning instead of
+  failing; slide operations keep `p14:sectionLst` and custom shows in step
+  (and the model no longer mistakes section entries for slides);
+  `insertSlide` validates that a layout exists and creates `p:sldIdLst` when
+  a presentation lacks one; a group without a frame still lists its
+  children; a child of a singly-flipped group reports its orientation
+  correctly; the worker opens the next engine before disposing the live
+  one; the deck index survives slide-only commits (a 20-operation batch no
+  longer re-reads every layout and relationship part per operation); table
+  style ids and font names are escaped. `pptx-edit-hardening.test.ts` (9)
+  and the audit's `pptx-edit-review.test.ts` (13) hold the regressions.
 - **Manual check (pending, Leonid)**: the sixteen fixtures in
   `artifacts/pptx-fixtures/` are to be opened in PowerPoint and Keynote; the
   result goes here. The ticket's release criterion is likewise Leonid's.

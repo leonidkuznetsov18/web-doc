@@ -210,8 +210,12 @@ export function placeFrame(frame: Xfrm, parents: Matrix): PlacedFrame {
   const scaleY = Math.hypot(parents.c, parents.d);
   const width = frame.cx * scaleX;
   const height = frame.cy * scaleY;
-  const parentRotation = (Math.atan2(parents.b, parents.a) * 180) / Math.PI;
   const parentFlip = parents.a * parents.d - parents.b * parents.c < 0;
+  // A reflecting parent is reported as a rotation followed by flipH, so its
+  // angle comes from the matrix with that flip taken out.
+  const parentRotation = parentFlip
+    ? (Math.atan2(-parents.b, -parents.a) * 180) / Math.PI
+    : (Math.atan2(parents.b, parents.a) * 180) / Math.PI;
   const rotation = normalizeDegrees(
     parentRotation + (parentFlip ? -frame.rotation : frame.rotation),
   );

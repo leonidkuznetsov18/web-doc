@@ -1,5 +1,6 @@
 import { patches, type XmlPatch } from "../ooxml/patch.js";
 import type { XmlElement, XmlPart } from "../ooxml/xml.js";
+import type { ViewerWarning } from "../../contracts.js";
 import type { EditColor, PageRect } from "../types.js";
 import type { ShapeRecord, SlideElements } from "./elements.js";
 import {
@@ -8,17 +9,19 @@ import {
   pxToEmu,
   type Matrix,
 } from "./geometry.js";
-import type {
-  Issue,
-  PptxOperationContext,
-  PptxOperationHandler,
-  PptxOperationResult,
+import {
+  committedParts,
+  type Issue,
+  type PptxOperationContext,
+  type PptxOperationHandler,
+  type PptxOperationResult,
 } from "./operations.js";
 import {
   alignValue,
   changedRunProperties,
   colorProblem,
   itemsOfSegment,
+  normalizeText,
   paragraphXml,
   solidFillXml,
   textProblem,
@@ -94,6 +97,7 @@ function commit(
     readonly createdIds?: readonly string[];
     readonly removedIds?: readonly string[];
     readonly relationships?: readonly string[];
+    readonly warnings?: readonly ViewerWarning[];
   } = {},
 ): Promise<PptxOperationResult> {
   const transaction = context.pkg.transaction();
@@ -104,7 +108,8 @@ function commit(
     createdIds: extra.createdIds ?? [],
     ...(extra.removedIds ? { removedIds: extra.removedIds } : {}),
     changedPages: [record.element.pageIndex],
-    warnings: change.warnings,
+    warnings: [...(extra.warnings ?? []), ...change.warnings],
+    parts: committedParts(change),
   }));
 }
 
@@ -144,25 +149,43 @@ function framePatches(record: ShapeRecord, frame: FrameEmu): XmlPatch[] {
         patches.setAttribute(part, ext, "cy", String(frame.cy)),
       ];
   }
-  const xml = `<a:xfrm><a:off x="${frame.x}" y="${frame.y}"/><a:ext cx="${frame.cx}" cy="${frame.cy}"/></a:xfrm>`;
+  const tag = record.node.local === "graphicFrame" ? "p:xfrm" : "a:xfrm";
+  const xml = `<${tag}><a:off x="${frame.x}" y="${frame.y}"/><a:ext cx="${frame.cx}" cy="${frame.cy}"/></${tag}>`;
   const holder = frameHolder(record);
   if (!holder) {
-    // A shape without p:spPr: add one before the text body or at the end.
-    const spPr = `<p:spPr>${xml}</p:spPr>`;
-    const txBody = record.node.children.find(
-      (child) => child.local === "txBody",
-    );
+    // A shape without p:spPr: add one where the schema puts it.
     return [
-      txBody
-        ? patches.insertBefore(part, txBody, spPr)
-        : patches.appendChild(part, record.node, spPr),
+      insertShapeProperties(part, record.node, `<p:spPr>${xml}</p:spPr>`),
     ];
   }
   if (xfrm) return [patches.replaceElement(part, xfrm, xml)];
+  if (record.node.local === "graphicFrame") {
+    // p:xfrm follows p:nvGraphicFramePr and precedes a:graphic.
+    const graphic = holder.children.find((child) => child.local === "graphic");
+    return [
+      graphic
+        ? patches.insertBefore(part, graphic, xml)
+        : patches.appendChild(part, holder, xml),
+    ];
+  }
   const first = holder.children[0];
   if (first) return [patches.insertBefore(part, first, xml)];
   if (holder.selfClosing) return [patches.replaceContent(part, holder, xml)];
   return [patches.appendChild(part, holder, xml)];
+}
+
+/** A patch that adds `p:spPr` after the non-visual properties, before p:style and the text body. */
+function insertShapeProperties(
+  part: XmlPart,
+  node: XmlElement,
+  xml: string,
+): XmlPatch {
+  const next = node.children.find(
+    (child) => child.local === "style" || child.local === "txBody",
+  );
+  return next
+    ? patches.insertBefore(part, next, xml)
+    : patches.appendChild(part, node, xml);
 }
 
 /** The element's current frame in its own space, in EMU. */
@@ -276,7 +299,15 @@ export const moveElementHandler: PptxOperationHandler<PptxMoveElementOperation> 
 export const resizeElementHandler: PptxOperationHandler<PptxResizeElementOperation> =
   {
     async validate(operation, context, issue) {
-      await framedTarget(operation.target, context, issue);
+      const record = await framedTarget(operation.target, context, issue);
+      if (!record) return;
+      const frame = frameForBounds(record, operation.rect);
+      if (!(frame.cx > 0 && frame.cy > 0))
+        issue(
+          "/rect",
+          "invalid-value",
+          "The box leaves no size for the rotated frame",
+        );
     },
     async apply(operation, context) {
       const record = (await framedTarget(operation.target, context, () => {}))!;
@@ -350,15 +381,47 @@ export const deleteElementHandler: PptxOperationHandler<PptxDeleteElementOperati
         return uses === 0 && outside.has(id);
       });
       const relationships = await context.pkg.relationships(record.slide.part);
-      return commit(
-        context,
-        record,
-        [patches.removeElement(part, record.node)],
-        {
-          removedIds: [record.element.id, ...descendantIds(elements, record)],
-          relationships: exclusive.filter((id) => relationships.byId(id)),
-        },
+      const removedIds = [
+        record.element.id,
+        ...descendantIds(elements, record),
+      ];
+      const items = [patches.removeElement(part, record.node)];
+      const warnings: ViewerWarning[] = [];
+      // An animation that targets a removed shape makes PowerPoint repair
+      // the file; the slide's timing goes with the shape, and the host hears.
+      const timing = part.root.children.find(
+        (child) => child.local === "timing",
       );
+      const shapeIds = new Set(
+        [
+          record,
+          ...elements.records.filter((candidate) =>
+            removedIds.includes(candidate.element.id),
+          ),
+        ].map((candidate) => String(candidate.cNvPrId)),
+      );
+      if (
+        timing &&
+        part
+          .findAll("spTgt", timing)
+          .some((node) => shapeIds.has(part.attribute(node, "spid") ?? ""))
+      ) {
+        items.push(patches.removeElement(part, timing));
+        warnings.push({
+          code: "fidelity-degraded",
+          message:
+            "The slide's animations were removed with the shape they targeted",
+          details: {
+            reason: "animations-removed",
+            elementId: record.element.id,
+          },
+        });
+      }
+      return commit(context, record, items, {
+        removedIds,
+        relationships: exclusive.filter((id) => relationships.byId(id)),
+        warnings,
+      });
     },
   };
 
@@ -511,19 +574,6 @@ export const setShapeStyleHandler: PptxOperationHandler<PptxSetShapeStyleOperati
 
 /* Text boxes */
 
-/** One more than the largest p:cNvPr id of the slide, at least 2. */
-export function nextShapeId(elements: SlideElements): number {
-  let max = 1;
-  for (const record of elements.records) max = Math.max(max, record.cNvPrId);
-  const tree = elements.part.find("spTree");
-  if (tree)
-    for (const node of elements.part.findAll("cNvPr", tree)) {
-      const id = Number(elements.part.attribute(node, "id") ?? NaN);
-      if (Number.isInteger(id)) max = Math.max(max, id);
-    }
-  return max + 1;
-}
-
 /** Paragraph XML for a text and a style, as a new text box or table cell carries it. */
 export function paragraphsXml(
   part: XmlPart,
@@ -558,11 +608,15 @@ export const insertTextBoxHandler: PptxOperationHandler<PptxInsertTextBoxOperati
           "unknown-target",
           `No slide ${operation.pageIndex}`,
         );
-      const problem = textProblem(operation.text);
+      const problem = textProblem(normalizeText(operation.text));
       if (problem) issue("/text", "invalid-text", `The text holds ${problem}`);
       if (operation.style?.color !== undefined) {
         const colour = colorProblem(operation.style.color);
         if (colour) issue("/style/color", "invalid-value", `Colour: ${colour}`);
+      }
+      if (operation.style?.fontFamily !== undefined) {
+        const font = textProblem(operation.style.fontFamily);
+        if (font) issue("/style/fontFamily", "invalid-value", `Font: ${font}`);
       }
     },
     async apply(operation, context) {
@@ -570,13 +624,13 @@ export const insertTextBoxHandler: PptxOperationHandler<PptxInsertTextBoxOperati
       const { part, slide } = elements;
       const tree = part.find("spTree");
       if (!tree) throw new Error(`Slide ${slide.part} has no shape tree`);
-      const id = nextShapeId(elements);
+      const id = context.allocateShapeId(elements);
       const { rect } = operation;
       const xml =
         `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="TextBox ${id - 1}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>` +
         `<p:spPr><a:xfrm><a:off x="${pxToEmu(rect.x)}" y="${pxToEmu(rect.y)}"/><a:ext cx="${pxToEmu(rect.width)}" cy="${pxToEmu(rect.height)}"/></a:xfrm>` +
         `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>` +
-        `<p:txBody><a:bodyPr wrap="square" rtlCol="0"><a:spAutoFit/></a:bodyPr><a:lstStyle/>${paragraphsXml(part, operation.text, operation.style)}</p:txBody></p:sp>`;
+        `<p:txBody><a:bodyPr wrap="square" rtlCol="0"><a:spAutoFit/></a:bodyPr><a:lstStyle/>${paragraphsXml(part, normalizeText(operation.text), operation.style)}</p:txBody></p:sp>`;
       const transaction = context.pkg.transaction();
       transaction.patch(part, [patches.appendChild(part, tree, xml)]);
       const change = await transaction.commit();
@@ -584,6 +638,7 @@ export const insertTextBoxHandler: PptxOperationHandler<PptxInsertTextBoxOperati
         createdIds: [`${slide.key}:${id}`],
         changedPages: [operation.pageIndex],
         warnings: change.warnings,
+        parts: committedParts(change),
       };
     },
   };
