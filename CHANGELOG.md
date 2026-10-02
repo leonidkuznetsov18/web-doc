@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.8.0...v0.9.0) (2026-10-02)
+
+### Features
+
+* **viewer:** name the cell that holds a docx table paragraph ([898e620](https://github.com/leonidkuznetsov18/web-doc/commit/898e620385d82b884654cfa74cb742e12fe40d90))
+* **viewer:** turn a pdf page from the angle it has ([1d01bba](https://github.com/leonidkuznetsov18/web-doc/commit/1d01bba8132320423de21525fdc5676d33b62a9e))
+
+### Bug fixes
+
+* **viewer:** embed cyrillic text typed with dashes and currency signs ([88636ef](https://github.com/leonidkuznetsov18/web-doc/commit/88636efca00f894be22e3940cb911cc6c9aef8c4))
+* **viewer:** give objects made after a reopen an unused id ([644cd0d](https://github.com/leonidkuznetsov18/web-doc/commit/644cd0d411dc33a747426537b0abb323e54057f3))
+* **viewer:** keep ids that stale marks name out of new ids ([ccde3b5](https://github.com/leonidkuznetsov18/web-doc/commit/ccde3b56c04b43a6b7e677af04db40f64ffb0152))
+* **viewer:** read a rotate field given as undefined as absent ([ee7314a](https://github.com/leonidkuznetsov18/web-doc/commit/ee7314a80627d3ed617986ace7ad0d3128a1a68c))
+
 ## [0.8.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.7.0...v0.8.0) (2026-10-02)
 
 ### Features
