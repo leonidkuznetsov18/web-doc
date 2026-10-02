@@ -163,8 +163,13 @@ export class FontLibrary {
     if (this.#coveringRegistered(request)) return undefined;
     if (this.#fallback && this.#covers(this.#fallback, request.text))
       return undefined;
-    const bad =
-      firstNonWinAnsi(request.text) ?? firstUncovered(request.text, this);
+    // Name the character that actually stops the text: the first one the
+    // fallback lacks when it was tried, else the first the standard fonts
+    // cannot encode. Naming the first Cyrillic letter for a dash the
+    // fallback lacked sent people after the wrong character (ACTION-879).
+    const bad = this.#fallback
+      ? this.#firstMissing(this.#fallback, request.text)
+      : firstNonWinAnsi(request.text);
     return {
       path: "/text",
       code: "font-unavailable",
@@ -249,6 +254,11 @@ export class FontLibrary {
   }
 
   #covers(bytes: Uint8Array, text: string): boolean {
+    return this.#firstMissing(bytes, text) === undefined;
+  }
+
+  /** The first character of `text` the font has no glyph for; layout handles line breaks and spaces. */
+  #firstMissing(bytes: Uint8Array, text: string): string | undefined {
     let coverage = this.#coverage.get(bytes);
     if (!coverage) {
       coverage = parseCmap(bytes);
@@ -257,9 +267,9 @@ export class FontLibrary {
     for (const character of text) {
       const code = character.codePointAt(0)!;
       if (code === 0x0a || code === 0x20) continue;
-      if (!coverage.has(code)) return false;
+      if (!coverage.has(code)) return character;
     }
-    return true;
+    return undefined;
   }
 
   #load(pdfium: Pdfium, document: number, bytes: Uint8Array): number {
@@ -324,16 +334,6 @@ function isBold(font: EditWorkerFont): boolean {
 
 function isItalic(font: EditWorkerFont): boolean {
   return font.style !== "normal";
-}
-
-function firstUncovered(
-  text: string,
-  library: FontLibrary,
-): string | undefined {
-  void library;
-  for (const character of text)
-    if (character !== "\n" && character !== " ") return character;
-  return undefined;
 }
 
 /** The code points a TrueType font maps to glyphs, from its cmap table. */
