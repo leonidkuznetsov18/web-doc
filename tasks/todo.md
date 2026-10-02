@@ -1660,3 +1660,36 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
 - [x] Review pass: code review + coverage audit
       (`test/docx-edit-audit.test.ts`, 44 tests), every finding fixed in
       `fix(viewer): harden docx editing after review` (2026-10-02)
+
+## Phase 11 — AI tooling over the edit sessions (module 07, `ai-edit`)
+
+Starts after Leonid approves `docs/document-editing/todo/07-ai-edit.md`.
+Commits carry the ticket key of the module's Linear issue.
+
+- [ ] Task 59: Outline and description — `getOutline()` (nesting, ordinals,
+      labels, operations) and `describe()` (line grammar, character budget)
+      on PDF, PPTX and DOCX sessions; unit tests per format; docs grammar.
+- [ ] Task 60: Target resolution — `resolveTargets()` with the exact,
+      normalized, fuzzy and kind-only passes over `findText()` and the
+      elements' text, ranges on candidates, citation queries; unit tests.
+- [ ] Task 61: Named checkpoints — `createCheckpoint`, `listCheckpoints`,
+      `restoreCheckpoint` (a history entry), `dropCheckpoint`, pins over the
+      R2 retention, `maxEditCheckpoints`; unit tests on the fake engine and
+      a PDF session.
+- [ ] Task 62: Tool set — `session.tools` from the operation schemas,
+      `callTool()` with validation and the refusal paths, `describeReceipt`;
+      unit tests for every tool.
+- [ ] Task 63: DOCX tracked changes — `changeMode: "tracked"` for
+      `replaceText`, `insertParagraph`, `deleteElement` (paragraph),
+      `setTableCell`, `setTextStyle`, `setParagraphStyle`; `getRevisions`;
+      worker plumbing; XML-level unit tests; a fixture for the Word/Pages
+      check.
+- [ ] Task 64: Agent turn in the browser (`tests/e2e/edit-ai.spec.ts` in
+      the matrix), `describe()` latency on 500 pages/slides,
+      `docs/api/ai-editing.md`, roadmap and notices, `npm run check`,
+      Linear proofs.
+
+### Checkpoint L: AI tooling done
+
+- [ ] Unit, matrix and `npm run check` green; docs written; release
+      published (Leonid); the module's Linear ticket Done.

@@ -110,7 +110,7 @@ User stories for the MVP:
 | 04  | `pptx-edit`           | PPTX methods: shape text, run formatting, paragraph alignment, text and fill colours, move/resize/delete shapes, insert text box, image and table, add/duplicate/delete/move slides                                                       | `ooxml-package`                        | [`todo/04-pptx-edit.md`](./todo/04-pptx-edit.md)                     | Done 2026-10-02 (ACTION-812)                                        |
 | 05  | `docx-engine-upgrade` | Move DOCX rendering from `@silurus/ooxml` 0.72.2 to the 0.88 line (one engine copy), with image fitting done as an XML pre-pass; brings `w14:paraId` into text runs for mapping selections and geometry to paragraphs                     | `ooxml-package`                        | [`todo/05-docx-engine-upgrade.md`](./todo/05-docx-engine-upgrade.md) | Done 2026-10-02 (T50–T53); the release is Leonid's (ACTION-813)     |
 | 06  | `docx-edit`           | DOCX methods: paragraph text, run formatting, alignment and spacing, text colour and highlight, insert/delete/move paragraphs, tables, images                                                                                             | `docx-engine-upgrade`                  | [`todo/06-docx-edit.md`](./todo/06-docx-edit.md)                     | Done 2026-10-02 (T54–T58); Word/Pages check and release are Leonid's  |
-| 07  | `ai-edit`             | AI tooling over the same operations: document outline, target resolution from text or citations, tool schemas, suggestion mode (tracked changes where the format has them), checkpoints                                                   | `edit-core`, plus formats as they land | Written before the module starts                                     | Not started                                                         |
+| 07  | `ai-edit`             | AI tooling over the same operations: document outline, target resolution from text or citations, tool schemas, suggestion mode (tracked changes where the format has them), checkpoints                                                   | `edit-core`, plus formats as they land | [`todo/07-ai-edit.md`](./todo/07-ai-edit.md)                         | Draft 2026-10-02, awaiting approval                                 |
 
 Build order: `edit-core` → `pdf-edit` → `ooxml-package` → `pptx-edit` →
 `docx-engine-upgrade` → `docx-edit` → `ai-edit`.
@@ -374,9 +374,12 @@ Stated so that hosts plan around them rather than discover them:
 | 2026-10-02 | `docx-engine-upgrade` bump approved by Leonid and done (T52, ACTION-813): one `@silurus/ooxml` 0.88.0 for DOCX, XLSX and PPTX; alias and model patch retired; `sample.docx` pixel-identical to 0.72.2; DOCX and XLSX WASM grow by 0.54 MB Brotli, size gate still `pass`; matrix 176/176.                        |
 | 2026-10-02 | `docx-engine-upgrade` done (T53, ACTION-813): every DOCX run carries `TextRun.paragraphId` through the bookmark bridge over the engine's model (body, tables, headers, footers, notes, text boxes; a paragraph split by a page break keeps one id); `docx-edit` can start.                                  |
 | 2026-10-02 | `docx-edit` done (T54–T58, ACTION-814): nine operations on the package layer with paragraph-local rebuilds, stable ids (unauthored ids tracked, shown copy stamped, saved file touched only where edited), geometry joined from the renderer's runs, reflow repaints from the edited paragraph; latency 70 ms (10 pages) to 3 s (500 pages). |
+| 2026-10-02 | web-doc 0.7.0 released with modules 01–06; `ai-edit` (module 07) spec drafted: outline and line-grammar description, three-pass target resolution, named checkpoints as pinned history states, a tool set executed by the session, Word tracked changes as the only suggestion mode (07-ai-edit decisions 1–7). |
 
 ## Open questions
 
-None at the moment. New questions are recorded in the spec of the module that
+Module 07's three questions (default tracked-change author, preview before
+apply, the checkpoint limit) are in `todo/07-ai-edit.md` with recommended
+answers and wait for the spec's approval. Otherwise none at the moment. New questions are recorded in the spec of the module that
 raises them; the two compaction questions of 2026-10-01 were decided on
 2026-10-02 (02-pdf-edit.md, decisions 7 and 8).
