@@ -1638,10 +1638,10 @@ roadmap; Linear proofs.
 Spec: `docs/document-editing/todo/06-docx-edit.md` (draft 2026-10-02).
 Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
 
-- [ ] Task 54: Engine skeleton and inspection — block index, ids, text
+- [x] Task 54: Engine skeleton and inspection — block index, ids, text
       model, styles, worker format switch, adapter provider for `docx`/`docm`,
       geometry join with the viewer's runs, `elementsAt`, `findText`, identity,
-      restore; browser test on the corpus document.
+      restore; browser test on the corpus document. (2026-10-02)
 - [ ] Task 55: Text and formatting — `replaceText`, `setTextStyle`,
       `setParagraphStyle`, schema-order merges, fields, hyperlinks, inline sdt,
       paragraph splits, the id rule of `materialize`.

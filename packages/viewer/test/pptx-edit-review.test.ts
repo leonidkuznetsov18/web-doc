@@ -1142,9 +1142,9 @@ describe("PPTX review coverage (pptx-edit)", () => {
     await assert.rejects(call("edit-elements", { query: {} }), {
       code: "lifecycle-error",
     });
-    await assert.rejects(call("edit-open", openPayload(deckA, "docx")), {
+    await assert.rejects(call("edit-open", openPayload(deckA, "pdf")), {
       code: "edit-unsupported",
-      details: { format: "docx", reason: "no-engine" },
+      details: { format: "pdf", reason: "no-engine" },
     });
     assert.deepEqual(await call("edit-open", openPayload(deckA)), {
       pageCount: 2,

@@ -2,6 +2,7 @@ import type {
   DocumentFormat,
   RegisteredFont,
   ResourceLimits,
+  TextRun,
   ViewerWarning,
 } from "../contracts.js";
 import type { EditSession } from "./sessions.js";
@@ -56,13 +57,28 @@ export interface EditSessionCore extends EditSessionBase<
   ): Promise<ReadResult<T>>;
 }
 
+/**
+ * What the viewer lends a typed session beyond the core: the text runs of
+ * the shown document, for formats whose engine never lays out (DOCX joins
+ * its elements with the renderer's runs on the main thread).
+ */
+export interface EditSessionAccess {
+  /** Text runs of a page of the shown document; computed on demand and cached by the viewer. */
+  getTextRuns(
+    pageIndex: number,
+    signal?: AbortSignal,
+  ): Promise<readonly TextRun[]>;
+  /** Pages whose text runs are already known, in no particular order. */
+  cachedPages(): readonly number[];
+}
+
 /** Advertised by a `DocumentAdapter` that can edit some of its formats. */
 export interface EditEngineProvider {
   /** Document formats the provider edits; variants map to a session format (pptm → pptx). */
   readonly formats: readonly DocumentFormat[];
   load(original: Uint8Array, context: EditEngineContext): Promise<EditEngine>;
   /** Adds the format's typed methods on top of the core session. */
-  createSession(core: EditSessionCore): EditSession;
+  createSession(core: EditSessionCore, access: EditSessionAccess): EditSession;
 }
 
 /** Bytes of a state, with what the engine could not guarantee about them. */

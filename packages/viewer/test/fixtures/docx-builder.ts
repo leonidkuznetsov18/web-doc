@@ -25,6 +25,10 @@ export interface DocxOptions {
   readonly header?: string;
   readonly footer?: string;
   readonly footnotes?: string;
+  /** Children of `w:styles`; a minimal docDefaults block when absent. */
+  readonly styles?: string;
+  /** Major and minor Latin faces of a theme part, when the document should have one. */
+  readonly theme?: { readonly major: string; readonly minor: string };
   /** Media parts referenced from the body. */
   readonly media?: readonly {
     readonly name: string;
@@ -86,12 +90,30 @@ export function buildDocx(options: DocxOptions): Uint8Array {
   ];
   files.push({
     name: "word/styles.xml",
-    data: `${XML}<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`,
+    data: `${XML}<w:styles xmlns:w="${W}">${
+      options.styles ??
+      '<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>'
+    }</w:styles>`,
     method: 8,
   });
   overrides.push(
     '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>',
   );
+  if (options.theme) {
+    files.push({
+      name: "word/theme/theme1.xml",
+      data: `${XML}<a:theme xmlns:a="${A}" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:accent1><a:srgbClr val="4472C4"/></a:accent1></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="${options.theme.major}"/></a:majorFont><a:minorFont><a:latin typeface="${options.theme.minor}"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>`,
+      method: 8,
+    });
+    overrides.push(
+      '<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>',
+    );
+    rels.push({
+      id: `rId${rels.length + 1}`,
+      type: `${R}/theme`,
+      target: "theme/theme1.xml",
+    });
+  }
   const story = (
     name: string,
     kind: "header" | "footer" | "footnotes",

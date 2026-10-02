@@ -6,24 +6,22 @@ import {
   type OoxmlEditProviderOptions,
 } from "../ooxml/worker.js";
 import { WorkerEngineClient } from "../worker-engine.js";
-import type { PptxEngineReads } from "./engine.js";
-import { pptxOperationSchemas } from "./schemas.js";
-import type { PptxLayoutInfo, PptxSlideInfo } from "./types.js";
+import { docxOperationSchemas } from "./schemas.js";
 
-export type PptxEditProviderOptions = OoxmlEditProviderOptions;
+export type DocxEditProviderOptions = OoxmlEditProviderOptions;
 
 /**
- * Starts the OOXML edit worker for `original` as a PPTX engine. Loaded
+ * Starts the OOXML edit worker for `original` as a DOCX engine. Loaded
  * lazily by the Office adapter's provider on the first `edit()`.
  */
-export async function loadPptxEditEngine(
+export async function loadDocxEditEngine(
   original: Uint8Array,
   context: EditEngineContext,
-  options: PptxEditProviderOptions = {},
-): Promise<PptxEditEngineClient> {
+  options: DocxEditProviderOptions = {},
+): Promise<DocxEditEngineClient> {
   const worker = createOoxmlEditWorker(options, context);
   const rpc = new WorkerRpcClient(worker);
-  const engine = new PptxEditEngineClient(rpc, context);
+  const engine = new DocxEditEngineClient(rpc, context);
   try {
     await engine.start(original);
     return engine;
@@ -33,28 +31,17 @@ export async function loadPptxEditEngine(
   }
 }
 
-export class PptxEditEngineClient
-  extends WorkerEngineClient
-  implements PptxEngineReads
-{
-  readonly schemas = pptxOperationSchemas;
+export class DocxEditEngineClient extends WorkerEngineClient {
+  readonly schemas = docxOperationSchemas;
 
   async start(original: Uint8Array): Promise<void> {
     const data = original.slice().buffer;
     const open: EditWorkerOpenPayload = {
       data,
       limits: this.context.limits,
-      format: "pptx",
+      format: "docx",
       ...(this.context.fileName ? { fileName: this.context.fileName } : {}),
     };
     await this.request("edit-open", open, this.context.signal, [data]);
-  }
-
-  slides(signal: AbortSignal): Promise<readonly PptxSlideInfo[]> {
-    return this.request("edit-pptx-slides", undefined, signal);
-  }
-
-  layouts(signal: AbortSignal): Promise<readonly PptxLayoutInfo[]> {
-    return this.request("edit-pptx-layouts", undefined, signal);
   }
 }

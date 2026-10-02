@@ -3,6 +3,7 @@ export * from "./edit/types.js";
 export * from "./edit/sessions.js";
 export * from "./edit/pdf/types.js";
 export * from "./edit/pptx/types.js";
+export * from "./edit/docx/types.js";
 export * from "./client.js";
 export * from "./detect.js";
 export * from "./errors.js";

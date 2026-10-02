@@ -1,7 +1,22 @@
 import type { ResourceLimits } from "../contracts.js";
+import {
+  assignParagraphIds,
+  collectIds,
+  newIdState,
+  OFFICE_RELATIONSHIPS,
+  PARAGRAPH_BOOKMARK_PREFIX,
+  STORY_RELATIONSHIP_TYPES,
+  W_NS,
+  type DocxIdState,
+} from "../edit/docx/ids.js";
 import { OoxmlPackage } from "../edit/ooxml/package.js";
 import { patches, type XmlPatch } from "../edit/ooxml/patch.js";
 import type { XmlElement, XmlPart } from "../edit/ooxml/xml.js";
+
+export {
+  generatedParagraphId,
+  PARAGRAPH_BOOKMARK_PREFIX,
+} from "../edit/docx/ids.js";
 
 /*
  * The DOCX display pre-pass: what the renderer should see instead of the
@@ -20,18 +35,9 @@ import type { XmlElement, XmlPart } from "../edit/ooxml/xml.js";
  *    original bytes.
  */
 
-const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const WP_NS =
   "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 const A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main";
-const RELATIONSHIPS =
-  "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
-const STORY_RELATIONSHIPS = [
-  `${RELATIONSHIPS}header`,
-  `${RELATIONSHIPS}footer`,
-  `${RELATIONSHIPS}footnotes`,
-  `${RELATIONSHIPS}endnotes`,
-];
 
 /** EMU per twentieth of a point, the unit of page sizes and margins. */
 const EMU_PER_TWIP = 635;
@@ -54,31 +60,6 @@ export interface DocxPrepassResult {
   readonly markedParagraphs: number;
   /** Of those, paragraphs whose id was generated (no `w14:paraId` in the file). */
   readonly generatedIds: number;
-}
-
-/** Prefix of the hidden bookmarks that carry paragraph ids. */
-export const PARAGRAPH_BOOKMARK_PREFIX = "_wd";
-/** First bookmark id the pre-pass uses, above what Word writes. */
-const BOOKMARK_ID_BASE = 7_000_000;
-
-/** First generated id; Word keeps `w14:paraId` below 0x80000000. */
-const ID_BASE = 0x1a000000;
-const ID_STEP = 0x9e37;
-
-/**
- * The paragraph id generated for the `index`-th paragraph without one, in
- * document order of a part, skipping ids the part already uses.
- */
-export function generatedParagraphId(
-  index: number,
-  taken: ReadonlySet<string>,
-): string {
-  let candidate = (ID_BASE + index * ID_STEP) % 0x80000000;
-  for (;;) {
-    const value = candidate.toString(16).toUpperCase().padStart(8, "0");
-    if (!taken.has(value)) return value;
-    candidate = (candidate + 1) % 0x80000000;
-  }
 }
 
 /**
@@ -107,7 +88,8 @@ export async function prepareDocxForDisplay(
   }
   try {
     const root = await pkg.relationships("/", signal);
-    const main = root.byType(`${RELATIONSHIPS}officeDocument`)[0]?.targetPart;
+    const main = root.byType(`${OFFICE_RELATIONSHIPS}officeDocument`)[0]
+      ?.targetPart;
     if (!main || !pkg.has(main)) return unchanged;
     const transaction = pkg.transaction();
     let scaledImages = 0;
@@ -120,16 +102,12 @@ export async function prepareDocxForDisplay(
     const document = await pkg.xml(main, signal);
     const relationships = await pkg.relationships(main, signal);
     const stories: XmlPart[] = [];
-    for (const type of STORY_RELATIONSHIPS)
+    for (const type of STORY_RELATIONSHIP_TYPES)
       for (const item of relationships.byType(type))
         if (item.targetPart && pkg.has(item.targetPart))
           stories.push(await pkg.xml(item.targetPart, signal));
     // Ids are unique across the document: every part is read before any is marked.
-    const state: IdState = {
-      taken: new Set(),
-      generated: 0,
-      bookmarkId: BOOKMARK_ID_BASE,
-    };
+    const state = newIdState();
     for (const part of [document, ...stories]) collectIds(part, state);
     const documentPatches: XmlPatch[] = [
       ...fitInlinePictures(document, (count) => (scaledImages += count)),
@@ -286,64 +264,21 @@ function fitPicturesUnder(
 /**
  * Patches that mark every `w:p` of a part with a hidden bookmark carrying
  * its id: `_wd` plus the file's `w14:paraId`, or a generated id for a
- * paragraph without one. The bookmark pair goes right after `w:pPr`, where
- * the schema allows it, with ids above any the part already uses.
- */
-/** Ids and bookmark numbers shared by every story part of one document. */
-interface IdState {
-  readonly taken: Set<string>;
-  generated: number;
-  bookmarkId: number;
-}
-
-/** Collects the ids and bookmark numbers a part already uses. */
-function collectIds(part: XmlPart, state: IdState): void {
-  for (const node of part.findAll("bookmarkStart")) {
-    if (node.namespace !== W_NS) continue;
-    const id = Number(part.attribute(node, "w:id") ?? NaN);
-    if (Number.isInteger(id) && id >= state.bookmarkId)
-      state.bookmarkId = id + 1;
-    const name = part.attribute(node, "w:name") ?? "";
-    if (name.startsWith(PARAGRAPH_BOOKMARK_PREFIX))
-      state.taken.add(
-        name.slice(PARAGRAPH_BOOKMARK_PREFIX.length).toUpperCase(),
-      );
-  }
-  for (const paragraph of part.findAll("p")) {
-    if (paragraph.namespace !== W_NS) continue;
-    const existing = part.attribute(paragraph, "w14:paraId");
-    if (existing) state.taken.add(existing.toUpperCase());
-  }
-}
-
-/**
- * Patches that mark every `w:p` of a part with a hidden bookmark carrying
- * its id: `_wd` plus the file's `w14:paraId`, or a generated id for a
  * paragraph without one, unique across the document's story parts. The
  * bookmark pair goes right after `w:pPr`, where the schema allows it, with
  * ids above any the document already uses.
  */
 function paragraphIdPatches(
   part: XmlPart,
-  state: IdState,
+  state: DocxIdState,
   count: (marked: number, generated: number) => void,
 ): XmlPatch[] {
-  const paragraphs = part
-    .findAll("p")
-    .filter((node) => node.namespace === W_NS);
+  const paragraphs = assignParagraphIds(part, state);
   if (paragraphs.length === 0) return [];
   const items: XmlPatch[] = [];
   let generated = 0;
-  for (const paragraph of paragraphs) {
-    const authored = part.attribute(paragraph, "w14:paraId");
-    const id = authored
-      ? authored.toUpperCase()
-      : generatedParagraphId(state.generated, state.taken);
-    if (!authored) {
-      state.taken.add(id);
-      state.generated += 1;
-      generated += 1;
-    }
+  for (const { paragraph, id, authored } of paragraphs) {
+    if (!authored) generated += 1;
     const name = `${PARAGRAPH_BOOKMARK_PREFIX}${id}`;
     const start = `<w:bookmarkStart w:id="${state.bookmarkId}" w:name="${name}"/>`;
     const end = `<w:bookmarkEnd w:id="${state.bookmarkId}"/>`;

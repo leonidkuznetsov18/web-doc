@@ -10,8 +10,9 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
+import { DocxSession } from "../edit/docx/session.js";
 import type { EditEngineProvider } from "../edit/engine.js";
-import type { PptxEditProviderOptions } from "../edit/pptx/provider.js";
+import type { OoxmlEditProviderOptions } from "../edit/ooxml/worker.js";
 import { PptxSession } from "../edit/pptx/session.js";
 import {
   createDocxParagraphIdResolver,
@@ -246,7 +247,7 @@ export interface OfficeAdapterOptions {
   readonly engines?: OfficeEngineLoaders;
   readonly legacy?: LegacyConversionOptions;
   /** Where the OOXML edit worker is served from; the package's own by default. */
-  readonly edit?: PptxEditProviderOptions;
+  readonly edit?: OoxmlEditProviderOptions;
 }
 
 interface DocumentHandle {
@@ -279,18 +280,28 @@ type OfficeHandle = DocumentHandle | PresentationHandle | SpreadsheetHandle;
 export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   readonly id = "office";
   /**
-   * PPTX editing on the OOXML package layer. The worker and the engine
-   * client are imported on the first `edit()`; viewing never loads them.
+   * PPTX and DOCX editing on the OOXML package layer. The worker and the
+   * engine client are imported on the first `edit()`; viewing never loads
+   * them.
    */
   readonly edit: EditEngineProvider = {
-    formats: ["pptx", "pptm", "ppsx"],
+    formats: ["pptx", "pptm", "ppsx", "docx", "docm"],
     load: async (original, context) =>
-      (await import("../edit/pptx/provider.js")).loadPptxEditEngine(
-        original,
-        context,
-        this.#options.edit ?? {},
-      ),
-    createSession: (core) => new PptxSession(core),
+      context.format === "docx"
+        ? (await import("../edit/docx/provider.js")).loadDocxEditEngine(
+            original,
+            context,
+            this.#options.edit ?? {},
+          )
+        : (await import("../edit/pptx/provider.js")).loadPptxEditEngine(
+            original,
+            context,
+            this.#options.edit ?? {},
+          ),
+    createSession: (core, access) =>
+      core.format === "docx"
+        ? new DocxSession(core, access)
+        : new PptxSession(core),
   };
   readonly formats = [...MODERN_FORMATS, ...LEGACY_FORMATS] as const;
   readonly #options: OfficeAdapterOptions;

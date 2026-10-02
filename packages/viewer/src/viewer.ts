@@ -1010,7 +1010,11 @@ export class DocumentViewer implements ViewerApi {
         this.#original!,
         this.#info!.pageCount,
       );
-      const session = provider.createSession(core);
+      const session = provider.createSession(core, {
+        getTextRuns: (pageIndex, signal) =>
+          this.#getTextRuns(pageIndex, signal),
+        cachedPages: () => [...this.#textMaps.keys()],
+      });
       this.#session = { core, session };
       this.#emit("editstatechange", {
         ...core.state,

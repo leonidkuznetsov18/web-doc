@@ -17,6 +17,7 @@ export default defineConfig({
     "edit-pdf-overlay.spec.ts",
     "ooxml-package.spec.ts",
     "edit-pptx.spec.ts",
+    "edit-docx.spec.ts",
   ],
   fullyParallel: true,
   projects: [

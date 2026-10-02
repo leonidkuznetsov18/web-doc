@@ -845,6 +845,96 @@ and WebKit 55–160 ms on 500 slides. An `insertTextBox` on the last of 500
 slides takes 50–180 ms. The browser suite fails above three seconds on every
 browser of the matrix. Batch operations that belong together.
 
+## DOCX
+
+DOCX documents are edited XML-first on the same OOXML package layer and in
+the same module worker as PPTX (`workers/ooxml-edit-worker.js`, fetched on
+the first `edit()` of a document). The worker holds the original package
+and a block index of the body story: every paragraph and table of
+`w:body`, block-level content controls unwrapped, the paragraphs of table
+cells included. `.docm` documents take the same path; the macro part is
+copied byte for byte and never read. Headers, footers, footnotes, endnotes
+and comments are not listed in this release.
+
+`session.format` is `"docx"` and the session is a `DocxEditSession`:
+`apply()` takes `DocxOperation` values, the inspection methods return
+`DocxElement` values, and each operation has a typed method with the same
+name. The operations the session accepts are the ones `session.schemas`
+lists; `operations` on each element names the ones that take it as their
+target.
+
+### Elements
+
+| Kind        | What it is                                               | Id                                                      |
+| ----------- | -------------------------------------------------------- | ------------------------------------------------------- |
+| `paragraph` | A `w:p` of the body or of a table cell                   | `p:<id>`                                                |
+| `table`     | A `w:tbl` of the body; `table.rows` carries the cell text | `tbl:<id of its first paragraph>`                       |
+| `image`     | An inline picture (`wp:inline`) inside a paragraph       | `img:<paragraph id>.<n>`, `n` counting the pictures     |
+| `other`     | An anchored drawing, an embedded object, an equation     | `other:<paragraph id>.<n>`; listed, never edited        |
+
+A paragraph's `<id>` is its `w14:paraId` when the file has one (Word
+writes one on every paragraph), otherwise a deterministic id from its
+position among the unmarked paragraphs of the document, eight upper-case
+hex digits. It is the `paragraphId` the viewer reports on every DOCX text
+run and the name of the hidden bookmark the viewer's display copy carries,
+so a selection, a text run and an element name the same paragraph. Ids are
+stable for the session and never reused. A cell paragraph carries its
+table as `parentId`; a picture or other object carries its paragraph.
+
+`text` of a paragraph is its logical text: `w:t` text, a tab `\t`, a line
+break `\v`, a page or column break `\f`, an inline picture or embedded
+object as one object character (U+FFFC), a field (`w:fldSimple` or a
+complex field from `fldChar begin` to `end`) as its cached result, the runs
+of hyperlinks and inline content controls, hidden runs as text, deleted
+text left out. A table's `text` joins cells by tabs and rows by newlines.
+`textStyle` is the resolved style of the paragraph's first run with text
+(run properties, character style, paragraph style, defaults, theme fonts
+and colours); `paragraphStyle` carries the style id, alignment, spacing
+(points, or a multiple of single spacing for `lineRule: "auto"`) and list
+numbering.
+
+A paragraph that cannot be edited in place says why in `readOnlyReason`:
+`tracked-changes` (it holds `w:ins`, `w:del` or a move), `section-break`
+(its `w:pPr` carries a `w:sectPr`) or `unsupported-content` (all its text
+comes from fields). Such a paragraph only accepts the insertion operations
+that place a sibling next to it.
+
+### Geometry
+
+The engine never lays the document out: geometry comes from the renderer.
+Every DOCX text run the viewer reports carries `paragraphId`, and the
+session joins elements with runs on the main thread: a paragraph's
+`fragments` are the unions of its runs' boxes per page, a table's are the
+unions of its cell paragraphs', a picture or other object takes its
+paragraph's. `bounds` and `pageIndex` are those of the first fragment.
+
+A query with `pageIndex` reads that page's runs and returns the elements
+with a fragment on it (`intersects` then filters by that fragment). A query
+without `pageIndex` lists every body element but reads only the pages the
+viewer has already laid out; an element on no laid-out page, and a
+paragraph that draws no run (an empty one), has `pageIndex` −1, empty
+`bounds` and an empty `fragments` list. `elementsAt()` reads the page's
+runs and returns the paragraph under the point followed by its table.
+`findText()` searches the paragraphs' logical text in document order and
+places each match from the runs: the page that holds the paragraph is
+found in the viewer's cache first, then in `pageRange`, then page by page;
+the rectangles are the matched characters' share of their runs when the
+run text aligns with the paragraph text, else the paragraph's runs on its
+first page. Page space is CSS pixels at 96 dpi, the unit of
+`DocumentInfo.pageSizes` for documents.
+
+### What stays unchanged
+
+A session without changes saves the original bytes. Nothing outside the
+body part is touched by any operation; headers, footers, notes, comments,
+styles, numbering and settings keep their bytes.
+
+### Performance
+
+Inspection costs one scan of the body part when the session starts and
+one read of the page's runs per query; the runs are the viewer's cached
+text maps, computed on first use.
+
 ## Guidance for AI clients
 
 - Read before writing: list elements or `findText()` to obtain ids and

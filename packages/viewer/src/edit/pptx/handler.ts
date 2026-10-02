@@ -5,6 +5,7 @@ import type {
   EditWorkerOpenResult,
   WorkerOperation,
 } from "../../worker-protocol.js";
+import { DocxEditEngine } from "../docx/engine.js";
 import type { EngineBatch } from "../engine.js";
 import type {
   EditFindOptions,
@@ -14,21 +15,34 @@ import type {
 } from "../types.js";
 import { PptxEditEngine } from "./engine.js";
 
+type OoxmlEngine = PptxEditEngine | DocxEditEngine;
+
 /**
  * Serves the edit worker protocol for one OOXML document. It runs inside
  * the OOXML edit worker in the browser and directly in Node tests. The open
- * payload names the format; PPTX is served now, DOCX joins with module 06.
+ * payload names the format: PPTX (the default) or DOCX.
  */
 export function createOoxmlEditHandler(): WorkerOperationHandler {
-  let state: PptxEditEngine | undefined;
+  let state: OoxmlEngine | undefined;
 
-  const engine = (): PptxEditEngine => {
+  const engine = (): OoxmlEngine => {
     if (!state)
       throw new ViewerError(
         "lifecycle-error",
         "No package is open for editing",
       );
     return state;
+  };
+
+  const pptx = (): PptxEditEngine => {
+    const current = engine();
+    if (!(current instanceof PptxEditEngine))
+      throw new ViewerError(
+        "edit-unsupported",
+        "The open document is not a presentation",
+        { details: { format: "docx", reason: "no-reads" } },
+      );
+    return current;
   };
 
   return async (operation: WorkerOperation, payload: unknown, context) => {
@@ -38,7 +52,8 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         return undefined;
       case "edit-open": {
         const open = payload as EditWorkerOpenPayload;
-        if (open.format !== undefined && open.format !== "pptx")
+        const format = open.format ?? "pptx";
+        if (format !== "pptx" && format !== "docx")
           throw new ViewerError(
             "edit-unsupported",
             `The OOXML edit worker does not serve ${open.format} yet`,
@@ -46,11 +61,11 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
           );
         // The live engine stays until the next one opened, so a failed or
         // aborted open leaves the worker serving what it served before.
-        const next = await PptxEditEngine.open(
-          new Uint8Array(open.data),
-          open.limits,
-          signal,
-        );
+        const bytes = new Uint8Array(open.data);
+        const next: OoxmlEngine =
+          format === "docx"
+            ? await DocxEditEngine.open(bytes, open.limits, signal)
+            : await PptxEditEngine.open(bytes, open.limits, signal);
         await state?.dispose();
         state = next;
         const result: EditWorkerOpenResult = { pageCount: state.pageCount };
@@ -123,9 +138,9 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         return engine().findText(query, options, signal);
       }
       case "edit-pptx-slides":
-        return engine().slides(signal);
+        return pptx().slides(signal);
       case "edit-pptx-layouts":
-        return engine().layouts(signal);
+        return pptx().layouts(signal);
       case "edit-dispose":
         await state?.dispose();
         state = undefined;

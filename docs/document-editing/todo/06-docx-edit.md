@@ -1,9 +1,8 @@
 # Module 06. `docx-edit` — DOCX editing on the package layer
 
-**Status:** Draft 2026-10-02 (Linear ACTION-814), written after module 05's
-spike so it builds on what the 0.88 engine really exposes. Implementation
-starts after module 05 lands (the engine bump awaits Leonid's approval) and
-after this draft is reviewed.
+**Status:** In progress 2026-10-02 (Linear ACTION-814): T54 inspection
+landed; T55–T58 follow. Written after module 05's spike so it builds on
+what the 0.88 engine really exposes; module 05 landed the same day.
 
 ## Goal
 
@@ -433,4 +432,46 @@ Proposed in the draft; open for review.
 
 ## Actual result
 
-To be filled as the tasks land.
+- **T54 (2026-10-02)**: `src/edit/docx/` holds the engine skeleton.
+  `ids.ts` is the id walk the display pre-pass now shares (`collectIds`,
+  `assignParagraphIds`: `w14:paraId` or a generated id, one sequence over
+  the main part and the story parts), so engine ids and the pre-pass
+  bookmarks agree by construction. `model.ts` indexes the body: `w:p` and
+  `w:tbl` in order, block-level `w:sdt`/`w:customXml` unwrapped, cell
+  paragraphs under their table (a table nested in a cell is left out),
+  `tbl:<first paragraph id>`, `img:<pid>.<n>` for inline pictures,
+  `other:<pid>.<n>` for anchored drawings, objects, equations and
+  alternate content. `text.ts` reads the paragraph text model (tabs,
+  `\v`, `\f`, U+FFFC for pictures and objects, simple and complex fields as
+  their cached result as one item that remembers its runs, hyperlinks,
+  inline sdt, tracked insertions read and deletions dropped, symbols,
+  no-break hyphens, note references as empty items), every item keeping
+  its `w:r`, child, `w:rPr` and wrapper for the patches of T55. `style.ts`
+  resolves run and paragraph styles through run properties, the character
+  and paragraph style chains, the default paragraph style, the document
+  defaults and the theme fonts; spacing attributes inherit one by one.
+  `engine.ts` serves the `EditEngine` contract with a handler map that
+  grows per task (`IMPLEMENTED_OPERATIONS` empty, so no element accepts an
+  operation yet), identity without changes, snapshot rollback, restore,
+  `findText` over paragraph text without geometry; `elementsAt` is the
+  session's. The worker handler switches on the open payload's format
+  (`docx` → `DocxEditEngine`, the PPTX reads refused on it); the Office
+  adapter advertises `docx` and `docm` and picks the provider and session
+  by format; `EditEngineProvider.createSession` now receives an
+  `EditSessionAccess` (the viewer's cached text runs), which `DocxSession`
+  uses for the geometry join: fragments per page from the runs'
+  `paragraphId`, tables through their cell paragraphs, inline objects
+  through their paragraph, page-scoped queries reading one page, page-less
+  queries reading only cached pages, `elementsAt` through run boxes
+  (paragraph then table), `findText` placing matches from the runs with
+  pages located cache-first. Known limits recorded in the docs: an empty
+  paragraph has no run and so no page until T55 writes geometry hints; a
+  picture's box is its paragraph's (the renderer lists no picture
+  geometry). Tests: `docx-edit-inspect.test.ts` (10: ids against the
+  pre-pass, text model, read-only reasons, styles, search, identity,
+  restore, broken package, schema conformance, corpus) and
+  `docx-edit-session.test.ts` (5: join, cached pages, hit test, search
+  rectangles, worker protocol); `tests/e2e/edit-docx.spec.ts` in the
+  matrix (worker loads on `edit()` only, every corpus paragraph's bounds
+  cover its runs, hit test, search, identity; a paragraph split by a page
+  break joined across two pages with its table). Unit 384/384.

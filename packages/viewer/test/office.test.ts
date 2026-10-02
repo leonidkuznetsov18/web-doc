@@ -294,7 +294,13 @@ describe("OfficeDocumentAdapter", () => {
         },
       },
     });
-    assert.deepEqual(adapter.edit.formats, ["pptx", "pptm", "ppsx"]);
+    assert.deepEqual(adapter.edit.formats, [
+      "pptx",
+      "pptm",
+      "ppsx",
+      "docx",
+      "docm",
+    ]);
     const first = await adapter.open(Uint8Array.of(1), context("pptx"));
     const second = await adapter.reopen(
       first,
