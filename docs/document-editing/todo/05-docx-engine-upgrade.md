@@ -61,12 +61,19 @@ Readings:
    inline picture at its declared extent (SSIM 0.365 against the fitted
    rendering), confirming that adjusting the model no longer reaches
    layout. The fitting must happen in the XML before the engine sees it.
-3. **`w14:paraId` cannot be relied on**: the corpus document (written by
-   Apache POI) has none, so 0 of 228 runs carry `paragraphId`. Every run
-   does carry `source` (`{ story: "body", storyInstance: "body", path: [n] }`)
-   and `sourceRunIndex`, but `path` indexes the engine's model, which
-   unwraps `w:sdt`, hoists breaks and splits runs, so it is not an XML
-   path. A generated id is needed.
+3. **`w14:paraId` is not read by 0.88.0 at all**: the corpus document
+   (written by Apache POI) has none, and a probe with a Word-style
+   `w14:paraId="1A00ABCD"` on a hand-built paragraph came back without
+   `paragraphId` on the run and without `paragraphId` on the model
+   paragraph; the `paraId` the bundle reads belongs to comments. Every run
+   does carry `source` (`{ story: "body", storyInstance: "body", path }`)
+   and `sourceRunIndex`, where `path` indexes the engine's model: `[2, 0,
+0, 0]` for the first paragraph of the first cell of a table, `w:sdt`
+   unwrapped, and a paragraph that holds a page break split into two model
+   paragraphs around a hoisted `pageBreak`. The model keeps bookmark names
+   on each paragraph (`bookmarks: ["_wd1A000000"]`), which is the bridge
+   the pre-pass uses: with it, all 228 runs of `sample.docx` resolve to
+   their paragraph on 0.88.
 4. **Load cost**: 0.88 takes about three times longer to open the one-page
    document (119 ms against 35 ms) because it lays the whole document out
    inside `load()`; the viewer's own load path hides most of it behind the
@@ -90,15 +97,19 @@ Readings:
     `a:ext` down with the aspect ratio kept, exactly as
     `fitInlineImagesToPage` does on the model today; anchored pictures keep
     their geometry.
-  - _Paragraph ids_: every `w:p` of `word/document.xml` (and of the header,
-    footer, footnote and endnote parts) without a `w14:paraId` gets one,
-    generated from its position in document order (eight hex digits below
-    `0x80000000`, as Word writes them, from a fixed base so the same file
-    always gets the same ids), with the `w14` namespace declared on the
-    root and listed in `mc:Ignorable` when missing. The engine then reports
-    `paragraphId` on every run, and `docx-edit` computes the same ids from
-    the original bytes with the same walk, so a rendered run maps to its
-    `w:p` by id alone.
+  - _Paragraph ids_: every `w:p` of `word/document.xml` and of the header,
+    footer, footnote and endnote parts gets a hidden bookmark pair right
+    after its `w:pPr` (`<w:bookmarkStart w:id="7000000" w:name="_wd<id>"/>`
+    and its end), the id being the file's `w14:paraId` when it has one and
+    otherwise generated from the paragraph's position in document order
+    (eight hex digits below `0x80000000`, as Word writes them, from a fixed
+    base so the same file always gets the same ids; bookmark ids start
+    above any the part uses). The engine keeps bookmark names on its model
+    paragraphs, so a run's `source.path` leads to a paragraph whose `_wd…`
+    bookmark names the `w:p`; a paragraph split around a page break takes
+    the id of the nearest earlier paragraph of its container. `docx-edit`
+    computes the same ids from the original bytes with the same walk, so a
+    rendered run maps to its `w:p` by id alone.
   - Both are patches through the package layer (module 03), so untouched
     bytes stay and malformed parts are refused the way they are today.
 - **The run bridge**: the Office adapter keeps `paragraphId` on the
@@ -160,13 +171,30 @@ Proposed in the draft; the bump itself awaits approval.
    bytes it reads. The package layer already patches exact ranges, so the
    pre-pass costs a scan of `word/document.xml` (5 ms on the corpus) and
    nothing of the file's fidelity.
-2. **Generated paragraph ids in the display copy, never in the saved
-   file.** Word-written files keep their own `w14:paraId`; files without
-   them get deterministic ids that `docx-edit` recomputes from the original
-   bytes, so the bridge works for every producer and the saved file does
-   not change for a read.
+2. **Paragraph ids ride on hidden bookmarks in the display copy, never in
+   the saved file.** 0.88.0 ignores `w14:paraId` but keeps bookmark names
+   on its model paragraphs, so the pre-pass marks every paragraph with a
+   `_wd<id>` bookmark; Word-written files keep their own `w14:paraId` as
+   the id, files without them get deterministic ids that `docx-edit`
+   recomputes from the original bytes, and the saved file does not change
+   for a read. Bookmarks are invisible to layout and to the text map.
 3. **XLSX moves with DOCX.** One package, one version; the spike renders the
    workbook fixtures before the bump so an XLSX regression is seen first.
+
+## Actual result
+
+- **T51 (2026-10-02)**: `src/adapters/docx-prepass.ts` on the package layer
+  fits oversized inline pictures section by section (`wp:extent` and the
+  picture's `a:ext`, anchored pictures untouched) and marks every paragraph
+  of the body, headers, footers, footnotes and endnotes with its `_wd<id>`
+  bookmark; the Office adapter runs it on every DOCX before the engine
+  loads (the old model patch stays as a no-op fallback until the bump).
+  Unit tests (`docx-prepass.test.ts`, 6) cover sections, tables, `w:sdt`,
+  authored ids, existing bookmarks, empty paragraphs, unreadable input and
+  the fixture; `docx-inline-images.spec.ts` passes through the pre-pass on
+  the shipped engine; the spike now renders the pre-passed fixture
+  identically on 0.88 (SSIM 1.000 for both fixtures) and resolves all 228
+  runs of `sample.docx` to their paragraph through the bookmark bridge.
 
 ## Open questions
 

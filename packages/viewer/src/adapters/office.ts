@@ -14,6 +14,7 @@ import type { EditEngineProvider } from "../edit/engine.js";
 import type { PptxEditProviderOptions } from "../edit/pptx/provider.js";
 import { PptxSession } from "../edit/pptx/session.js";
 import { fitInlineImagesToPage, type DocxModelLike } from "./docx-images.js";
+import { prepareDocxForDisplay } from "./docx-prepass.js";
 import { enforceContainerLimits } from "../limits.js";
 
 const MODERN_FORMATS = [
@@ -351,12 +352,21 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       mode: "main",
       ...(reopening ? { progressiveLayout: true } : {}),
     };
-    const buffer = exactArrayBuffer(data);
-
     try {
       const kind = kindFor(format);
       if (kind === "document") {
-        const backend = await this.#loadDocx(buffer, engineOptions);
+        // What the renderer sees: oversized inline pictures fitted and every
+        // paragraph carrying an id; the bytes a session saves are the input.
+        const display = await prepareDocxForDisplay(
+          data,
+          context.limits,
+          context.signal,
+        );
+        throwIfAborted(context.signal);
+        const backend = await this.#loadDocx(
+          exactArrayBuffer(display.bytes),
+          engineOptions,
+        );
         throwIfAborted(context.signal, backend);
         context.reportProgress({
           phase: "parsing",
@@ -366,6 +376,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
         });
         return { kind, format: context.format, backend, warnings };
       }
+      const buffer = exactArrayBuffer(data);
       if (kind === "presentation") {
         const backend = await this.#loadPptx(buffer, engineOptions);
         throwIfAborted(context.signal, backend);

@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { prepareDocxForDisplay } from "../../packages/viewer/src/adapters/docx-prepass.js";
+import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
 import { installDeterministicOfficeFonts } from "./deterministic-fonts.js";
 
 /*
@@ -76,6 +78,7 @@ async function renderWithNewEngine(
   Rendering & {
     readonly runs: number;
     readonly withParagraphId: number;
+    readonly resolvedIds: number;
     readonly withSource: number;
     readonly firstRun: unknown;
     readonly hasDocumentModel: boolean;
@@ -100,6 +103,46 @@ async function renderWithNewEngine(
         width,
         dpr: 1,
       })) as Record<string, unknown>[];
+      // The bridge the adapter will use: a run's story path names a model
+      // paragraph; the pre-pass bookmark on it, or on the nearest earlier
+      // paragraph of the same container (a page break splits a paragraph),
+      // carries the id.
+      const resolveId = (run: Record<string, unknown>): string | undefined => {
+        const source = run.source as
+          { story: string; path: number[] } | undefined;
+        if (!source || source.story !== "body") return undefined;
+        const model = document.document as { body: unknown[] };
+        let container: unknown[] = model.body;
+        const path = [...source.path];
+        const last = path.pop()!;
+        for (let depth = 0; depth < path.length; depth += 1) {
+          const node = container[path[depth]!] as Record<string, unknown>;
+          if (!node) return undefined;
+          if (node.type === "table") {
+            const row = (node.rows as { cells: { content: unknown[] }[] }[])[
+              path[depth + 1]!
+            ];
+            const cell = row?.cells[path[depth + 2]!];
+            container = cell?.content ?? [];
+            depth += 2;
+          } else if (Array.isArray(node.content))
+            container = node.content as unknown[];
+        }
+        for (let index = last; index >= 0; index -= 1) {
+          const item = container[index] as
+            { type?: string; bookmarks?: string[] } | undefined;
+          if (!item) return undefined;
+          const name = item.bookmarks?.find((candidate) =>
+            candidate.startsWith("_wd"),
+          );
+          if (name) return name.slice(3);
+          if (item.type === "paragraph") return undefined;
+        }
+        return undefined;
+      };
+      const resolved = runs.filter(
+        (run) => resolveId(run) !== undefined,
+      ).length;
       let hasDocumentModel = false;
       try {
         hasDocumentModel =
@@ -118,6 +161,7 @@ async function renderWithNewEngine(
         withParagraphId: runs.filter(
           (run) => typeof run.paragraphId === "string",
         ).length,
+        resolvedIds: resolved,
         withSource: runs.filter((run) => run.source !== undefined).length,
         firstRun: runs[0]
           ? Object.fromEntries(
@@ -215,13 +259,20 @@ for (const [name, url] of [
     await page.goto("/");
     await installDeterministicOfficeFonts(page);
     const current = await renderWithViewer(page, bytes, name);
-    const next = await renderWithNewEngine(page, bytes);
+    // The 0.88 engine reads what the viewer's display pre-pass produces.
+    const display = await prepareDocxForDisplay(bytes, defaultResourceLimits);
+    const next = await renderWithNewEngine(page, display.bytes);
     const similarity =
       current.width === next.width && current.height === next.height
         ? await ssim(page, current.pixels, next.pixels)
         : 0;
     const report = {
       name,
+      prepass: {
+        scaledImages: display.scaledImages,
+        markedParagraphs: display.markedParagraphs,
+        generatedIds: display.generatedIds,
+      },
       pages: { current: current.pageCount, next: next.pageCount },
       size: {
         current: [current.width, current.height],
@@ -238,6 +289,7 @@ for (const [name, url] of [
       ssim: Number(similarity.toFixed(4)),
       runs: next.runs,
       withParagraphId: next.withParagraphId,
+      resolvedIds: next.resolvedIds,
       withSource: next.withSource,
       firstRun: next.firstRun,
       hasDocumentModel: next.hasDocumentModel,
@@ -253,5 +305,5 @@ for (const [name, url] of [
       contentType: "image/png",
     });
     expect(next.pageCount).toBeGreaterThan(0);
-    expect(next.runs).toBeGreaterThanOrEqual(0);
+    expect(next.resolvedIds).toBe(next.runs);
   });

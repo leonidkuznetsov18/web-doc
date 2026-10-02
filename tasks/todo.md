@@ -1565,15 +1565,15 @@ until the bump; the pre-passed fixture joins the spike.
 
 **Acceptance criteria:**
 
-- [ ] `docx-inline-images.spec.ts` passes through the pre-pass on the shipped
+- [x] `docx-inline-images.spec.ts` passes through the pre-pass on the shipped
       engine; the spike shows the pre-passed fixture rendering alike on 0.88
       with a `paragraphId` on every run.
-- [ ] Unit tests cover sections, tables, headers, `w:sdt`, existing ids kept,
+- [x] Unit tests cover sections, tables, headers, `w:sdt`, existing ids kept,
       the `w14` namespace declared, malformed parts passed through.
 
 **Verification:**
 
-- [ ] `node --test .test-dist/test/docx-prepass.test.js`;
+- [x] `node --test .test-dist/test/docx-prepass.test.js`;
       `npm run test:e2e -- tests/e2e/docx-inline-images.spec.ts tests/e2e/docx-engine-spike.spec.ts`
 
 **Dependencies:** Task 50
