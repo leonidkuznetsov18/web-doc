@@ -926,7 +926,9 @@ hex digits. It is the `paragraphId` the viewer reports on every DOCX text
 run and the name of the hidden bookmark the viewer's display copy carries,
 so a selection, a text run and an element name the same paragraph. Ids are
 stable for the session and never reused. A cell paragraph carries its
-table as `parentId`; a picture or other object carries its paragraph.
+table as `parentId` and its cell as `cell` (`row` and `column`, from 0); it
+moves only among the paragraphs of that cell. A picture or other object
+carries its paragraph.
 
 `text` of a paragraph is its logical text: `w:t` text, a tab `\t`, a line
 break `\v`, a page or column break `\f`, an inline picture or embedded

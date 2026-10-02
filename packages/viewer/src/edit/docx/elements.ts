@@ -5,6 +5,7 @@ import {
   type AnyRecord,
   type DocxModel,
   type ParagraphRecord,
+  type TableRecord,
 } from "./model.js";
 import { IMPLEMENTED_OPERATIONS } from "./schemas.js";
 import { resolveParagraphStyle, resolveTextStyle } from "./style.js";
@@ -105,10 +106,36 @@ function paragraphElement(
     id: record.elementId,
     kind: "paragraph",
     text: record.text.text,
-    ...(record.table ? { parentId: record.table.elementId } : {}),
+    ...(record.table
+      ? { parentId: record.table.elementId, ...cellOf(record.table, record) }
+      : {}),
     textStyle: resolveTextStyle(model.styles, record.pPr, first?.rPr),
     paragraphStyle: resolveParagraphStyle(model.styles, record.pPr),
     ...(record.readOnlyReason ? { readOnlyReason: record.readOnlyReason } : {}),
     operations: operationsOf("paragraph", record.readOnlyReason !== undefined),
   };
+}
+
+/** Where each paragraph of a table sits, read once per table. */
+const CELLS = new WeakMap<
+  TableRecord,
+  Map<ParagraphRecord, { row: number; column: number }>
+>();
+
+/** The cell of a table that holds a paragraph, when the table lists it. */
+function cellOf(
+  table: TableRecord,
+  record: ParagraphRecord,
+): { cell?: { row: number; column: number } } {
+  let cells = CELLS.get(table);
+  if (!cells) {
+    cells = new Map();
+    for (const [row, cellsOfRow] of table.rows.entries())
+      for (const [column, cell] of cellsOfRow.entries())
+        for (const paragraph of cell.paragraphs)
+          cells.set(paragraph, { row, column });
+    CELLS.set(table, cells);
+  }
+  const cell = cells.get(record);
+  return cell ? { cell } : {};
 }

@@ -100,6 +100,11 @@ export interface DocxElement extends EditElement {
   readonly textStyle?: DocxTextStyle;
   /** Present for a paragraph. */
   readonly paragraphStyle?: DocxParagraphStyle;
+  /**
+   * Present for a paragraph in a table cell: the cell's row and its place in
+   * the row, both from 0. Paragraphs move only among those of the same cell.
+   */
+  readonly cell?: { readonly row: number; readonly column: number };
   /** Present for a table: cell text by row. */
   readonly table?: { readonly rows: readonly (readonly string[])[] };
   /** Present for a paragraph whose text cannot be edited in place. */
