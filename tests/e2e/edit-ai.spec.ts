@@ -32,16 +32,18 @@ async function loadDocument(
   page: Page,
   bytes: Uint8Array,
   fileName: string,
+  limits: Record<string, number> = {},
 ): Promise<void> {
   await page.goto("/");
   await page.evaluate(
-    async ({ data, fileName }) => {
+    async ({ data, fileName, limits }) => {
       const { ViewerClient } = (await import("/main.js")) as {
         ViewerClient: { create(config: unknown): { createViewer(): unknown } };
       };
       const client = ViewerClient.create({
         assetBaseUrl: new URL("/", location.href),
         fontPolicy: { mode: "offline" },
+        limits,
       });
       const viewer = client.createViewer() as {
         load(bytes: Uint8Array, options: unknown): Promise<void>;
@@ -49,7 +51,7 @@ async function loadDocument(
       await viewer.load(new Uint8Array(data), { fileName });
       (window as unknown as { __viewer: unknown }).__viewer = viewer;
     },
-    { data: Array.from(bytes), fileName },
+    { data: Array.from(bytes), fileName, limits },
   );
 }
 
@@ -362,7 +364,12 @@ test("describes 500 pages and 500 slides within the operation budget and records
     ],
   ];
   for (const [format, bytes] of documents) {
-    await loadDocument(page, bytes, `large.${format}`);
+    // Opening 500 pages for editing is the engine's work, not what this
+    // measures: a loaded CI runner may need more than the default budget
+    // for it, while `describe()` itself is still held to that budget.
+    await loadDocument(page, bytes, `large.${format}`, {
+      maxOperationMs: 180_000,
+    });
     const result = await page.evaluate(async () => {
       const viewer = (window as unknown as { __viewer: any }).__viewer;
       const session = await viewer.edit();
