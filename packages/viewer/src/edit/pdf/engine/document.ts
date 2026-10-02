@@ -741,9 +741,12 @@ export class PdfEditDocument {
       },
       // Ids name the state the batch leads to, the operation and the item,
       // so replaying the history reproduces them and an undone id is never
-      // handed out again.
+      // handed out again. A file saved by an earlier session carries the ids
+      // that session numbered from 1 as well, so one already on the page
+      // gets the first free `~n` instead (ACTION-886); the saved objects are
+      // part of the base, so a replay meets them and picks the same id.
       newId: (pageIndex, suffix = "") =>
-        `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}${suffix}`,
+        `${this.#unusedId(pageIndex, `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}`)}${suffix}`,
       withPage: (pageIndex, use) => this.#writePage(pageIndex, use),
       appendObjects: (pageIndex, records) => {
         const page = this.#pages[pageIndex]!;
@@ -920,6 +923,19 @@ export class PdfEditDocument {
         : object,
     );
     return record.objects;
+  }
+
+  /** `id`, or `id~n` with the smallest `n` no object of the page has yet. */
+  #unusedId(pageIndex: number, id: string): string {
+    const record = this.#pages[pageIndex]!;
+    const objects =
+      record.objects ??
+      this.#withPage(pageIndex, (page) => this.#objectsOf(pageIndex, page));
+    const taken = new Set(objects.map((object) => object.id));
+    if (!taken.has(id)) return id;
+    let suffix = 1;
+    while (taken.has(`${id}~${suffix}`)) suffix += 1;
+    return `${id}~${suffix}`;
   }
 
   /** Marks from other sessions keep their id only if it cannot collide with ours. */
