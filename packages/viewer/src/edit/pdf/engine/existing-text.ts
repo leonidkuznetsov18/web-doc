@@ -4,7 +4,7 @@ import type {
   ReplaceTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
-import { objectBounds, OBJECT_TEXT } from "./elements.js";
+import { objectBounds, OBJECT_TEXT, textScale } from "./elements.js";
 import {
   firstNonWinAnsi,
   isStandardFamily,
@@ -363,7 +363,7 @@ function splitAround(
     const size =
       pdfium.readNumbers(1, "float", ([pointer]) =>
         lib.FPDFTextObj_GetFontSize(old, pointer!),
-      )?.[0] ?? style.fontSize;
+      )?.[0] ?? style.fontSize / textScale(matrix);
     const [a, b, c, d, e, f] = matrix as [
       number,
       number,
@@ -485,7 +485,7 @@ function replaceWithFallback(
     const size =
       pdfium.readNumbers(1, "float", ([pointer]) =>
         lib.FPDFTextObj_GetFontSize(old, pointer!),
-      )?.[0] ?? style.fontSize;
+      )?.[0] ?? style.fontSize / textScale(matrix);
     const object = lib.FPDFPageObj_CreateTextObj(
       context.document,
       font.handle,
@@ -557,10 +557,12 @@ function resize(
     const color = pdfium.readNumbers(4, "i32", ([r, g, b, a]) =>
       lib.FPDFPageObj_GetFillColor(old, r!, g!, b!, a!),
     ) ?? [0, 0, 0, 255];
+    // The size is the one the text shows: the old matrix, applied below,
+    // scales it again, so the font gets the size undone by that scale.
     const object = lib.FPDFPageObj_CreateTextObj(
       context.document,
       lib.FPDFTextObj_GetFont(old),
-      fontSize,
+      fontSize / textScale(matrix),
     );
     setText(pdfium, object, text);
     lib.FPDFPageObj_SetFillColor(
