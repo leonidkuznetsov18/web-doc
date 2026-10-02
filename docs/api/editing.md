@@ -401,7 +401,7 @@ Every method takes the operation's fields and the usual `ApplyOptions`
 | `insertPage`    | `index` (0 to the page count), `size?: { width, height }` (3–14 400 pt)                                                 | A blank page; the size defaults to the page before, else after, the position.                                                                                                                                                                                                               |
 | `deletePage`    | `pageIndex`                                                                                                             | The last page cannot be deleted (issue code `last-page`). Annotations on the page go with it.                                                                                                                                                                                               |
 | `movePage`      | `from`, `to` (the page's index after the move)                                                                          |                                                                                                                                                                                                                                                                                             |
-| `rotatePage`    | `pageIndex`, `rotation: 0 \| 90 \| 180 \| 270`                                                                          | Absolute clockwise rotation; page space turns with it.                                                                                                                                                                                                                                      |
+| `rotatePage`    | `pageIndex`, `rotation: 0 \| 90 \| 180 \| 270` or `by: 90 \| 180 \| 270`                                                | `rotation` sets the clockwise angle; `by` turns from the page's current angle, the one the file was saved with included. Exactly one of the two. Page space turns with the page.                                                                                                            |
 
 ```ts
 interface PdfTextBoxStyle {
@@ -465,7 +465,9 @@ interface PdfTextStyle {
 | `other`   | Shadings, form XObjects and anything else                               | `moveElement`, `resizeElement`, `deleteElement`                                |
 
 Ids look like `p0:o3` for objects of the original file and `p0:n2.0.0` for
-elements an operation created. They are stable for the whole session —
+elements an operation created. A file saved by an earlier session already
+carries such ids, so a new element whose id one of them has takes the first
+free `~n` after it, as in `p0:n2.0.0~1`. They are stable for the whole session —
 across undo, redo and page moves — and the same history always yields the
 same ids. Text boxes and tables are parametric: their objects carry a
 `WebDoc` marked-content tag holding the inputs they were drawn from, so they
@@ -924,7 +926,9 @@ hex digits. It is the `paragraphId` the viewer reports on every DOCX text
 run and the name of the hidden bookmark the viewer's display copy carries,
 so a selection, a text run and an element name the same paragraph. Ids are
 stable for the session and never reused. A cell paragraph carries its
-table as `parentId`; a picture or other object carries its paragraph.
+table as `parentId` and its cell as `cell` (`row` and `column`, from 0); it
+moves only among the paragraphs of that cell. A picture or other object
+carries its paragraph.
 
 `text` of a paragraph is its logical text: `w:t` text, a tab `\t`, a line
 break `\v`, a page or column break `\f`, an inline picture or embedded

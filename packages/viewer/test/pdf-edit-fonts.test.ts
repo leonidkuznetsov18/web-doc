@@ -170,6 +170,38 @@ describe("fonts for inserted PDF text", () => {
     }
   });
 
+  // ACTION-879: a Helvetica box made with Latin text, then given Ukrainian
+  // text with a dash, a euro sign and a line break, as QA typed it.
+  it("draws Cyrillic replacing the text of a Helvetica box", async () => {
+    const { engine } = await engineFor(original);
+    try {
+      const inserted = await applyOne(engine, textBox("QA PDF 0.8.0"));
+      const id = inserted.change!.createdIds[0]!;
+      for (const text of [
+        "Україна — PDF fallback after restart",
+        "QA PDF 0.8.0\nУкраїнська перевірка — € 123",
+      ]) {
+        const replaced = await applyOne(
+          engine,
+          op({ op: "replaceText", target: id, text }),
+        );
+        assert.deepEqual(codes(replaced.issues), [], text);
+      }
+      assert.match(
+        await extractPageText(await engine.materialize(signal), 0),
+        /Українська перевірка — € 123/,
+      );
+      // A character no font has is named, not the first Cyrillic letter.
+      const refused = await applyOne(
+        engine,
+        op({ op: "replaceText", target: id, text: "Україна ≠ 日本" }),
+      );
+      assert.match(refused.issues?.[0]?.message ?? "", /"≠" \(U\+2260\)/);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("keeps fonts working across undo, redo and reopen", async () => {
     const { engine } = await engineFor(original);
     try {

@@ -94,6 +94,18 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
       });
       assert.equal(elements[2]!.parentId, table.id);
       assert.equal(elements[6]!.parentId, table.id);
+      // Each cell paragraph knows its cell: B1 holds two, the empty B2 one.
+      assert.deepEqual(
+        elements.slice(2, 7).map((element) => element.cell),
+        [
+          { row: 0, column: 0 },
+          { row: 0, column: 1 },
+          { row: 0, column: 1 },
+          { row: 1, column: 0 },
+          { row: 1, column: 1 },
+        ],
+      );
+      assert.equal(elements[0]!.cell, undefined);
       const picture = elements[7]!;
       assert.equal(picture.text, "Picture ￼ after");
       assert.equal(elements[8]!.parentId, picture.id);

@@ -741,9 +741,12 @@ export class PdfEditDocument {
       },
       // Ids name the state the batch leads to, the operation and the item,
       // so replaying the history reproduces them and an undone id is never
-      // handed out again.
+      // handed out again. A file saved by an earlier session carries the ids
+      // that session numbered from 1 as well, so one already on the page
+      // gets the first free `~n` instead (ACTION-886); the saved objects are
+      // part of the base, so a replay meets them and picks the same id.
       newId: (pageIndex, suffix = "") =>
-        `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}${suffix}`,
+        `${this.#unusedId(pageIndex, `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}`)}${suffix}`,
       withPage: (pageIndex, use) => this.#writePage(pageIndex, use),
       appendObjects: (pageIndex, records) => {
         const page = this.#pages[pageIndex]!;
@@ -916,10 +919,50 @@ export class PdfEditDocument {
     }
     record.objects = objects.map((object, index) =>
       object.mark && stale.has(object.id)
-        ? { id: `${record.key}:o${index}`, type: object.type }
+        ? {
+            id: `${record.key}:o${index}`,
+            type: object.type,
+            staleMarkId: object.id,
+          }
         : object,
     );
     return record.objects;
+  }
+
+  /**
+   * `id`, or its first free `~n` when an object saved by an earlier session
+   * has it already. Only ids a session numbered (`<key>:n…`) can collide, so
+   * only those are gathered; the objects are read without the page's text.
+   */
+  #unusedId(pageIndex: number, id: string): string {
+    const record = this.#pages[pageIndex]!;
+    const objects = record.objects ?? this.#loadObjects(pageIndex);
+    const numbered = `${record.key}:n`;
+    const taken = new Set<string>();
+    for (const object of objects) {
+      if (object.id.startsWith(numbered)) taken.add(object.id);
+      if (object.staleMarkId?.startsWith(numbered))
+        taken.add(object.staleMarkId);
+    }
+    if (!taken.has(id)) return id;
+    let suffix = 1;
+    while (taken.has(`${id}~${suffix}`)) suffix += 1;
+    return `${id}~${suffix}`;
+  }
+
+  /** A page's objects, loading the page alone when they are not known yet. */
+  #loadObjects(pageIndex: number): ObjectRecord[] {
+    const { lib } = this.#pdfium;
+    const page = lib.FPDF_LoadPage(this.#document.handle, pageIndex);
+    if (!page)
+      throw new ViewerError("render-failed", "PDFium could not load the page", {
+        details: { pageIndex },
+      });
+    try {
+      return this.#objectsOf(pageIndex, page);
+    } finally {
+      lib.FPDF_ClosePage(page);
+    }
   }
 
   /** Marks from other sessions keep their id only if it cannot collide with ours. */

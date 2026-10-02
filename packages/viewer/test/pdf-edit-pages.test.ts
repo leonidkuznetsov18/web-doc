@@ -177,6 +177,74 @@ describe("page operations", () => {
     }
   });
 
+  // ACTION-888: "rotate" from a host that cannot see a page's angle. A file
+  // saved with page 2 at 90° must turn to 180°, each page on its own, and a
+  // replay of the history (undo, redo) turns from the same angle again.
+  it("turns a page from the angle it has with `by`", async () => {
+    const turned = await buildPdf([
+      "Upright",
+      { text: "Saved turned", rotation: 1 },
+    ]);
+    const model = new PdfEditDocument(pdfium, turned);
+    try {
+      model.apply([op({ op: "rotatePage", pageIndex: 1, by: 90 })]);
+      assert.deepEqual(
+        (await pageShapes(model.materialize())).map((shape) => shape[2]),
+        [0, 180],
+      );
+      model.apply([op({ op: "rotatePage", pageIndex: 0, by: 90 })]);
+      model.apply([op({ op: "rotatePage", pageIndex: 1, by: 270 })]);
+      assert.deepEqual(
+        (await pageShapes(model.materialize())).map((shape) => shape[2]),
+        [90, 90],
+      );
+      // Undo of the last turn, then redo: the same angles come back.
+      model.restore([
+        [op({ op: "rotatePage", pageIndex: 1, by: 90 })],
+        [op({ op: "rotatePage", pageIndex: 0, by: 90 })],
+      ]);
+      assert.deepEqual(
+        (await pageShapes(model.materialize())).map((shape) => shape[2]),
+        [90, 180],
+      );
+      assert.deepEqual(
+        model
+          .validate([
+            op({ op: "rotatePage", pageIndex: 0 } as unknown as PdfOperation),
+            op({
+              op: "rotatePage",
+              pageIndex: 0,
+              rotation: 90,
+              by: 90,
+            } as unknown as PdfOperation),
+          ])
+          .map((issue) => `${issue.operationIndex}${issue.path}:${issue.code}`),
+        ["0:one-of", "1:one-of"],
+      );
+      // A field spread in as undefined is absent, as a structured clone keeps
+      // the key.
+      assert.deepEqual(
+        model.validate([
+          op({
+            op: "rotatePage",
+            pageIndex: 0,
+            rotation: 90,
+            by: undefined,
+          } as unknown as PdfOperation),
+          op({
+            op: "rotatePage",
+            pageIndex: 0,
+            rotation: undefined,
+            by: 90,
+          } as unknown as PdfOperation),
+        ]),
+        [],
+      );
+    } finally {
+      model.dispose();
+    }
+  });
+
   it("replays page structure deterministically", async () => {
     const batches = [
       [
