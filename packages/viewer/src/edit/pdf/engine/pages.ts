@@ -98,11 +98,19 @@ export const rotatePage: OperationHandler<RotatePageOperation> = {
   validate(operation, context, issue) {
     if (operation.pageIndex >= context.pageCount)
       issue("/pageIndex", "unknown-target", `No page ${operation.pageIndex}`);
+    if ("rotation" in operation === "by" in operation)
+      issue("", "one-of", "Give exactly one of `rotation` and `by`");
   },
   apply(operation, context) {
     const { lib } = context.pdfium;
     context.withPage(operation.pageIndex, (page) => {
-      lib.FPDFPage_SetRotation(page, operation.rotation / 90);
+      // A turn reads the angle the page has now, so it composes with what
+      // the file was saved with and with turns earlier in the history.
+      const quarters =
+        "by" in operation
+          ? (lib.FPDFPage_GetRotation(page) + operation.by / 90) % 4
+          : operation.rotation / 90;
+      lib.FPDFPage_SetRotation(page, quarters);
     });
     context.invalidatePage(operation.pageIndex);
     return {

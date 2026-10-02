@@ -806,7 +806,9 @@ function describeOperation(
     case "moveSlide":
       return `Moved ${pages} ${Number(fields.from) + 1} to ${Number(fields.to) + 1}`;
     case "rotatePage":
-      return `Rotated ${pages} ${Number(fields.pageIndex) + 1} to ${String(fields.rotation)}°`;
+      return fields.by === undefined
+        ? `Rotated ${pages} ${Number(fields.pageIndex) + 1} to ${String(fields.rotation)}°`
+        : `Turned ${pages} ${Number(fields.pageIndex) + 1} by ${String(fields.by)}°`;
     default:
       return `Applied ${operation.op}${target === "the element" ? "" : ` to ${target}`}${tag}`;
   }

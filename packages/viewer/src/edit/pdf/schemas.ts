@@ -215,13 +215,16 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       },
       ["from", "to"],
     ),
+    // Exactly one of `rotation` (absolute) and `by` (a turn from the current
+    // angle); the handler reports a batch that gives both or neither.
     rotatePage: operation(
       "rotatePage",
       {
         pageIndex: { type: "integer", minimum: 0 },
         rotation: { enum: [0, 90, 180, 270] },
+        by: { enum: [90, 180, 270] },
       },
-      ["pageIndex", "rotation"],
+      ["pageIndex"],
     ),
     insertShape: operation(
       "insertShape",

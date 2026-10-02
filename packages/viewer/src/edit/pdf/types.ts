@@ -226,12 +226,24 @@ export interface SetShapeStyleOperation {
   readonly fill?: PdfFill | null;
 }
 
-export interface RotatePageOperation {
-  readonly op: "rotatePage";
-  readonly pageIndex: number;
-  /** Absolute clockwise rotation in degrees. */
-  readonly rotation: 0 | 90 | 180 | 270;
-}
+/**
+ * Sets a page's rotation, or turns it from where it stands: a host offering
+ * "rotate" does not need to know the angle a file was saved with, and a
+ * replay of the history turns from the same angle again.
+ */
+export type RotatePageOperation =
+  | {
+      readonly op: "rotatePage";
+      readonly pageIndex: number;
+      /** Absolute clockwise rotation in degrees. */
+      readonly rotation: 0 | 90 | 180 | 270;
+    }
+  | {
+      readonly op: "rotatePage";
+      readonly pageIndex: number;
+      /** Clockwise turn in degrees from the page's current rotation. */
+      readonly by: 90 | 180 | 270;
+    };
 
 /** The PDF operation union; operations are added as they ship. */
 export type PdfOperation =
