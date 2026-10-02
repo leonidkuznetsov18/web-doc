@@ -1650,9 +1650,10 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
       `moveElement`, `insertImage`. (2026-10-02; table ids follow their first
       paragraph and are reported through `remappedIds`)
 - [x] Task 57: Tables — `insertTable`, `setTableCell`. (2026-10-02)
-- [ ] Task 58: Round trip, latency on 10/100/500 pages, `npm run
-    fixtures:docx`, docs, `npm run check`, Linear proofs.
+- [x] Task 58: Round trip, latency on 10/100/500 pages, `npm run
+    fixtures:docx`, docs, `npm run check`, Linear proofs. (2026-10-02)
 
 ### Checkpoint K: DOCX editing done
 
-- [ ] ACTION-814 Done except its release criterion
+- [x] ACTION-814 Done except its release criterion (2026-10-02; the ticket
+      stays In Progress for the Word/Pages check and the release)

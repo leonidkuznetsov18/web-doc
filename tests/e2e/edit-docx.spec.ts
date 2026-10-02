@@ -3,9 +3,15 @@ import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 import {
+  localRecordOf,
+  parseZip,
+} from "../../packages/viewer/src/edit/ooxml/zip.js";
+import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
+import {
   buildDocx,
   paragraph,
   sectPr,
+  syntheticDocument,
 } from "../../packages/viewer/test/fixtures/docx-builder.js";
 
 /*
@@ -573,4 +579,114 @@ test("inserts a table the renderer draws and edits a cell that the page text sho
   expect(result.hit).toEqual(["paragraph", "table"]);
   expect(result.reloaded).toContain("uno");
   expect(result.identical).toBe(true);
+});
+
+/** Names of the ZIP entries whose local records differ between two packages. */
+function changedEntries(a: Uint8Array, b: Uint8Array): string[] {
+  const left = parseZip(a, defaultResourceLimits);
+  const right = parseZip(b, defaultResourceLimits);
+  const changed: string[] = [];
+  for (const entry of right.entries) {
+    const before = left.entries.find(
+      (candidate) => candidate.name === entry.name,
+    );
+    if (!before) {
+      changed.push(entry.name);
+      continue;
+    }
+    const x = localRecordOf(left, before);
+    const y = localRecordOf(right, entry);
+    const bytesBefore = a.subarray(x.headerOffset, x.recordEnd);
+    const bytesAfter = b.subarray(y.headerOffset, y.recordEnd);
+    if (
+      bytesBefore.length !== bytesAfter.length ||
+      bytesBefore.some((byte, index) => byte !== bytesAfter[index])
+    )
+      changed.push(entry.name);
+  }
+  for (const entry of left.entries)
+    if (!right.entries.some((candidate) => candidate.name === entry.name))
+      changed.push(`-${entry.name}`);
+  return changed.sort();
+}
+
+test("changes only the entries an edit touches: the body part, plus media and relationships for a picture", async ({
+  page,
+}) => {
+  const bytes = buildDocx({
+    body: paragraph("One") + paragraph("Two") + paragraph("Three") + sectPr(),
+  });
+  const png = Uint8Array.from(
+    atob(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+    ),
+    (c) => c.charCodeAt(0),
+  );
+  await loadDocument(page, bytes, "entries.docx");
+  const saved = await page.evaluate(
+    async ({ png }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const [one, two] = (await session.getElements({ pageIndex: 0 }))
+        .items as Element[];
+      await session.replaceText({ target: two!.id, text: "Two, edited" });
+      await session.setTextStyle({ target: one!.id, style: { bold: true } });
+      await session.setParagraphStyle({
+        target: one!.id,
+        style: { align: "right" },
+      });
+      await session.insertTable({ after: one!.id, rows: [["a", "b"]] });
+      const text = Array.from((await session.save()).bytes as Uint8Array);
+      await session.insertImage({
+        after: two!.id,
+        data: new Uint8Array(png),
+        mimeType: "image/png",
+        size: { width: 10, height: 10 },
+      });
+      const picture = Array.from((await session.save()).bytes as Uint8Array);
+      return { text, picture };
+    },
+    { png: Array.from(png) },
+  );
+  expect(changedEntries(bytes, new Uint8Array(saved.text))).toEqual([
+    "word/document.xml",
+  ]);
+  expect(changedEntries(bytes, new Uint8Array(saved.picture))).toEqual([
+    "[Content_Types].xml",
+    "word/_rels/document.xml.rels",
+    "word/document.xml",
+    "word/media/image1.png",
+  ]);
+});
+
+test("applies an edit within the budget on 10- and 100-page documents and records 500", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  const timings: Record<string, number[]> = {};
+  for (const count of [10, 100, 500]) {
+    await loadDocument(page, syntheticDocument(count), `pages-${count}.docx`);
+    timings[count] = await page.evaluate(async () => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const elements = (await session.getElements()).items as Element[];
+      const first = elements[0]!;
+      const last = elements.at(-1)!;
+      const out: number[] = [];
+      for (const text of ["First edit", "Second edit"]) {
+        const started = performance.now();
+        await session.replaceText({ target: first.id, text });
+        out.push(performance.now() - started);
+      }
+      const started = performance.now();
+      await session.insertParagraph({ after: last.id, text: "Last page" });
+      out.push(performance.now() - started);
+      return out;
+    });
+    console.log(
+      `docx apply ${count} pages: replaceText ${timings[count]![0]!.toFixed(0)} ms then ${timings[count]![1]!.toFixed(0)} ms, insertParagraph on the last page ${timings[count]![2]!.toFixed(0)} ms`,
+    );
+    if (count < 500)
+      for (const value of timings[count]!) expect(value).toBeLessThan(3000);
+  }
 });

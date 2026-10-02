@@ -189,3 +189,20 @@ export function buildDocx(options: DocxOptions): Uint8Array {
     ...files,
   ]);
 }
+
+/**
+ * A document of `pages` pages for latency runs: every page holds a
+ * paragraph of filler text, every page but the last ends with a page break.
+ */
+export function syntheticDocument(pages: number): Uint8Array {
+  const filler =
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. ";
+  let body = "";
+  for (let index = 0; index < pages; index += 1) {
+    const text = `Page ${index + 1}. ${filler.repeat(3)}`;
+    body += `<w:p><w:r><w:t xml:space="preserve">${text}</w:t></w:r>${
+      index < pages - 1 ? '<w:r><w:br w:type="page"/></w:r>' : ""
+    }</w:p>`;
+  }
+  return buildDocx({ body: body + sectPr() });
+}

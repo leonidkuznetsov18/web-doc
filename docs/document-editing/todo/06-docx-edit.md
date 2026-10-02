@@ -1,8 +1,9 @@
 # Module 06. `docx-edit` — DOCX editing on the package layer
 
-**Status:** In progress 2026-10-02 (Linear ACTION-814): T54 inspection
-landed; T55–T58 follow. Written after module 05's spike so it builds on
-what the 0.88 engine really exposes; module 05 landed the same day.
+**Status:** Done 2026-10-02 (T54–T58, Linear ACTION-814); the release and
+the Word/Pages check of the fixture set are Leonid's. Written after module
+05's spike so it builds on what the 0.88 engine really exposes; module 05
+landed the same day.
 
 ## Goal
 
@@ -378,7 +379,10 @@ Proposed tasks for `tasks/plan.md` Phase 10 (after Phase 9):
 - Browser: `tests/e2e/edit-docx.spec.ts` in the matrix; the geometry join
   checked against `getPageText` and the text map; the reflow of
   `changedPages`.
-- Manual (Leonid): the fixture set in Word and Pages.
+- Manual (Leonid): `npm run fixtures:docx` writes
+  `artifacts/docx-fixtures/<operation>.docx` (twelve edited copies of the
+  corpus document, one per operation plus `everything`) for the check that
+  Word and Pages open every result without a repair prompt.
 
 ### Docs
 
@@ -428,7 +432,9 @@ Proposed in the draft; open for review.
   paragraphs on the canvas (the session could resolve the point through
   `elementsAt`); left out of the MVP.
 - Whether `materialize("show")` should also write the pre-pass bookmarks
-  itself to save one scan on each reopen; measured in T58.
+  itself to save one scan on each reopen: left as is in T58, since the
+  pre-pass scan is a few milliseconds against a reopen that lays out the
+  whole document (seconds on 500 pages).
 
 ## Actual result
 
@@ -568,3 +574,24 @@ Proposed in the draft; open for review.
   (insert with weights, `getPageText` shows the cells, `setTableCell`,
   table placed from its cells, hit test, reload, undo to identical
   bytes).
+- **T58 (2026-10-02)**: the browser suite checks every method's round trip
+  (render after the call, reload of the saved bytes, undo or reset to
+  identical bytes) and compares the saved package entry by entry: text,
+  style and table edits change `word/document.xml` only; a picture adds
+  `word/media/image1.png`, its relationship and the content type. Latency
+  in headless Chromium on an Apple M4 Pro with one paragraph per page:
+  `replaceText` 70–85 ms on 10 pages, 70–520 ms on 100 pages, 150 ms to
+  3.1 s on 500 pages; `insertParagraph` on the last page 70 ms, 500 ms,
+  2.4 s; the slowest browser of the matrix reaches 470 ms, 2.3 s and
+  9.5 s. The suite fails above three seconds on 10 and 100 pages and
+  records 500; the docs set the commit-on-idle guidance from it.
+  `npm run fixtures:docx` (`scripts/docx-fixtures.mjs`) writes the twelve
+  fixtures for the manual Word and Pages check. `docs/api/editing.md`
+  carries the DOCX issue codes and the performance section; the GenOffice
+  notice names the DOCX ideas. Definition of done: every operation works
+  through `apply()` and its typed method with unit and browser tests;
+  no-change and undo-to-zero return identical bytes and a saved file
+  differs only in the touched entries and paragraphs; the corpus
+  document's elements carry the runs' ids with bounds that cover them;
+  latency recorded; fixtures written; `npm run check` and the matrix
+  green. Left for Leonid: the Word/Pages check and the release.

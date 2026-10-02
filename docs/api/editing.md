@@ -981,11 +981,38 @@ Each `apply()` reopens the document, which lays every page out again;
 the first page of the edited paragraph to the end of the document, as
 the viewer knew that paragraph's page before the change.
 
+### DOCX issue codes
+
+Besides the shared codes (`required`, `type`, `unknown-operation`,
+`unknown-target`, `unknown-asset`), DOCX validation reports:
+
+| Code                  | Where                           | Meaning                                                                                                                     |
+| --------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `invalid-target`      | `/target`, `/before`, `/after`  | The element is not of the kind the operation takes, is read-only, or the reference is not in the same body or cell.        |
+| `invalid-range`       | `/range`, `/text`               | Ends off the target, out of order or out of bounds, a split surrogate pair, a cut field, a cut hyperlink or content-control edge, or a paragraph break inside one. |
+| `invalid-text`        | `/text`, `/rows/<r>/<c>`        | Control characters XML cannot carry, or a lone surrogate.                                                                   |
+| `invalid-value`       | `/style/color`, `/style/fontFamily`, `/before`, `/rows`, `/columnWidths`, `/data` | A colour that is not `#RRGGBB`, `auto` or a theme colour name; a bad font name; neither or both of `before` and `after`; ragged rows; one weight per column missing; bytes that are not the declared image type. |
+| `last-paragraph`      | `/target`                       | The last paragraph of the body or of a cell cannot be deleted.                                                              |
+| `section-break`       | `/target`                       | A paragraph that ends a section cannot be deleted or moved.                                                                 |
+| `range`               | `/row`, `/column`               | The row or column lies outside the table.                                                                                   |
+
 ### Performance
 
 Inspection costs one scan of the body part when the session starts and
 one read of the page's runs per query; the runs are the viewer's cached
 text maps, computed on first use.
+
+Each `apply()` saves the package, runs the display pre-pass and reopens
+the document, which lays every page out again. Measured in the headless
+browser matrix on an Apple M4 Pro with synthetic documents of one
+paragraph per page, a `replaceText` resolves in 70–85 ms on 10 pages,
+70–520 ms on 100 pages and 150 ms to 3.1 s on 500 pages in Chromium; an
+`insertParagraph` on the last page takes 70 ms, 500 ms and 2.4 s
+respectively. The slowest browser of the matrix takes up to 470 ms on 10
+pages, 2.3 s on 100 and 9.5 s on 500. The browser suite fails above three
+seconds on 10 and 100 pages and records 500. Commit on idle: debounce
+typing and commit on blur, batch the operations that belong together, and
+expect a long document to take seconds per commit.
 
 ## Guidance for AI clients
 
