@@ -5,6 +5,7 @@ import { relativeTarget } from "../ooxml/transaction.js";
 import type { XmlElement, XmlPart } from "../ooxml/xml.js";
 import { OFFICE_RELATIONSHIPS, W_NS } from "./ids.js";
 import type {
+  BlockRecord,
   DocxModel,
   InlineRecord,
   ParagraphRecord,
@@ -24,9 +25,9 @@ import type {
   DocxMoveElementOperation,
 } from "./types.js";
 import {
+  attributeProblem,
   changedRunProperties,
   colorProblem,
-  isAuthored,
   namespacePatches,
   normalizeText,
   paragraphPropertiesWithoutSection,
@@ -151,13 +152,20 @@ function stampedSlice(
       .findAll("p", node)
       .filter((p) => p !== node && p.namespace === W_NS),
   ]
-    .filter((paragraph) => !isAuthored(part, paragraph))
+    .filter((paragraph) => {
+      const id = model.paragraphIds.get(paragraph);
+      return id !== undefined && model.unauthoredSet.has(id);
+    })
     .sort((a, b) => b.start - a.start);
   let xml = sliceOf(part, node);
   const stamped: string[] = [];
   for (const paragraph of targets) {
-    const id = model.paragraphIds.get(paragraph);
-    if (!id) continue;
+    const id = model.paragraphIds.get(paragraph)!;
+    // A paragraph stamped by a shown base already carries the attribute.
+    if (part.attribute(paragraph, "w14:paraId")) {
+      stamped.push(id);
+      continue;
+    }
     // After the attributes of the start tag, before ">" or "/>".
     const last = paragraph.attributes.at(-1);
     const from = last ? last.end : paragraph.start + 1 + paragraph.name.length;
@@ -215,7 +223,7 @@ export const insertParagraphHandler: DocxOperationHandler<DocxInsertParagraphOpe
         if (colour) issue("/style/color", "invalid-value", `Colour: ${colour}`);
       }
       if (operation.style?.fontFamily !== undefined) {
-        const font = textProblem(operation.style.fontFamily);
+        const font = attributeProblem(operation.style.fontFamily);
         if (font) issue("/style/fontFamily", "invalid-value", `Font: ${font}`);
       }
       placement(operation, context, issue);
@@ -269,6 +277,29 @@ export const insertParagraphHandler: DocxOperationHandler<DocxInsertParagraphOpe
       });
     },
   };
+
+/**
+ * The patch that keeps a body from ending with a table, or from holding
+ * no block at all, once `remaining` are its blocks: an empty paragraph
+ * after the last of them, or where the body's section properties start.
+ */
+function bodyTailPatch(
+  context: DocxOperationContext,
+  remaining: readonly BlockRecord[],
+): { patch: XmlPatch; id: string } | undefined {
+  const { model } = context;
+  const last = remaining.at(-1);
+  if (last && last.kind === "paragraph") return undefined;
+  const id = context.freshParagraphId();
+  const xml = paragraphXml(undefined, id, "", "");
+  const part = model.document;
+  const patch = last
+    ? patches.insertAfter(part, last.node, xml)
+    : model.bodySectPr
+      ? patches.insertBefore(part, model.bodySectPr, xml)
+      : patches.appendChild(part, model.body, xml);
+  return { patch, id };
+}
 
 /** Whether the container of a block would keep a paragraph without it. */
 function otherParagraphsIn(model: DocxModel, record: ParagraphRecord): boolean {
@@ -329,22 +360,15 @@ export const deleteElementHandler: DocxOperationHandler<DocxDeleteElementOperati
       const node = blockNode(record);
       const items: XmlPatch[] = [patches.removeElement(part, node)];
       const createdIds: string[] = [];
-      if (record.kind === "table" && model.blocks.includes(record)) {
-        // The body must not end with a table: a paragraph follows if it would.
-        const blocks = model.blocks;
-        const index = blocks.indexOf(record);
-        const next = blocks[index + 1];
-        const previous = blocks[index - 1];
-        if (!next && previous?.kind === "table") {
-          const id = context.freshParagraphId();
-          createdIds.push(`p:${id}`);
-          items.push(
-            patches.insertAfter(
-              part,
-              node,
-              paragraphXml(undefined, id, "", ""),
-            ),
-          );
+      if (model.blocks.includes(record)) {
+        // The body must not end with a table or stand empty.
+        const tail = bodyTailPatch(
+          context,
+          model.blocks.filter((block) => block !== record),
+        );
+        if (tail) {
+          createdIds.push(`p:${tail.id}`);
+          items.push(tail.patch);
         }
       }
       const removedParagraphIds = paragraphIdsUnder(model, node);
@@ -384,17 +408,21 @@ async function deleteInline(
           (part.attribute(candidate, "r:embed") === rId ||
             part.attribute(candidate, "r:link") === rId),
       );
-    const elsewhere = new RegExp(`r:(?:id|embed|link|pict)="${rId}"`);
+    const elsewhere = new RegExp(
+      `r:(?:id|embed|link|pict)="${rId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`,
+    );
     const others =
       uses.length > 0 || elsewhere.test(stripNode(part, record.node));
     if (!others) transaction.removeRelationship(model.mainPart, rId);
   }
+  const removedParagraphIds = paragraphIdsUnder(model, record.node);
   return commit(
     context,
     [patches.removeElement(part, record.node)],
     {
       createdIds: [],
       removedIds: [record.elementId],
+      ...(removedParagraphIds.length > 0 ? { removedParagraphIds } : {}),
       reflowFrom: record.paragraph.id,
     },
     transaction,
@@ -425,6 +453,14 @@ export const moveElementHandler: DocxOperationHandler<DocxMoveElementOperation> 
           "/target",
           "section-break",
           "A paragraph that ends a section cannot move",
+        );
+        return;
+      }
+      if (record.kind === "paragraph" && record.readOnlyReason) {
+        issue(
+          "/target",
+          "invalid-target",
+          `Paragraph ${operation.target} is read-only (${record.readOnlyReason})`,
         );
         return;
       }
@@ -464,6 +500,18 @@ export const moveElementHandler: DocxOperationHandler<DocxMoveElementOperation> 
           ? patches.insertBefore(part, target, xml)
           : patches.insertAfter(part, target, xml),
       ];
+      const createdIds: string[] = [];
+      if (model.blocks.includes(record) && model.blocks.includes(reference)) {
+        // The body must not end with a table once the blocks are reordered.
+        const without = model.blocks.filter((block) => block !== record);
+        const at = without.indexOf(reference);
+        without.splice(side === "before" ? at : at + 1, 0, record);
+        const tail = bodyTailPatch(context, without);
+        if (tail) {
+          createdIds.push(`p:${tail.id}`);
+          items.push(tail.patch);
+        }
+      }
       // The document reflows from whichever of the two comes first.
       const order = (candidate: ParagraphRecord | TableRecord): number =>
         model.records.indexOf(candidate);
@@ -484,7 +532,7 @@ export const moveElementHandler: DocxOperationHandler<DocxMoveElementOperation> 
         }
       }
       return commit(context, items, {
-        createdIds: [],
+        createdIds,
         stamped,
         reflowFrom: first.id,
         ...(remappedIds ? { remappedIds } : {}),

@@ -953,12 +953,14 @@ largest picture's declared extent (`imageSize` on the picture element) and
 an empty paragraph with a line of its neighbour's height. `elementsAt()` reads the page's
 runs and returns the paragraph under the point followed by its table.
 `findText()` searches the paragraphs' logical text in document order and
-places each match from the runs: the page that holds the paragraph is
-found in the viewer's cache first, then in `pageRange`, then page by page;
-the rectangles are the matched characters' share of their runs when the
-run text aligns with the paragraph text, else the paragraph's runs on its
-first page. Page space is CSS pixels at 96 dpi, the unit of
-`DocumentInfo.pageSizes` for documents.
+places each match from the runs: the first page that holds the paragraph
+is found in the viewer's cache, then in `pageRange`, then page by page,
+and the paragraph's pages are grown around it; the rectangles are the
+matched characters' share of their runs when the run text aligns with the
+paragraph text, else the paragraph's runs on its first page. `pageRange`
+bounds the matches by the page they are placed on, and `maxResults`
+counts the matches on those pages. Page space is CSS pixels at 96 dpi,
+the unit of `DocumentInfo.pageSizes` for documents.
 
 ### What stays unchanged
 
@@ -972,9 +974,17 @@ rebuilt or new paragraph is written with a `w14:paraId` (the document
 root gains the `w14` namespace declaration when it lacks one), so its id
 survives a save and a later session; untouched paragraphs without one
 keep none in the saved file. The copy the viewer shows carries an id on
-every paragraph, so the runs keep naming the engine's paragraphs after
-edits that move paragraphs around, and undo and redo restore the exact
-bytes of the earlier state.
+every paragraph and a part of its own (`/webdoc/unauthored.xml`) naming
+the ids the engine stamped, so the runs keep naming the engine's
+paragraphs after edits that move paragraphs around, undo and redo
+restore the exact bytes of the earlier state, and a checkpoint reopened
+as the base of a later state still saves without the stamped ids.
+
+Paragraphs of headers, footers, footnotes, endnotes and comments are
+not listed and cannot be targeted. Their `paragraphId` on the viewer's
+runs is positional when the file carries no `w14:paraId` for them, and
+follows the body's: it can change after the first edit of a document,
+once the body's paragraphs are stamped.
 
 Each `apply()` reopens the document, which lays every page out again;
 `changedPages` of the receipt and of `documentchange` is every page from

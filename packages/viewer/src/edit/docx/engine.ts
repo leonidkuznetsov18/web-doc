@@ -24,6 +24,7 @@ import { NO_PAGE, toElement } from "./elements.js";
 import { docxHandlers } from "./handlers.js";
 import { freshParagraphId, paragraphsOf } from "./ids.js";
 import { DocxModel, type AnyRecord } from "./model.js";
+import type { DocxStyles } from "./style.js";
 import { issueCollector, type DocxOperationContext } from "./operations.js";
 import { docxOperationSchemas } from "./schemas.js";
 import type { DocxElement, DocxOperation } from "./types.js";
@@ -43,6 +44,27 @@ import { namespacePatches } from "./write.js";
  * paragraphs; the saved file carries ids only where the session wrote.
  */
 
+/**
+ * The part a shown copy carries with the ids the engine owns, so a copy
+ * restored as a base knows which `w14:paraId` values to leave out of a
+ * saved file. An XML part: its content type is the one every package
+ * declares for the extension, so `[Content_Types].xml` stays untouched.
+ */
+const UNAUTHORED_PART = "/webdoc/unauthored.xml";
+const UNAUTHORED_NS = "urn:web-doc:docx-edit";
+
+function unauthoredPartXml(ids: Iterable<string>): Uint8Array {
+  const items = [...ids].map((id) => `<p id="${id}"/>`).join("");
+  return new TextEncoder().encode(
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><unauthored xmlns="${UNAUTHORED_NS}">${items}</unauthored>`,
+  );
+}
+
+function unauthoredIdsOf(bytes: Uint8Array): string[] {
+  const text = new TextDecoder().decode(bytes);
+  return [...text.matchAll(/<p id="([0-9A-F]{8})"\/>/g)].map((m) => m[1]!);
+}
+
 export class DocxEditEngine implements EditEngine {
   readonly schemas = docxOperationSchemas;
   readonly #original: Uint8Array;
@@ -50,6 +72,8 @@ export class DocxEditEngine implements EditEngine {
   readonly #assets = new AssetStore();
   #pkg: OoxmlPackage;
   #model: Promise<DocxModel> | undefined;
+  /** The styles and theme, read once: no operation changes them. */
+  #styles: DocxStyles | undefined;
   /** Ids of the paragraphs without `w14:paraId`, in document order; undefined until read from the bytes. */
   #unauthored: string[] | undefined;
   #disposed = false;
@@ -101,12 +125,16 @@ export class DocxEditEngine implements EditEngine {
   }
 
   #startModel(signal?: AbortSignal): Promise<DocxModel> {
-    const pending = DocxModel.load(this.#pkg, signal, this.#unauthored).then(
-      (model) => {
-        this.#unauthored ??= [...model.unauthoredIds];
-        return model;
-      },
-    );
+    const pending = DocxModel.load(
+      this.#pkg,
+      signal,
+      this.#unauthored,
+      this.#styles,
+    ).then((model) => {
+      this.#unauthored ??= [...model.unauthoredIds];
+      this.#styles ??= model.styles;
+      return model;
+    });
     this.#model = pending;
     pending.catch(() => {
       if (this.#model === pending) this.#model = undefined;
@@ -229,6 +257,9 @@ export class DocxEditEngine implements EditEngine {
           remappedIds[origin] = to;
         }
       }
+      // The index after the batch; an inconsistency surfaces here and
+      // rolls the batch back like any other failure.
+      await this.model(signal);
     } catch (error) {
       // Everything the batch did, ids included, is undone.
       this.#pkg.restore(snapshot);
@@ -237,7 +268,6 @@ export class DocxEditEngine implements EditEngine {
       throw error;
     }
     this.#pkg.release(snapshot);
-    await this.model(signal);
     return {
       createdIds,
       removedIds,
@@ -262,6 +292,7 @@ export class DocxEditEngine implements EditEngine {
     issued: Set<string> = new Set(),
   ): Promise<DocxOperationContext> {
     const model = await this.model(signal);
+    const taken = new Set([...model.takenIds, ...issued]);
     let count = 0;
     return {
       pkg: this.#pkg,
@@ -271,10 +302,10 @@ export class DocxEditEngine implements EditEngine {
       stateId,
       operationIndex,
       freshParagraphId: () => {
-        const taken = new Set([...model.takenIds, ...issued]);
         const id = freshParagraphId(stateId, operationIndex, count, taken);
         count += 1;
         issued.add(id);
+        taken.add(id);
         return id;
       },
     };
@@ -308,12 +339,21 @@ export class DocxEditEngine implements EditEngine {
     const own =
       purposeOrSignal instanceof AbortSignal ? purposeOrSignal : signal;
     const bytes = await this.#pkg.save({}, own);
-    if (purpose === "save" || this.#pkg.changedParts.length === 0)
+    const fromShownBase = this.#pkg.has(UNAUTHORED_PART);
+    if (purpose === "save")
+      return {
+        bytes: fromShownBase ? await this.#unstamped(bytes, own) : bytes,
+        warnings: [],
+      };
+    if (this.#pkg.changedParts.length === 0 && !fromShownBase)
       return { bytes, warnings: [] };
     return { bytes: await this.#stamped(bytes, own), warnings: [] };
   }
 
-  /** A copy of `bytes` with a `w14:paraId` on every paragraph of the main part. */
+  /**
+   * A copy of `bytes` with a `w14:paraId` on every paragraph of the main
+   * part and the engine's own ids listed in a part of their own.
+   */
   async #stamped(bytes: Uint8Array, signal: AbortSignal): Promise<Uint8Array> {
     const model = await this.model(signal);
     const copy = await OoxmlPackage.open(bytes, {
@@ -321,7 +361,15 @@ export class DocxEditEngine implements EditEngine {
       signal,
     });
     const part = await copy.xml(model.mainPart, signal);
-    const queue = [...(this.#unauthored ?? [])];
+    const owned = this.#unauthored ?? [];
+    // Ids already written (by an edit, or by the shown base this state
+    // came from) stay; the rest go on the unmarked paragraphs in order.
+    const attributed = new Set<string>();
+    for (const paragraph of paragraphsOf(part)) {
+      const id = part.attribute(paragraph, "w14:paraId");
+      if (id) attributed.add(id.toUpperCase());
+    }
+    const queue = owned.filter((id) => !attributed.has(id));
     const items: XmlPatch[] = [];
     for (const paragraph of paragraphsOf(part)) {
       if (part.attribute(paragraph, "w14:paraId")) continue;
@@ -333,9 +381,53 @@ export class DocxEditEngine implements EditEngine {
         );
       items.push(patches.setAttribute(part, paragraph, "w14:paraId", id));
     }
-    if (items.length === 0) return bytes;
+    const list = owned.length > 0 ? unauthoredPartXml(owned) : undefined;
+    if (items.length === 0) {
+      // Already the shown form of this state: nothing to write.
+      const current = copy.has(UNAUTHORED_PART)
+        ? await copy.part(UNAUTHORED_PART, signal)
+        : undefined;
+      if (
+        current === undefined
+          ? list === undefined
+          : list !== undefined && sameBytes(current, list)
+      )
+        return bytes;
+    }
     const transaction = copy.transaction();
-    transaction.patch(part, [...namespacePatches(part), ...items]);
+    if (items.length > 0)
+      transaction.patch(part, [...namespacePatches(part), ...items]);
+    if (list) transaction.setPart(UNAUTHORED_PART, list, "application/xml");
+    else if (copy.has(UNAUTHORED_PART)) transaction.removePart(UNAUTHORED_PART);
+    await transaction.commit(signal);
+    return copy.save({}, signal);
+  }
+
+  /**
+   * A copy of `bytes` without the ids a shown base brought: the engine's
+   * own `w14:paraId` values go, the ones an edit wrote stay, and the list
+   * part goes with them.
+   */
+  async #unstamped(
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<Uint8Array> {
+    const model = await this.model(signal);
+    const copy = await OoxmlPackage.open(bytes, {
+      limits: this.#limits,
+      signal,
+    });
+    const part = await copy.xml(model.mainPart, signal);
+    const owned = model.unauthoredSet;
+    const items: XmlPatch[] = [];
+    for (const paragraph of paragraphsOf(part)) {
+      const id = part.attribute(paragraph, "w14:paraId")?.toUpperCase();
+      if (id && owned.has(id))
+        items.push(patches.removeAttribute(part, paragraph, "w14:paraId"));
+    }
+    const transaction = copy.transaction();
+    if (items.length > 0) transaction.patch(part, items);
+    if (copy.has(UNAUTHORED_PART)) transaction.removePart(UNAUTHORED_PART);
     await transaction.commit(signal);
     return copy.save({}, signal);
   }
@@ -356,9 +448,13 @@ export class DocxEditEngine implements EditEngine {
       limits: this.#limits,
       signal,
     });
-    // A base is a shown copy with every paragraph marked, the original has
-    // the ids its positions give: either way the bytes say what they are.
+    // The original has the ids its positions give; a base is a shown copy
+    // with every paragraph marked and the engine's own ids listed.
     this.#unauthored = undefined;
+    if (this.#pkg.has(UNAUTHORED_PART))
+      this.#unauthored = unauthoredIdsOf(
+        await this.#pkg.part(UNAUTHORED_PART, signal),
+      );
     this.#model = undefined;
     await this.model(signal);
     for (const batch of target.batches) await this.apply(batch, signal);
@@ -426,21 +522,25 @@ export class DocxEditEngine implements EditEngine {
   ): Promise<readonly TextTarget[]> {
     if (query.length === 0) return [];
     const model = await this.model(signal);
-    const fold = (value: string): string =>
-      options.caseSensitive ? value : value.toLocaleLowerCase();
-    const needle = fold(query);
+    // A case-insensitive regular expression keeps offsets on the original
+    // text, where a lower-cased copy can change length.
+    const needle = new RegExp(
+      query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+      options.caseSensitive ? "g" : "gi",
+    );
     const limit = options.maxResults ?? Number.POSITIVE_INFINITY;
     const targets: TextTarget[] = [];
     for (const record of model.records) {
       if (record.kind !== "paragraph") continue;
       const text = record.text.text;
       if (!text) continue;
-      const haystack = fold(text);
-      let from = 0;
+      needle.lastIndex = 0;
       while (targets.length < limit) {
-        const at = haystack.indexOf(needle, from);
-        if (at < 0) break;
-        const end = at + query.length;
+        const match = needle.exec(text);
+        if (!match) break;
+        const at = match.index;
+        const end = at + match[0].length;
+        if (match[0].length === 0) needle.lastIndex += 1;
         targets.push({
           pageIndex: NO_PAGE,
           text: text.slice(at, end),
@@ -453,7 +553,6 @@ export class DocxEditEngine implements EditEngine {
             },
           ],
         });
-        from = end;
       }
       if (targets.length >= limit) break;
     }
@@ -504,6 +603,10 @@ function resolveReferences(
     resolved = { ...resolved, [field]: id };
   }
   return resolved as unknown as DocxOperation;
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

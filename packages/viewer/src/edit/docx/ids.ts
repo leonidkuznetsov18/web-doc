@@ -116,14 +116,6 @@ export function assignParagraphIds(
   return out;
 }
 
-/** The paragraph id an element id is built on: `p:X`, `tbl:X`, `img:X.n`, `other:X.n`. */
-export function paragraphIdOfElement(elementId: string): string | undefined {
-  const match = /^(?:p|tbl|img|other):([0-9A-Fa-f]{8})(?:\.\d+)?$/.exec(
-    elementId,
-  );
-  return match ? match[1]!.toUpperCase() : undefined;
-}
-
 /**
  * A fresh id for the `index`-th paragraph an operation creates: derived
  * from the batch's state id and the operation's position, so a replay of

@@ -77,7 +77,11 @@ function placement(
 }
 
 /** The content width, in twentieths of a point, of the section a block belongs to. */
-function contentWidth(model: DocxModel, node: XmlElement): number {
+function contentWidth(
+  model: DocxModel,
+  node: XmlElement,
+  side: "before" | "after",
+): number {
   const part = model.document;
   const geometry = (sectPr: XmlElement | undefined): number | undefined => {
     if (!sectPr) return undefined;
@@ -97,10 +101,13 @@ function contentWidth(model: DocxModel, node: XmlElement): number {
     );
   };
   // The section a block belongs to ends at the next paragraph carrying a
-  // w:sectPr, else at the body's own.
+  // w:sectPr, else at the body's own; a table placed after a paragraph
+  // that ends a section lands in the section after it.
   let passed = false;
   for (const block of model.blocks) {
-    if (block.node === node) passed = true;
+    const own = block.node === node;
+    if (own) passed = true;
+    if (own && side === "after") continue;
     if (passed && block.kind === "paragraph" && block.sectPr) {
       const width = geometry(block.sectPr);
       if (width !== undefined) return width;
@@ -188,7 +195,7 @@ export const insertTableHandler: DocxOperationHandler<DocxInsertTableOperation> 
       const node = record.node;
       const widths = columnWidths(
         operation.columnWidths ?? operation.rows[0]!.map(() => 1),
-        contentWidth(model, node),
+        contentWidth(model, node, side),
       );
       const createdIds: string[] = [];
       const cellIds: string[] = [];
@@ -294,7 +301,7 @@ export const setTableCellHandler: DocxOperationHandler<DocxSetTableCellOperation
       const part: XmlPart = model.document;
       const items: XmlPatch[] = [...replaced.items];
       const removedIds = [...replaced.removedIds];
-      const removedParagraphIds: string[] = [];
+      const removedParagraphIds: string[] = [...replaced.removedParagraphIds];
       for (const paragraph of rest) {
         items.push(patches.removeElement(part, paragraph.node));
         removedIds.push(
@@ -311,9 +318,7 @@ export const setTableCellHandler: DocxOperationHandler<DocxSetTableCellOperation
         createdIds: replaced.createdIds,
         ...(removedIds.length > 0 ? { removedIds } : {}),
         ...(removedParagraphIds.length > 0 ? { removedParagraphIds } : {}),
-        ...(first!.node.attributes.some((a) => a.name === "w14:paraId")
-          ? {}
-          : { stamped: [first!.id] }),
+        ...(model.unauthoredSet.has(first!.id) ? { stamped: [first!.id] } : {}),
         reflowFrom: record.id,
       });
     },

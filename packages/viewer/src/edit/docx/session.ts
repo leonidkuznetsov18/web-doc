@@ -188,8 +188,23 @@ export class DocxSession implements DocxEditSession {
     query: string,
     options: EditFindOptions = {},
   ): Promise<ReadResult<TextTarget>> {
-    const found = await this.#core.findText(query, options);
-    const items = await this.#placeTargets(found.items, options);
+    // A page range bounds the matches by where they are placed, which
+    // only the geometry knows: the engine then searches without a limit
+    // and the limit applies to the matches on those pages.
+    const { pageRange } = options;
+    const engineOptions = { ...options };
+    if (pageRange) delete engineOptions.maxResults;
+    const found = await this.#core.findText(query, engineOptions);
+    const placed = await this.#placeTargets(found.items, options);
+    const items = pageRange
+      ? placed
+          .filter(
+            (target) =>
+              target.pageIndex >= pageRange[0] &&
+              target.pageIndex <= pageRange[1],
+          )
+          .slice(0, options.maxResults ?? placed.length)
+      : placed;
     return Object.freeze({ ...found, items });
   }
 
@@ -304,26 +319,46 @@ export class DocxSession implements DocxEditSession {
       return runs;
     };
     const pageCount = this.#core.state.pageCount;
-    const candidates = [
-      ...this.#access.cachedPages(),
-      ...(options.pageRange
-        ? range(options.pageRange[0], options.pageRange[1], pageCount)
-        : range(0, pageCount - 1, pageCount)),
-    ];
+    const cached = this.#access.cachedPages();
+    const scan = options.pageRange
+      ? range(options.pageRange[0], options.pageRange[1], pageCount)
+      : range(0, pageCount - 1, pageCount);
     /** Pages that hold runs of a paragraph, found so far. */
     const pagesOf = new Map<string, number[]>();
+    const holds = async (
+      pageIndex: number,
+      paragraphId: string,
+    ): Promise<boolean> =>
+      (await load(pageIndex)).some((run) => run.paragraphId === paragraphId);
+    // A paragraph's pages are contiguous: the first page found to hold
+    // it, among the cached pages and then the scanned ones, is grown
+    // in both directions until a page without it.
     const locate = async (paragraphId: string): Promise<readonly number[]> => {
       const known = pagesOf.get(paragraphId);
       if (known) return known;
-      const pages: number[] = [];
-      for (const pageIndex of candidates) {
-        if (pages.includes(pageIndex)) continue;
-        const runs = await load(pageIndex);
-        if (runs.some((run) => run.paragraphId === paragraphId))
-          pages.push(pageIndex);
-        else if (pages.length > 0) break;
+      let seed: number | undefined;
+      for (const pageIndex of [...cached, ...scan]) {
+        if (await holds(pageIndex, paragraphId)) {
+          seed = pageIndex;
+          break;
+        }
       }
-      pages.sort((a, b) => a - b);
+      const pages: number[] = [];
+      if (seed !== undefined) {
+        pages.push(seed);
+        for (
+          let pageIndex = seed - 1;
+          pageIndex >= 0 && (await holds(pageIndex, paragraphId));
+          pageIndex -= 1
+        )
+          pages.unshift(pageIndex);
+        for (
+          let pageIndex = seed + 1;
+          pageIndex < pageCount && (await holds(pageIndex, paragraphId));
+          pageIndex += 1
+        )
+          pages.push(pageIndex);
+      }
       pagesOf.set(paragraphId, pages);
       return pages;
     };

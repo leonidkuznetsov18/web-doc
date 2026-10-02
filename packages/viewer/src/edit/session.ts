@@ -574,7 +574,12 @@ export class EditSessionController implements EditSessionCore {
     reflowFrom: string | undefined,
   ): ChangedPages {
     if (reflowFrom === undefined) return changedPages;
-    const first = this.#host.pageOf?.(reflowFrom) ?? 0;
+    // Everything from the reflowed paragraph's page on, and the pages
+    // the batch names before it (an undo that moves a paragraph back).
+    const first = Math.min(
+      this.#host.pageOf?.(reflowFrom) ?? 0,
+      changedPages[0] ?? Number.POSITIVE_INFINITY,
+    );
     return (pageCount) =>
       Array.from(
         { length: Math.max(0, pageCount - first) },

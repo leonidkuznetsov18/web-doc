@@ -56,6 +56,7 @@ const RPR_ORDER = [
   "eastAsianLayout",
   "specVanish",
   "oMath",
+  "rPrChange",
 ];
 
 /** Children of `w:pPr` in schema order (CT_PPr). */
@@ -107,6 +108,13 @@ export function textProblem(text: string): string | undefined {
   if (FORBIDDEN.test(text)) return "control characters XML cannot carry";
   if (LONE_SURROGATE.test(text)) return "a lone surrogate";
   return undefined;
+}
+
+/** Why a value cannot be written as an attribute: text problems plus the breaks text may hold. */
+export function attributeProblem(value: string): string | undefined {
+  if (/[\u000b\u000c]/.test(value))
+    return "line or page breaks an attribute cannot carry";
+  return textProblem(value);
 }
 
 export function colorProblem(color: unknown): string | undefined {
@@ -197,10 +205,12 @@ export function mergedProperties(
     if (xml === null) continue;
     let at = index;
     if (at < 0) {
+      // Before the first child the schema places later; a child the
+      // schema list does not name (an extension) counts as later too.
       const rank = order.indexOf(local);
       at = children.findIndex((child) => {
         const other = order.indexOf(child.local);
-        return other >= 0 && other > rank;
+        return other < 0 || other > rank;
       });
       if (at < 0) at = children.length;
     }
@@ -301,13 +311,21 @@ export function changedParagraphProperties(
     const attributes = new Map<string, string>();
     for (const attribute of existing?.attributes ?? [])
       attributes.set(attribute.name, attribute.rawValue);
-    if (change.spacing.before !== undefined)
+    // Word prefers the line-based and automatic forms over w:before and
+    // w:after, so a set value drops them.
+    if (change.spacing.before !== undefined) {
       attributes.set(
         "w:before",
         String(Math.round(change.spacing.before * 20)),
       );
-    if (change.spacing.after !== undefined)
+      attributes.delete("w:beforeLines");
+      attributes.delete("w:beforeAutospacing");
+    }
+    if (change.spacing.after !== undefined) {
       attributes.set("w:after", String(Math.round(change.spacing.after * 20)));
+      attributes.delete("w:afterLines");
+      attributes.delete("w:afterAutospacing");
+    }
     if (change.spacing.line !== undefined) {
       attributes.set("w:line", String(Math.round(change.spacing.line * 240)));
       attributes.set("w:lineRule", "auto");

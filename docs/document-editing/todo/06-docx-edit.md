@@ -595,3 +595,29 @@ Proposed in the draft; open for review.
   document's elements carry the runs' ids with bounds that cover them;
   latency recorded; fixtures written; `npm run check` and the matrix
   green. Left for Leonid: the Word/Pages check and the release.
+- **Review pass (2026-10-02)**: after the T58 round trip, a code review
+  and a coverage audit (`test/docx-edit-audit.test.ts`, 44 tests: zero-width
+  items, fields next to links and nested fields, tracked changes, text
+  boxes, batch rollback, restore from a shown base, dry runs, style edge
+  cases, shared picture relationships, tables across sections, spacing
+  merges, and a regression per defect found) led to one hardening commit.
+  Fixed: zero-width items (note references, anchors, bookmarks) at the
+  edges of a replaced or restyled range stay where they were; nested
+  text-box paragraphs under a deleted picture, object or covered run are
+  reported in `removedParagraphIds` and leave the id list; nested field
+  results read as text; `w:rPrChange` keeps its place at the end of the
+  run properties; `w:spacing` drops `*Lines` and `*Autospacing` when a
+  value is set; a table inserted after a paragraph that ends a section is
+  sized by the section it lands in; the body never ends with a table or
+  stands empty after a delete or move; a read-only paragraph cannot move;
+  a relationship id is escaped when searched; the shown copy carries
+  `/webdoc/unauthored.xml` with the engine's ids, so a checkpoint restored
+  as a base saves without them (`restore` reads the list, `save` strips
+  them from a transient copy); the engine reads the styles once and keeps
+  one set of taken ids per batch; a failed index rebuild after a batch
+  rolls the batch back; `findText` searches with a case-insensitive
+  regular expression (offsets stay on the original text), the session
+  bounds the matches by their placed page when `pageRange` is given and
+  grows a paragraph's pages around the first page found; undo and redo
+  repaint from the earliest of the entry's pages and the reflowed
+  paragraph's page. Unit 446/446.

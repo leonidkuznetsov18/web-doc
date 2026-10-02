@@ -2,7 +2,7 @@ import { patches, type XmlPatch } from "../ooxml/patch.js";
 import type { XmlElement, XmlPart } from "../ooxml/xml.js";
 import type { TextRange } from "../types.js";
 import { W_NS } from "./ids.js";
-import type { ParagraphRecord } from "./model.js";
+import type { DocxModel, ParagraphRecord } from "./model.js";
 import type {
   DocxOperationContext,
   DocxOperationHandler,
@@ -19,8 +19,8 @@ import type {
 import {
   changedParagraphProperties,
   changedRunProperties,
+  attributeProblem,
   colorProblem,
-  isAuthored,
   namespacePatches,
   normalizeText,
   paragraphMarkProperties,
@@ -128,31 +128,31 @@ function endTagOf(part: XmlPart, node: XmlElement): string {
   return part.text.slice(node.contentEnd, node.end);
 }
 
-/** The content of a run's items in `[from, to)`, text sliced, other children as bytes. */
+/**
+ * The content of a run's items in `[from, to]`: `w:t` text sliced, every
+ * other child (tab, break, picture, symbol, note reference) as its bytes
+ * when it lies inside. A zero-width item at `from` belongs to the slice
+ * only when `includeStart` says so, which is how a caret or a range edge
+ * hands such an item to exactly one side.
+ */
 function contentOf(
   part: XmlPart,
   items: readonly RunItem[],
   from: number,
   to: number,
+  includeStart: boolean,
 ): string {
   let out = "";
   for (const item of items) {
     if (item.start === item.end) {
-      // Nothing visible: kept where it sits unless the range swallows it.
-      if (
-        item.start >= from &&
-        item.start <= to &&
-        !(from < item.start && item.start < to)
-      )
-        out += sliceOf(part, item.child);
-      else if (item.start >= from && item.start <= to && from === to)
-        out += sliceOf(part, item.child);
+      const after = includeStart ? item.start >= from : item.start > from;
+      if (after && item.start <= to) out += sliceOf(part, item.child);
       continue;
     }
     const begin = Math.max(item.start, from);
     const stop = Math.min(item.end, to);
     if (stop <= begin) continue;
-    if (item.kind === "text")
+    if (item.kind === "text" && item.child.local === "t")
       out += runContentXml(
         item.text.slice(begin - item.start, stop - item.start),
       );
@@ -162,14 +162,21 @@ function contentOf(
   return out;
 }
 
-/** Zero-width items of a run in `[from, to]` that a replacement drops: pictures and objects are reported by id. */
+/**
+ * Inline objects a replacement of `[from, to)` drops: pictures, objects
+ * and anchors inside the range (a zero-width one only strictly inside),
+ * by element id, with the ids of every paragraph nested in them (a text
+ * box) so the engine's id list follows.
+ */
 function droppedInlines(
+  model: DocxModel,
   record: ParagraphRecord,
   items: readonly RunItem[],
   from: number,
   to: number,
-): string[] {
-  const out: string[] = [];
+): { removedIds: string[]; removedParagraphIds: string[] } {
+  const removedIds: string[] = [];
+  const removedParagraphIds: string[] = [];
   for (const item of items) {
     if (
       item.kind !== "picture" &&
@@ -185,9 +192,13 @@ function droppedInlines(
     const inline = record.inlines.find(
       (candidate) => candidate.node === item.child,
     );
-    if (inline) out.push(inline.elementId);
+    if (inline) removedIds.push(inline.elementId);
+    for (const paragraph of model.document.findAll("p", item.child)) {
+      const id = model.paragraphIds.get(paragraph);
+      if (id && paragraph.namespace === W_NS) removedParagraphIds.push(id);
+    }
   }
-  return out;
+  return { removedIds, removedParagraphIds };
 }
 
 interface Split {
@@ -234,10 +245,7 @@ function splitAt(
       else before += raw(unit);
       continue;
     }
-    if (
-      unit.end <= start &&
-      !(unit.start === unit.end && unit.start === start && start < end)
-    ) {
+    if (unit.end <= start) {
       before += raw(unit);
       lastRPr = rPrOf(part, unit.items.at(-1));
       if (!inserted && start === end && unit.end === start) place(lastRPr);
@@ -254,19 +262,22 @@ function splitAt(
       continue;
     }
     if (unit.kind === "run") {
-      const run = unit.nodes[0]!;
       const style = rPrOf(part, unit.items[0]);
+      // The head keeps a zero-width item at `start`; the tail takes one at
+      // `end` only when the range is not a caret (the head has it then).
       const head = runXml(
         style,
-        contentOf(part, unit.items, unit.start, start),
+        contentOf(part, unit.items, unit.start, start, true),
       );
-      const tail = runXml(style, contentOf(part, unit.items, end, unit.end));
+      const tail = runXml(
+        style,
+        contentOf(part, unit.items, end, unit.end, start < end),
+      );
       if (!inserted) {
         before += head;
         place(style);
         after += tail;
       } else after += tail;
-      void run;
       continue;
     }
     if (unit.kind === "wrapper" && unit.start < start && end < unit.end) {
@@ -402,7 +413,9 @@ function commitParagraph(
   return transaction.commit().then((change) => ({
     createdIds: [],
     warnings: change.warnings,
-    ...(isAuthored(part, record.node) ? {} : { stamped: [record.id] }),
+    ...(context.model.unauthoredSet.has(record.id)
+      ? { stamped: [record.id] }
+      : {}),
     reflowFrom: record.id,
     ...extra,
   }));
@@ -450,16 +463,18 @@ export const replaceTextHandler: DocxOperationHandler<DocxReplaceTextOperation> 
         () => {},
         true,
       )!;
-      const { items, createdIds, removedIds } = replacedParagraph(
-        context,
-        target.record,
-        start,
-        end,
-        normalizeText(operation.text),
-      );
+      const { items, createdIds, removedIds, removedParagraphIds } =
+        replacedParagraph(
+          context,
+          target.record,
+          start,
+          end,
+          normalizeText(operation.text),
+        );
       return commitParagraph(context, target, items, {
         createdIds,
         ...(removedIds.length > 0 ? { removedIds } : {}),
+        ...(removedParagraphIds.length > 0 ? { removedParagraphIds } : {}),
       });
     },
   };
@@ -475,7 +490,12 @@ export function replacedParagraph(
   start: number,
   end: number,
   text: string,
-): { items: XmlPatch[]; createdIds: string[]; removedIds: string[] } {
+): {
+  items: XmlPatch[];
+  createdIds: string[];
+  removedIds: string[];
+  removedParagraphIds: string[];
+} {
   const part = context.model.document;
   const segments = text.split("\n");
   const split = splitAt(
@@ -515,7 +535,14 @@ export function replacedParagraph(
       ),
     );
   });
-  const removedIds = droppedInlines(record, record.text.items, start, end);
+  const dropped = droppedInlines(
+    context.model,
+    record,
+    record.text.items,
+    start,
+    end,
+  );
+  const removedIds = dropped.removedIds;
   // Inline objects that moved to a new paragraph change their id.
   if (!single)
     for (const inline of record.inlines) {
@@ -525,7 +552,12 @@ export function replacedParagraph(
       if (item && item.start >= end && !removedIds.includes(inline.elementId))
         removedIds.push(inline.elementId);
     }
-  return { items, createdIds, removedIds };
+  return {
+    items,
+    createdIds,
+    removedIds,
+    removedParagraphIds: dropped.removedParagraphIds,
+  };
 }
 
 /** The paragraph mark's `w:rPr`, the style of text in an empty paragraph. */
@@ -574,7 +606,13 @@ function restyled(
       const rPr = unit.items[0]?.rPr;
       out += runXml(
         own,
-        contentOf(part, unit.items, unit.start, Math.min(start, unit.end)),
+        contentOf(
+          part,
+          unit.items,
+          unit.start,
+          Math.min(start, unit.end),
+          true,
+        ),
       );
       out += runXml(
         changed(rPr),
@@ -583,11 +621,12 @@ function restyled(
           unit.items,
           Math.max(unit.start, start),
           Math.min(unit.end, end),
+          false,
         ),
       );
       out += runXml(
         own,
-        contentOf(part, unit.items, Math.max(end, unit.start), unit.end),
+        contentOf(part, unit.items, Math.max(end, unit.start), unit.end, false),
       );
       continue;
     }
@@ -631,7 +670,7 @@ export const setTextStyleHandler: DocxOperationHandler<DocxSetTextStyleOperation
           issue("/style/color", "invalid-value", `Colour: ${problem}`);
       }
       if (style.fontFamily !== undefined) {
-        const problem = textProblem(style.fontFamily);
+        const problem = attributeProblem(style.fontFamily);
         if (problem)
           issue("/style/fontFamily", "invalid-value", `Font: ${problem}`);
       }

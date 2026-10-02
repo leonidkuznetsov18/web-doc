@@ -74,8 +74,8 @@ interface Field {
   readonly runs: XmlElement[];
   /** Text of the result runs (after `separate`). */
   text: string;
-  inResult: boolean;
-  depth: number;
+  /** Per nesting level, whether the field is past its `separate`; the outermost first. */
+  readonly inResult: boolean[];
 }
 
 class Reader {
@@ -201,7 +201,9 @@ class Reader {
           );
           this.#emit(
             "text",
-            Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : "",
+            Number.isFinite(code) && code > 0 && code <= 0x10ffff
+              ? String.fromCodePoint(code)
+              : "",
             run,
             child,
             rPr,
@@ -244,24 +246,19 @@ class Reader {
   #fieldChar(node: XmlElement, run: XmlElement): void {
     const type = this.part.attribute(node, "w:fldCharType");
     if (type === "begin") {
-      if (this.#field) this.#field.depth += 1;
+      if (this.#field) this.#field.inResult.push(false);
       else
-        this.#field = {
-          begin: run,
-          runs: [run],
-          text: "",
-          inResult: false,
-          depth: 0,
-        };
+        this.#field = { begin: run, runs: [run], text: "", inResult: [false] };
       return;
     }
     if (!this.#field) return;
+    const levels = this.#field.inResult;
     if (type === "separate") {
-      if (this.#field.depth === 0) this.#field.inResult = true;
+      levels[levels.length - 1] = true;
       return;
     }
     if (type === "end") {
-      if (this.#field.depth > 0) this.#field.depth -= 1;
+      if (levels.length > 1) levels.pop();
       else this.#closeField();
     }
   }
@@ -295,7 +292,9 @@ class Reader {
   ): void {
     const field = this.#field;
     if (field) {
-      if (field.inResult && field.depth === 0) field.text += text;
+      // What Word shows: the result of the outer field, which holds the
+      // results of the fields nested in it and none of their instructions.
+      if (field.inResult.every(Boolean)) field.text += text;
       return;
     }
     this.#push(kind, text, run, child, wrapper, rPr);

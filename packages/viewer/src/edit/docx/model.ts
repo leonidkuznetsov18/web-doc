@@ -90,7 +90,7 @@ export class DocxModel {
     readonly byId: ReadonlyMap<string, AnyRecord>,
     /** Id of every `w:p` of the main part, listed or not. */
     readonly paragraphIds: ReadonlyMap<XmlElement, string>,
-    /** Ids of the paragraphs without `w14:paraId`, in document order. */
+    /** Ids the engine owns (never written by an edit), in document order. */
     readonly unauthoredIds: readonly string[],
     /** Every paragraph id the document uses, in any story part. */
     readonly takenIds: ReadonlySet<string>,
@@ -107,6 +107,7 @@ export class DocxModel {
     pkg: OoxmlPackage,
     signal?: AbortSignal,
     unauthored?: readonly string[],
+    cachedStyles?: DocxStyles,
   ): Promise<DocxModel> {
     const root = await pkg.relationships("/", signal);
     const main = root.byType(`${OFFICE_RELATIONSHIPS}officeDocument`)[0]
@@ -130,11 +131,24 @@ export class DocxModel {
     const paragraphIds = new Map<XmlElement, string>();
     const unauthoredIds: string[] = [];
     if (unauthored) {
-      const queue = [...unauthored];
-      for (const paragraph of paragraphsOf(document)) {
+      // The engine's ids: a paragraph without `w14:paraId` takes the next
+      // one in order; a paragraph that carries one the engine stamped into
+      // a shown copy (restored as a base) keeps it and stays unauthored.
+      const owned = new Set(unauthored);
+      const paragraphs = paragraphsOf(document);
+      const attributed = new Set<string>();
+      for (const paragraph of paragraphs) {
+        const id = document.attribute(paragraph, "w14:paraId");
+        if (id) attributed.add(id.toUpperCase());
+      }
+      const queue = unauthored.filter((id) => !attributed.has(id));
+      for (const paragraph of paragraphs) {
         const authored = document.attribute(paragraph, "w14:paraId");
         if (authored) {
-          paragraphIds.set(paragraph, authored.toUpperCase());
+          const id = authored.toUpperCase();
+          paragraphIds.set(paragraph, id);
+          if (owned.has(id)) unauthoredIds.push(id);
+          state.taken.add(id);
           continue;
         }
         const id = queue.shift();
@@ -145,6 +159,7 @@ export class DocxModel {
           );
         paragraphIds.set(paragraph, id);
         unauthoredIds.push(id);
+        state.taken.add(id);
       }
       if (queue.length > 0)
         throw new ViewerError(
@@ -156,7 +171,7 @@ export class DocxModel {
         paragraphIds.set(entry.paragraph, entry.id);
         if (!entry.authored) unauthoredIds.push(entry.id);
       }
-    const styles = await DocxStyles.load(pkg, main, signal);
+    const styles = cachedStyles ?? (await DocxStyles.load(pkg, main, signal));
     const builder = new Builder(document, paragraphIds);
     let bodySectPr: XmlElement | undefined;
     for (const child of body.children) {
@@ -181,6 +196,13 @@ export class DocxModel {
       styles,
     );
   }
+
+  /** The unauthored ids as a set, for "is this paragraph's id written by an edit" checks. */
+  get unauthoredSet(): ReadonlySet<string> {
+    return (this.#unauthoredSet ??= new Set(this.unauthoredIds));
+  }
+
+  #unauthoredSet: Set<string> | undefined;
 
   get paragraphs(): readonly ParagraphRecord[] {
     return this.records.filter(
@@ -325,9 +347,10 @@ class Builder {
     node: XmlElement,
     wrapper: XmlElement | undefined,
   ): TableRecord | undefined {
-    const first = this.part
-      .findAll("p", node)
-      .find((candidate) => candidate.namespace === W_NS);
+    // The table is named after the first paragraph of its first cell, as
+    // listed: a nested table at the top of that cell does not count.
+    const firstCell = this.cellsOf(this.rowsOf(node)[0] ?? node)[0];
+    const first = firstCell ? this.firstParagraphOf(firstCell) : undefined;
     const id = first ? this.ids.get(first) : undefined;
     if (!id) return undefined;
     const rows: CellRecord[][] = [];
@@ -343,6 +366,23 @@ class Builder {
     for (const row of this.rowsOf(node))
       rows.push(this.cellsOf(row).map((cell) => this.cell(cell, record)));
     return record;
+  }
+
+  /** The first `w:p` child of a cell, through block-level wrappers. */
+  firstParagraphOf(cell: XmlElement): XmlElement | undefined {
+    for (const child of cell.children) {
+      if (child.namespace !== W_NS) continue;
+      if (child.local === "p") return child;
+      if (
+        child.local === "sdt" ||
+        child.local === "sdtContent" ||
+        child.local === "customXml"
+      ) {
+        const nested = this.firstParagraphOf(child);
+        if (nested) return nested;
+      }
+    }
+    return undefined;
   }
 
   cell(node: XmlElement, table: TableRecord): CellRecord {
