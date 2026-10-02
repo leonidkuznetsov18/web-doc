@@ -7,8 +7,9 @@ import type {
   ViewerProgress,
   ViewerWarning,
 } from "./contracts.js";
+import type { EditableFormat } from "./edit/types.js";
 
-export type WorkerOperation =
+export type DocumentWorkerOperation =
   | "init"
   | "open"
   | "get-info"
@@ -16,6 +17,30 @@ export type WorkerOperation =
   | "get-text-map"
   | "close"
   | "destroy";
+
+/** Operations of an edit engine worker; payloads mirror the engine interface. */
+export type EditWorkerOperation =
+  | "edit-init"
+  | "edit-open"
+  | "edit-validate"
+  | "edit-apply"
+  | "edit-materialize"
+  | "edit-restore"
+  | "edit-put-asset"
+  | "edit-elements"
+  | "edit-element"
+  | "edit-elements-at"
+  | "edit-find-text"
+  | "edit-text-layout"
+  | "edit-position-at"
+  | "edit-range-rects"
+  | "edit-render-without"
+  | "edit-page-layout"
+  | "edit-pptx-slides"
+  | "edit-pptx-layouts"
+  | "edit-dispose";
+
+export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;
 
 export interface WorkerRequest {
   readonly kind: "request";
@@ -71,8 +96,51 @@ export interface WorkerRenderPayload {
   readonly devicePixelRatio: number;
 }
 
+export interface EditWorkerInitPayload {
+  /** Where the worker fetches the engine's WebAssembly from. */
+  readonly wasmUrl: string;
+  /** TrueType font for text the standard PDF fonts cannot encode. */
+  readonly fallbackFontUrl?: string;
+}
+
+/** A host-registered font as the edit worker receives it. */
+export interface EditWorkerFont {
+  readonly family: string;
+  readonly weight: number;
+  readonly style: "normal" | "italic" | "oblique";
+  /** Font bytes, or an absolute URL the worker fetches on first use. */
+  readonly source: ArrayBuffer | string;
+}
+
+export interface EditWorkerOpenPayload {
+  readonly data: ArrayBuffer;
+  readonly limits: ResourceLimits;
+  /** The session format; a worker that serves several formats picks its engine by it. */
+  readonly format?: EditableFormat;
+  readonly fileName?: string;
+  readonly fonts?: readonly EditWorkerFont[];
+}
+
+/** A rendered page as the worker returns it; `data` is transferred, not copied. */
+export interface EditWorkerBitmap {
+  readonly pageIndex: number;
+  readonly scale: number;
+  readonly width: number;
+  readonly height: number;
+  readonly data: ArrayBuffer;
+}
+
+export interface EditWorkerOpenResult {
+  readonly pageCount: number;
+}
+
 export type WorkerOperationResult =
-  DocumentInfo | readonly TextRun[] | ImageBitmap | ArrayBuffer | undefined;
+  | DocumentInfo
+  | readonly TextRun[]
+  | ImageBitmap
+  | ArrayBuffer
+  | EditWorkerOpenResult
+  | undefined;
 
 export function transferablesFor(value: unknown): Transferable[] {
   if (value instanceof ArrayBuffer) return [value];

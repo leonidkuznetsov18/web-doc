@@ -11,7 +11,11 @@ export default defineConfig({
   base,
   cleanUrls: true,
   lastUpdated: true,
-  srcExclude: ["testing/**", "universal-document-viewer/**"],
+  srcExclude: [
+    "testing/**",
+    "universal-document-viewer/**",
+    "document-editing/**",
+  ],
   ignoreDeadLinks: [/\/demo(?:\/index)?$/],
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: `${base}logo.svg` }],
@@ -47,6 +51,7 @@ export default defineConfig({
         items: [
           { text: "API reference", link: "/api/reference" },
           { text: "Headless API", link: "/api/headless" },
+          { text: "Editing API", link: "/api/editing" },
           { text: "Runtime and lifecycle", link: "/api/runtime" },
           { text: "Built-in UI", link: "/ui" },
         ],

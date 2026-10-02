@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "family": "Zrimo Noto",
   "generated": "2026-07-16",
-  "tooling": "fonttools pyftsubset with all layout features, then woff2_compress",
+  "tooling": "fonttools pyftsubset with all layout features, then woff2_compress; the .ttf is the Latin/Cyrillic subset saved uncompressed with fonttools for embedding into PDFs",
   "license": "OFL-1.1",
   "sources": {
     "noto-fonts": "https://github.com/notofonts/noto-fonts/tree/ffebf8c1ee449e544955a7e813c54f9b73848eac",
@@ -78,6 +78,11 @@
       "file": "noto-sans-korean.woff2",
       "bytes": 1110144,
       "sha256": "077e4178230f7cc0e7bd9a5ccdb5ad24f89692bb64f5d421b2095a69b4b9243a"
+    },
+    {
+      "file": "noto-sans-latin-cyrillic.ttf",
+      "bytes": 218796,
+      "sha256": "6a23e5413988b4b523ceb4aa81a1de85dad21336868997f52eb6d42159345262"
     }
   ]
 }

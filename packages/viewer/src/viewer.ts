@@ -1,7 +1,9 @@
 import type {
+  AdapterOpenContext,
   CellRange,
   CellSelection,
   DocumentAdapter,
+  DocumentFormat,
   DocumentInfo,
   DocumentSource,
   FitMode,
@@ -25,6 +27,20 @@ import type {
   ViewerOptions,
   ViewerState,
 } from "./contracts.js";
+import type {
+  EditableFormat,
+  EditOptions,
+  PageHit,
+  PageRect,
+  ViewportRect,
+} from "./edit/types.js";
+import type { EditEngineProvider } from "./edit/engine.js";
+import type { EditSession } from "./edit/sessions.js";
+import {
+  EditSessionController,
+  type EditSessionHost,
+  type PreparedDocument,
+} from "./edit/session.js";
 import { linkedAbortController } from "./abort.js";
 import { detectFormat } from "./detect.js";
 import { abortError, normalizeError, ViewerError } from "./errors.js";
@@ -85,6 +101,14 @@ export class DocumentViewer implements ViewerApi {
   #info: DocumentInfo | undefined;
   #original: Uint8Array | undefined;
   #originalFileName: string | undefined;
+  #originalContentType: string | undefined;
+  /** Limits the current document was opened with; reused when it is reopened. */
+  #limits: ResourceLimits;
+  #session:
+    | { readonly core: EditSessionController; readonly session: EditSession }
+    | undefined;
+  /** Shared by concurrent `edit()` calls while the engine starts. */
+  #sessionStart: Promise<EditSession> | undefined;
   #activeLoad: AbortController | undefined;
   #activeSearch: AbortController | undefined;
   #selection: TextSelection | CellRange | CellSelection | null = null;
@@ -103,6 +127,7 @@ export class DocumentViewer implements ViewerApi {
   constructor(options: ViewerOptions, runtime: ViewerRuntime) {
     this.#options = options;
     this.#runtime = runtime;
+    this.#limits = runtime.limits;
     this.#state = freezeState({
       status: "idle",
       pageIndex: 0,
@@ -145,6 +170,7 @@ export class DocumentViewer implements ViewerApi {
           onCellSelection: (selection) =>
             this.#applyInteractiveCellSelection(selection),
           getSelectionText: () => this.#getCachedSelectionText(),
+          onPainted: (pages, revision) => this.#onPainted(pages, revision),
         },
         options,
       );
@@ -225,37 +251,20 @@ export class DocumentViewer implements ViewerApi {
         await adapter.close(handle);
         throw abortError();
       }
-      if (
-        !Number.isInteger(backendInfo.pageCount) ||
-        backendInfo.pageCount < 1 ||
-        backendInfo.pageCount > limits.maxDocumentUnits
-      ) {
+      let info: DocumentInfo;
+      try {
+        info = describeDocument(adapter, backendInfo, detection.format, limits);
+      } catch (error) {
         await adapter.close(handle);
-        throw new ViewerError(
-          "resource-limit",
-          "Document unit count exceeds the configured limit",
-          {
-            details: {
-              pageCount: backendInfo.pageCount,
-              limit: limits.maxDocumentUnits,
-            },
-          },
-        );
+        throw error;
       }
-      const info = immutableInfo({
-        ...backendInfo,
-        capabilities: {
-          textSelection: Boolean(adapter.getTextMap),
-          cellSelection: backendInfo.unit === "sheet",
-          search: Boolean(adapter.getTextMap),
-          thumbnails: backendInfo.unit !== "sheet",
-        },
-      });
       this.#adapter = adapter;
       this.#handle = handle;
       this.#info = info;
       this.#original = loaded.bytes;
       this.#originalFileName = fileName;
+      this.#originalContentType = contentType;
+      this.#limits = limits;
       this.#update({
         status: "ready",
         format: detection.format,
@@ -874,6 +883,53 @@ export class DocumentViewer implements ViewerApi {
     return blob;
   }
 
+  async edit(options: EditOptions = {}): Promise<EditSession> {
+    const { adapter, info } = this.#assertReady();
+    if (this.#session?.core.usable) return this.#session.session;
+    if (this.#sessionStart) return this.#sessionStart;
+    const format = editableFormat(adapter, info.format);
+    if (!format || !adapter.edit)
+      throw new ViewerError(
+        "edit-unsupported",
+        "Editing is not available for this document",
+        { details: { format: info.format, reason: "no-engine" } },
+      );
+    const start = this.#startSession(adapter.edit, format, options);
+    this.#sessionStart = start;
+    try {
+      return await start;
+    } finally {
+      if (this.#sessionStart === start) this.#sessionStart = undefined;
+    }
+  }
+
+  getEditSession(): EditSession | undefined {
+    this.#assertAlive();
+    return this.#session?.session;
+  }
+
+  pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined {
+    this.#assertAlive();
+    if (
+      this.#state.status !== "ready" ||
+      !Number.isInteger(pageIndex) ||
+      ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)
+    )
+      return undefined;
+    return this.#viewport?.pageToClient(pageIndex, rect);
+  }
+
+  clientToPage(clientX: number, clientY: number): PageHit | undefined {
+    this.#assertAlive();
+    if (
+      this.#state.status !== "ready" ||
+      !Number.isFinite(clientX) ||
+      !Number.isFinite(clientY)
+    )
+      return undefined;
+    return this.#viewport?.clientToPage(clientX, clientY);
+  }
+
   on<K extends keyof ViewerEventMap>(
     type: K,
     listener: ViewerEventListener<K>,
@@ -906,6 +962,228 @@ export class DocumentViewer implements ViewerApi {
     this.#emit("statechange", this.#state);
     this.#listeners.clear();
     this.#runtime.release(this);
+  }
+
+  async #startSession(
+    provider: EditEngineProvider,
+    format: EditableFormat,
+    options: EditOptions,
+  ): Promise<EditSession> {
+    const generation = this.#generation;
+    const operation = this.#startOperation(options.signal);
+    // A session that broke (failed recovery) makes way for a fresh engine.
+    const stale = this.#session;
+    this.#session = undefined;
+    if (stale) await stale.core.end();
+    try {
+      const engine = await provider.load(this.#original!.slice(), {
+        format,
+        limits: this.#limits,
+        fonts: this.#runtime.fonts.registered,
+        signal: operation.signal,
+        ...(this.#originalFileName ? { fileName: this.#originalFileName } : {}),
+        ...(this.#runtime.assetBaseUrl
+          ? { assetBaseUrl: this.#runtime.assetBaseUrl }
+          : {}),
+      });
+      if (generation !== this.#generation || operation.signal.aborted) {
+        await engine.dispose().catch(() => undefined);
+        throw abortError();
+      }
+      const host: EditSessionHost = {
+        format,
+        limits: this.#limits,
+        prepareDocument: (bytes, signal) =>
+          this.#prepareDocument(bytes, signal),
+        commitDocument: (prepared, changedPages) =>
+          this.#commitDocument(
+            prepared as PreparedViewerDocument,
+            changedPages,
+          ),
+        discardDocument: (prepared) =>
+          this.#discardDocument(prepared as PreparedViewerDocument),
+        emit: (type, event) => this.#emit(type, event),
+        pageOf: (paragraphId) => {
+          let first: number | undefined;
+          for (const [pageIndex, runs] of this.#textMaps)
+            if (
+              (first === undefined || pageIndex < first) &&
+              runs.some((run) => run.paragraphId === paragraphId)
+            )
+              first = pageIndex;
+          return first;
+        },
+      };
+      const core = new EditSessionController(
+        engine,
+        host,
+        this.#original!,
+        this.#info!.pageCount,
+      );
+      const session = provider.createSession(core, {
+        getTextRuns: (pageIndex, signal) =>
+          this.#getTextRuns(pageIndex, signal),
+        cachedPages: () => [...this.#textMaps.keys()],
+      });
+      this.#session = { core, session };
+      this.#emit("editstatechange", {
+        ...core.state,
+        active: true,
+        format,
+      });
+      return session;
+    } catch (error) {
+      const normalized = normalizeError(error, "edit-failed");
+      throw normalized.code === "edit-failed" && !normalized.details
+        ? new ViewerError("edit-failed", normalized.message, {
+            cause: error,
+            details: { stage: "load" },
+          })
+        : normalized;
+    } finally {
+      this.#finishOperation(operation);
+    }
+  }
+
+  /**
+   * Shows edited bytes as the current document: opens them through the
+   * adapter, swaps the handle, drops every cache derived from the old content
+   * and keeps the view where it was. Returns the new page count.
+   */
+  /**
+   * Phase one of showing edited bytes: opens them next to the current
+   * document. Everything that can fail or be aborted happens here.
+   */
+  async #prepareDocument(
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<PreparedViewerDocument> {
+    const { adapter, handle, info } = this.#assertReady();
+    const generation = this.#generation;
+    enforceContainerLimits(bytes, info.format, this.#limits);
+    const context: AdapterOpenContext = {
+      format: info.format,
+      signal,
+      limits: this.#limits,
+      reportProgress: (progress) => this.#emit("progress", progress),
+      reportWarning: (warning) => this.#emit("warning", warning),
+      ...(this.#originalFileName ? { fileName: this.#originalFileName } : {}),
+      ...(this.#originalContentType
+        ? { contentType: this.#originalContentType }
+        : {}),
+      ...(this.#runtime.assetBaseUrl
+        ? { assetBaseUrl: this.#runtime.assetBaseUrl }
+        : {}),
+    };
+    const next = adapter.reopen
+      ? await adapter.reopen(handle, bytes, context)
+      : await adapter.open(bytes, context);
+    let nextInfo: DocumentInfo;
+    try {
+      if (generation !== this.#generation || signal.aborted) throw abortError();
+      const backendInfo = await adapter.getInfo(next);
+      if (generation !== this.#generation || signal.aborted) throw abortError();
+      nextInfo = describeDocument(
+        adapter,
+        backendInfo,
+        info.format,
+        this.#limits,
+      );
+    } catch (error) {
+      await adapter.close(next);
+      throw error;
+    }
+    return {
+      pageCount: nextInfo.pageCount,
+      handle: next,
+      info: nextInfo,
+      generation,
+    };
+  }
+
+  /**
+   * Phase two: swaps the prepared document in. Synchronous and never throws
+   * for a preparation of the current document, so a session that reached
+   * this point always completes; the old handle is closed in the background.
+   */
+  #commitDocument(
+    prepared: PreparedViewerDocument,
+    changedPages: readonly number[],
+  ): number {
+    if (prepared.generation !== this.#generation || !this.#handle) {
+      this.#discardDocument(prepared);
+      throw new ViewerError(
+        "lifecycle-error",
+        "The document was replaced while an edit was being shown",
+      );
+    }
+    const { adapter, handle: previous } = this.#assertReady();
+    this.#handle = prepared.handle;
+    this.#info = prepared.info;
+    this.#invalidateContentCaches();
+    this.#update({
+      pageCount: prepared.info.pageCount,
+      pageIndex: Math.min(this.#state.pageIndex, prepared.info.pageCount - 1),
+    });
+    for (const warning of prepared.info.warnings ?? [])
+      this.#emit("warning", warning);
+    const revision = (this.#session?.core.state.revision ?? 0) + 1;
+    if (this.#viewport)
+      this.#viewport.replaceDocument(prepared.info, changedPages, revision);
+    else
+      // Headless: nothing paints, so geometry is "current" as soon as the
+      // session has emitted documentchange, which happens before the next
+      // macrotask.
+      setTimeout(() => this.#onPainted([...changedPages], revision), 0);
+    void Promise.resolve(adapter.close(previous)).catch((error: unknown) =>
+      this.#reportError(error),
+    );
+    return prepared.info.pageCount;
+  }
+
+  #discardDocument(prepared: PreparedViewerDocument): void {
+    void Promise.resolve(this.#adapter?.close(prepared.handle)).catch(
+      (error: unknown) => this.#reportError(error),
+    );
+  }
+
+  /** Painted pages of a content revision become a `layoutchange` while a session is active. */
+  #onPainted(pages: readonly number[], revision: number): void {
+    const session = this.#session;
+    // The viewport reports only paints of its current content, so a revision
+    // the session has not committed yet is the only thing to drop.
+    if (!session || revision > session.core.state.revision) return;
+    this.#emit("layoutchange", {
+      sessionId: session.core.sessionId,
+      revision,
+      pages: Object.freeze([...pages]),
+    });
+  }
+
+  #reportError(error: unknown): void {
+    const report = (globalThis as { reportError?: (error: unknown) => void })
+      .reportError;
+    if (report) report(error);
+    else console.error(error);
+  }
+
+  /** Forgets everything derived from the document's content, not from its view. */
+  #invalidateContentCaches(): void {
+    this.#textMaps.clear();
+    this.#textMapBytes = 0;
+    // The worker keeps its index; a stale key makes the next search rebuild it.
+    this.#fuzzyIndexKey = undefined;
+    this.#activeSearch?.abort();
+    this.#activeSearch = undefined;
+    this.#searchGeneration += 1;
+    if (this.#searchResult) {
+      this.#searchResult = null;
+      this.#emit("searchchange", null);
+    }
+    if (this.#selection) {
+      this.#selection = null;
+      this.#emit("selectionchange", null);
+    }
   }
 
   async #getTextRuns(
@@ -1008,6 +1286,10 @@ export class DocumentViewer implements ViewerApi {
   }
 
   async #closeDocument(): Promise<void> {
+    const session = this.#session;
+    this.#session = undefined;
+    this.#sessionStart = undefined;
+    if (session) await session.core.end();
     const adapter = this.#adapter;
     const handle = this.#handle;
     this.#adapter = undefined;
@@ -1015,6 +1297,7 @@ export class DocumentViewer implements ViewerApi {
     this.#info = undefined;
     this.#original = undefined;
     this.#originalFileName = undefined;
+    this.#originalContentType = undefined;
     this.#activeSearch?.abort();
     this.#activeSearch = undefined;
     this.#searchResult = null;
@@ -1098,8 +1381,73 @@ export class DocumentViewer implements ViewerApi {
     event: ViewerEventMap[K],
   ): void {
     for (const listener of this.#listeners.get(type) ?? [])
-      listener(event as never);
+      try {
+        listener(event as never);
+      } catch (error) {
+        // A listener's bug is its own; it never fails the call that emitted.
+        this.#reportError(error);
+      }
   }
+}
+
+/** A document opened next to the current one, waiting to be shown. */
+interface PreparedViewerDocument extends PreparedDocument {
+  readonly handle: unknown;
+  readonly info: DocumentInfo;
+  readonly generation: number;
+}
+
+/** The edit format of `format` when `adapter` can edit it. */
+/** The session format of a document format the adapter's provider edits. */
+function editableFormat(
+  adapter: DocumentAdapter,
+  format: DocumentFormat,
+): EditableFormat | undefined {
+  const formats: readonly string[] = adapter.edit?.formats ?? [];
+  return formats.includes(format) ? SESSION_FORMATS[format] : undefined;
+}
+
+const SESSION_FORMATS: Partial<Record<DocumentFormat, EditableFormat>> = {
+  pdf: "pdf",
+  pptx: "pptx",
+  pptm: "pptx",
+  ppsx: "pptx",
+  docx: "docx",
+  docm: "docx",
+};
+
+/** Validates backend info and freezes it with the viewer's capability flags. */
+function describeDocument(
+  adapter: DocumentAdapter,
+  backendInfo: DocumentInfo,
+  format: DocumentFormat,
+  limits: ResourceLimits,
+): DocumentInfo {
+  if (
+    !Number.isInteger(backendInfo.pageCount) ||
+    backendInfo.pageCount < 1 ||
+    backendInfo.pageCount > limits.maxDocumentUnits
+  )
+    throw new ViewerError(
+      "resource-limit",
+      "Document unit count exceeds the configured limit",
+      {
+        details: {
+          pageCount: backendInfo.pageCount,
+          limit: limits.maxDocumentUnits,
+        },
+      },
+    );
+  return immutableInfo({
+    ...backendInfo,
+    capabilities: {
+      textSelection: Boolean(adapter.getTextMap),
+      cellSelection: backendInfo.unit === "sheet",
+      search: Boolean(adapter.getTextMap),
+      thumbnails: backendInfo.unit !== "sheet",
+      editing: editableFormat(adapter, format) !== undefined,
+    },
+  });
 }
 
 function clampZoom(value: number): number {

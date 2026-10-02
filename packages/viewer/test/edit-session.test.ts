@@ -1,0 +1,827 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import { EditSessionController } from "../src/edit/session.js";
+import type {
+  EditOperation,
+  EditStateChange,
+  OperationIssue,
+} from "../src/index.js";
+import { ViewerError } from "../src/index.js";
+import {
+  decodePages,
+  encodePages,
+  FakeEditEngine,
+  FakeHost,
+  type FakeEngineOptions,
+  type FakeHostOptions,
+  type FakeOperation,
+} from "./fixtures/fake-edit-engine.js";
+
+const original = encodePages(["one", "two", "three"]);
+
+function session(
+  engineOptions: FakeEngineOptions = {},
+  hostOptions: FakeHostOptions = {},
+) {
+  const engine = new FakeEditEngine(original, engineOptions);
+  const host = new FakeHost(hostOptions);
+  const controller = new EditSessionController(engine, host, original, 3);
+  // Loose on purpose: invalid shapes must reach the validator.
+  const apply = (
+    operations: readonly (FakeOperation | EditOperation)[],
+    options = {},
+  ) => controller.apply(operations, options);
+  return { engine, host, session: controller, apply };
+}
+
+function rejectsWith(code: string, check?: (error: ViewerError) => void) {
+  return (error: unknown): boolean => {
+    assert.ok(error instanceof ViewerError, String(error));
+    assert.equal(error.code, code, error.message);
+    check?.(error);
+    return true;
+  };
+}
+
+describe("EditSessionController", () => {
+  it("starts clean and applies a batch end to end", async () => {
+    const { session: edit, host, apply } = session();
+    assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
+      revision: 0,
+      dirty: false,
+      canUndo: false,
+      canRedo: false,
+      pageCount: 3,
+    });
+    const receipt = await apply(
+      [{ op: "setText", pageIndex: 1, text: "TWO" }],
+      { label: "shout" },
+    );
+    assert.deepEqual(receipt, {
+      sessionId: edit.sessionId,
+      revision: 1,
+      dryRun: false,
+      operationCount: 1,
+      createdIds: [],
+      removedIds: [],
+      changedPages: [1],
+      pageCount: 3,
+      warnings: [],
+    });
+    assert.equal(Object.isFrozen(receipt), true);
+    assert.deepEqual(host.current, ["one", "TWO", "three"]);
+    assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
+      revision: 1,
+      dirty: true,
+      canUndo: true,
+      canRedo: false,
+      pageCount: 3,
+    });
+    assert.deepEqual(host.eventTypes, ["editstatechange", "documentchange"]);
+    assert.deepEqual(host.events[1]?.event, {
+      sessionId: edit.sessionId,
+      revision: 1,
+      reason: "apply",
+      changedPages: [1],
+      pageCount: 3,
+    });
+  });
+
+  it("rejects stale revisions before touching anything", async () => {
+    const { session: edit, engine, apply } = session();
+    await apply([{ op: "setText", pageIndex: 0, text: "x" }]);
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "y" }], {
+        expectedRevision: 0,
+      }),
+      rejectsWith("edit-conflict", (error) =>
+        assert.deepEqual(error.details, {
+          expectedRevision: 0,
+          revision: 1,
+          sessionId: edit.sessionId,
+        }),
+      ),
+    );
+    await assert.rejects(
+      edit.undo({ expectedRevision: 5 }),
+      rejectsWith("edit-conflict"),
+    );
+    assert.equal(engine.calls.filter((call) => call === "apply").length, 1);
+    await apply([{ op: "setText", pageIndex: 0, text: "y" }], {
+      expectedRevision: 1,
+    });
+    assert.equal(edit.state.revision, 2);
+  });
+
+  it("reports shape issues, then engine issues, without applying", async () => {
+    const { session: edit, engine, host, apply } = session();
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: -1 }, { op: "nope" }]),
+      rejectsWith("invalid-operation", (error) => {
+        const issues = error.details?.issues as readonly OperationIssue[];
+        assert.deepEqual(
+          issues.map(
+            (issue) => `${issue.operationIndex}${issue.path}:${issue.code}`,
+          ),
+          ["0/text:required", "0/pageIndex:minimum", "1/op:unknown-operation"],
+        );
+      }),
+    );
+    await assert.rejects(
+      apply([
+        { op: "setText", pageIndex: 0, text: "ok" },
+        { op: "setText", pageIndex: 9, text: "missing" },
+      ]),
+      rejectsWith("invalid-operation", (error) => {
+        const issues = error.details?.issues as readonly OperationIssue[];
+        assert.deepEqual(issues, [
+          {
+            operationIndex: 1,
+            path: "/pageIndex",
+            code: "unknown-target",
+            message: "No page 9",
+          },
+        ]);
+      }),
+    );
+    await assert.rejects(edit.apply([]), rejectsWith("invalid-operation"));
+    await assert.rejects(
+      edit.apply(
+        Array.from({ length: 501 }, () => ({
+          op: "setText",
+          pageIndex: 0,
+          text: "",
+        })),
+      ),
+      rejectsWith("resource-limit"),
+    );
+    assert.equal(engine.calls.includes("apply"), false);
+    assert.equal(edit.state.revision, 0);
+    assert.equal(host.events.length, 0);
+  });
+
+  it("rolls back a failing engine, materialize or reopen and reports the stage", async () => {
+    const failing = session();
+    await failing.apply([{ op: "setText", pageIndex: 2, text: "kept" }]);
+    await assert.rejects(
+      failing.apply([{ op: "fail" }]),
+      rejectsWith("edit-failed", (error) =>
+        assert.equal(error.details?.stage, "apply"),
+      ),
+    );
+    assert.deepEqual(failing.engine.pages, ["one", "two", "kept"]);
+    // The failed apply, then the rollback replaying the one kept batch.
+    assert.deepEqual(failing.engine.calls.slice(-3), [
+      "apply",
+      "restore:1",
+      "apply",
+    ]);
+    assert.equal(failing.session.state.revision, 1);
+    assert.equal(failing.host.shown.length, 1);
+
+    const noDisk = session({ failMaterialize: true });
+    await assert.rejects(
+      noDisk.apply([{ op: "setText", pageIndex: 0, text: "x" }]),
+      rejectsWith("edit-failed", (error) =>
+        assert.equal(error.details?.stage, "materialize"),
+      ),
+    );
+    assert.deepEqual(noDisk.engine.pages, ["one", "two", "three"]);
+
+    const noRender = session({}, { failReplace: true });
+    await assert.rejects(
+      noRender.apply([{ op: "setText", pageIndex: 0, text: "x" }]),
+      rejectsWith("edit-failed", (error) =>
+        assert.equal(error.details?.stage, "reopen"),
+      ),
+    );
+    assert.deepEqual(noRender.engine.pages, ["one", "two", "three"]);
+    assert.equal(noRender.session.state.revision, 0);
+    assert.deepEqual(noRender.host.events, []);
+    // The session is still usable once the renderer recovers.
+    noRender.host.options.failReplace = false;
+    await noRender.apply([{ op: "setText", pageIndex: 0, text: "x" }]);
+    assert.equal(noRender.session.state.revision, 1);
+  });
+
+  it("becomes unusable when a rollback itself fails", async () => {
+    const { session: edit, engine, apply } = session();
+    engine.options.failRestore = true;
+    await assert.rejects(apply([{ op: "fail" }]), rejectsWith("edit-failed"));
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }]),
+      rejectsWith("edit-failed", (error) =>
+        assert.equal(error.details?.recovered, false),
+      ),
+    );
+  });
+
+  it("honours aborts before and during a change", async () => {
+    const { session: edit, engine, host, apply } = session();
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }], {
+        signal: aborted.signal,
+      }),
+      rejectsWith("aborted"),
+    );
+    assert.equal(engine.calls.length, 0);
+
+    const controller = new AbortController();
+    const pending = apply(
+      [{ op: "setText", pageIndex: 0, text: "x" }, { op: "hang" }],
+      {
+        signal: controller.signal,
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await assert.rejects(pending, rejectsWith("aborted"));
+    assert.deepEqual(engine.pages, ["one", "two", "three"]);
+    assert.equal(edit.state.revision, 0);
+    assert.equal(host.events.length, 0);
+  });
+
+  it("turns an exceeded maxOperationMs into resource-limit and rolls back", async () => {
+    const {
+      session: edit,
+      engine,
+      apply,
+    } = session({}, { limits: { maxOperationMs: 20 } });
+    await assert.rejects(
+      apply([{ op: "hang" }]),
+      rejectsWith("resource-limit"),
+    );
+    assert.deepEqual(engine.pages, ["one", "two", "three"]);
+    assert.equal(edit.state.revision, 0);
+  });
+
+  it("runs calls one at a time in call order", async () => {
+    const { session: edit, host, apply, engine } = session();
+    const results = await Promise.all([
+      apply([{ op: "setText", pageIndex: 0, text: "a" }]),
+      edit.getElements({ pageIndex: 0 }),
+      apply([{ op: "setText", pageIndex: 0, text: "b" }]),
+      edit.undo(),
+    ]);
+    assert.equal((results[0] as { revision: number }).revision, 1);
+    const read = results[1] as {
+      revision: number;
+      items: readonly { text?: string }[];
+    };
+    assert.deepEqual(
+      read.items.map((e) => e.text),
+      ["a"],
+    );
+    assert.equal(read.revision, 1, "stamped with the state it ran at");
+    assert.equal((results[2] as { revision: number }).revision, 2);
+    assert.equal((results[3] as { revision: number }).revision, 3);
+    assert.deepEqual(host.current, ["a", "two", "three"]);
+    assert.deepEqual(engine.calls.slice(0, 5), [
+      "validate",
+      "apply",
+      "materialize",
+      "getElements",
+      "validate",
+    ]);
+  });
+
+  it("dry runs validate and simulate without changing anything", async () => {
+    const { session: edit, host, engine, apply } = session();
+    const receipt = await apply([{ op: "insertPage", index: 0, text: "new" }], {
+      dryRun: true,
+    });
+    assert.deepEqual(receipt, {
+      sessionId: edit.sessionId,
+      revision: 0,
+      dryRun: true,
+      operationCount: 1,
+      createdIds: ["page:new"],
+      removedIds: [],
+      changedPages: [0, 1, 2, 3],
+      pageCount: 4,
+      warnings: [],
+    });
+    assert.deepEqual(engine.pages, ["one", "two", "three"]);
+    assert.equal(edit.state.revision, 0);
+    assert.equal(edit.state.dirty, false);
+    assert.equal(host.events.length, 0);
+    assert.equal(host.shown.length, 0);
+    await assert.rejects(
+      apply([{ op: "deletePage", pageIndex: 7 }], { dryRun: true }),
+      rejectsWith("invalid-operation"),
+    );
+  });
+
+  it("undoes, redoes and resets with no-op receipts at the ends", async () => {
+    const { session: edit, host, apply } = session();
+    const noop = await edit.undo();
+    assert.deepEqual(noop, {
+      sessionId: edit.sessionId,
+      revision: 0,
+      dryRun: false,
+      operationCount: 0,
+      createdIds: [],
+      removedIds: [],
+      changedPages: [],
+      pageCount: 3,
+      warnings: [],
+    });
+    assert.equal(host.events.length, 0);
+
+    await apply([{ op: "setText", pageIndex: 0, text: "a" }]);
+    await apply([
+      { op: "insertPage", index: 1, text: "inserted" },
+      { op: "setText", pageIndex: 3, text: "c" },
+    ]);
+    assert.deepEqual(host.current, ["a", "inserted", "two", "c"]);
+    assert.equal(edit.state.pageCount, 4);
+
+    const undone = await edit.undo();
+    assert.deepEqual(host.current, ["a", "two", "three"]);
+    assert.equal(undone.revision, 3);
+    assert.equal(undone.operationCount, 2);
+    // The page count changed, so every page of the result is reported.
+    assert.deepEqual(undone.changedPages, [0, 1, 2]);
+    assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
+      revision: 3,
+      dirty: true,
+      canUndo: true,
+      canRedo: true,
+      pageCount: 3,
+    });
+
+    const redone = await edit.redo();
+    assert.deepEqual(host.current, ["a", "inserted", "two", "c"]);
+    assert.equal(redone.pageCount, 4);
+    assert.equal(edit.state.canRedo, false);
+
+    await edit.undo();
+    await apply([{ op: "setText", pageIndex: 2, text: "tail" }]);
+    assert.equal(edit.state.canRedo, false);
+    assert.equal((await edit.redo()).operationCount, 0);
+
+    const reset = await edit.reset();
+    assert.deepEqual(host.current, ["one", "two", "three"]);
+    assert.equal(reset.operationCount, 2);
+    assert.deepEqual(reset.changedPages, [0, 1, 2]);
+    assert.deepEqual(edit.state, {
+      sessionId: edit.sessionId,
+      revision: 7,
+      dirty: false,
+      canUndo: false,
+      canRedo: false,
+      pageCount: 3,
+    });
+    assert.deepEqual(
+      host.events
+        .filter((entry) => entry.type === "documentchange")
+        .map((entry) => (entry.event as { reason: string }).reason),
+      ["apply", "apply", "undo", "redo", "undo", "apply", "reset"],
+    );
+    assert.equal((await edit.reset()).operationCount, 0);
+  });
+
+  it("folds history beyond maxEditHistory and keeps reset reachable", async () => {
+    const {
+      session: edit,
+      host,
+      apply,
+    } = session({}, { limits: { maxEditHistory: 2 } });
+    for (const text of ["a", "b", "c"])
+      await apply([{ op: "setText", pageIndex: 0, text }]);
+    await edit.undo();
+    await edit.undo();
+    assert.equal(edit.state.canUndo, false);
+    assert.deepEqual(host.current, ["a", "two", "three"]);
+    await edit.reset();
+    assert.deepEqual(host.current, ["one", "two", "three"]);
+  });
+
+  it("tracks dirty across save, markSaved, undo and reset", async () => {
+    const { session: edit, host, apply } = session();
+    const clean = await edit.save();
+    assert.deepEqual(clean.bytes, original);
+    assert.equal(clean.sessionId, edit.sessionId);
+    assert.equal(clean.revision, 0);
+    assert.equal(edit.state.dirty, false);
+
+    await apply([{ op: "setText", pageIndex: 0, text: "a" }]);
+    assert.equal(edit.state.dirty, true);
+    const saved = await edit.save();
+    assert.deepEqual(decodePages(saved.bytes), ["a", "two", "three"]);
+    assert.equal(edit.state.dirty, true, "save() is pure");
+    edit.markSaved(saved.stateToken);
+    assert.equal(edit.state.dirty, false);
+    assert.equal(edit.state.revision, 1);
+    const stateEvents = host.events.filter(
+      (entry) => entry.type === "editstatechange",
+    );
+    assert.equal(stateEvents.length, 2);
+    assert.equal((stateEvents.at(-1)?.event as EditStateChange).dirty, false);
+
+    await edit.undo();
+    assert.equal(edit.state.dirty, true);
+    await edit.redo();
+    assert.equal(edit.state.dirty, false);
+    await edit.reset();
+    assert.equal(edit.state.dirty, true);
+    edit.markSaved((await edit.save()).stateToken);
+    assert.equal(edit.state.dirty, false);
+    // apply, markSaved, undo, redo, reset, markSaved; saves change nothing.
+    assert.equal(
+      host.events.filter((entry) => entry.type === "editstatechange").length,
+      6,
+    );
+  });
+
+  it("materializes identical bytes for the same history and after undoing to zero", async () => {
+    const first = session();
+    const second = session();
+    for (const edit of [first, second]) {
+      await edit.apply([{ op: "setText", pageIndex: 1, text: "same" }]);
+      await edit.apply([{ op: "insertPage", index: 0, text: "front" }]);
+    }
+    assert.deepEqual(
+      (await first.session.save()).bytes,
+      (await second.session.save()).bytes,
+    );
+    await first.session.undo();
+    await first.session.undo();
+    assert.deepEqual((await first.session.save()).bytes, original);
+  });
+
+  it("answers element and text queries through the engine", async () => {
+    const { session: edit, apply } = session();
+    await apply([{ op: "setText", pageIndex: 0, text: "alpha beta" }]);
+    const elements = await edit.getElements({ pageIndex: 0 });
+    assert.deepEqual(
+      elements.items.map((element) => element.text),
+      ["alpha", "beta"],
+    );
+    // Every read says which state it describes.
+    assert.equal(elements.sessionId, edit.sessionId);
+    assert.equal(elements.revision, 1);
+    assert.equal((await edit.getElement("p0w1")).item?.text, "beta");
+    assert.equal((await edit.getElement("missing")).item, undefined);
+    assert.deepEqual(
+      (await edit.elementsAt(0, { x: 15, y: 1 })).items.map(
+        (element) => element.id,
+      ),
+      ["p0w1"],
+    );
+    assert.deepEqual(
+      (await edit.findText("BETA")).items.map((target) => target.pageIndex),
+      [0],
+    );
+    assert.deepEqual(
+      (await edit.findText("BETA", { caseSensitive: true })).items,
+      [],
+    );
+    // A read queued behind a change describes the state after it.
+    const [, queued] = await Promise.all([
+      apply([{ op: "setText", pageIndex: 0, text: "gamma" }]),
+      edit.getElements({ pageIndex: 0 }),
+    ]);
+    assert.equal(queued.revision, 2);
+    assert.deepEqual(
+      queued.items.map((element) => element.text),
+      ["gamma"],
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      edit.findText("x", { signal: controller.signal }),
+      rejectsWith("aborted"),
+    );
+  });
+
+  it("ends: pending calls abort, later calls fail, the engine is disposed", async () => {
+    const { session: edit, engine, host, apply } = session();
+    const pending = apply([{ op: "hang" }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await edit.end();
+    await assert.rejects(pending, rejectsWith("aborted"));
+    assert.equal(engine.disposed, true);
+    assert.equal(edit.ended, true);
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }]),
+      rejectsWith("lifecycle-error"),
+    );
+    await assert.rejects(edit.save(), rejectsWith("lifecycle-error"));
+    const last = host.events.at(-1)?.event as EditStateChange;
+    assert.equal(last.active, false);
+    assert.equal(last.format, "pdf");
+    await edit.end();
+  });
+});
+
+describe("session identity (revision 2)", () => {
+  it("gives every session a unique id and stamps it on state, receipts and events", async () => {
+    const first = session();
+    const second = session();
+    assert.match(first.session.sessionId, /^[A-Za-z0-9_-]{22}$/);
+    assert.notEqual(first.session.sessionId, second.session.sessionId);
+    assert.equal(first.session.state.sessionId, first.session.sessionId);
+    const receipt = await first.apply([
+      { op: "setText", pageIndex: 0, text: "x" },
+    ]);
+    assert.equal(receipt.sessionId, first.session.sessionId);
+    assert.deepEqual(receipt.removedIds, []);
+    const change = first.host.events.find(
+      (entry) => entry.type === "documentchange",
+    )?.event as { sessionId: string };
+    assert.equal(change.sessionId, first.session.sessionId);
+  });
+
+  it("rejects calls that name another session, before the revision check", async () => {
+    const { session: edit, engine, apply } = session();
+    const other = session().session.sessionId;
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }], {
+        expectedSessionId: other,
+        expectedRevision: 0,
+      }),
+      rejectsWith("edit-conflict", (error) =>
+        assert.deepEqual(error.details, {
+          expectedRevision: 0,
+          revision: 0,
+          expectedSessionId: other,
+          sessionId: edit.sessionId,
+        }),
+      ),
+    );
+    assert.deepEqual(engine.calls, []);
+    // Plain JSON, as an AI client would hold it.
+    const json = JSON.parse('{"op":"setText","pageIndex":0,"text":"x"}');
+    const ok = await edit.applyJson([json as EditOperation], {
+      expectedSessionId: edit.sessionId,
+    });
+    assert.equal(ok.revision, 1);
+    await assert.rejects(
+      edit.undo({ expectedSessionId: other }),
+      rejectsWith("edit-conflict"),
+    );
+  });
+});
+
+describe("session fixes (revision 2)", () => {
+  const quiet = async (work: () => Promise<void>) => {
+    const { error } = console;
+    console.error = () => {};
+    try {
+      await work();
+    } finally {
+      console.error = error;
+    }
+  };
+
+  it("applies the batch as it was when apply() was called", async () => {
+    const { host, apply } = session();
+    const operations = [{ op: "setText", pageIndex: 0, text: "as called" }];
+    const earlier = apply([{ op: "setText", pageIndex: 1, text: "first" }]);
+    const later = apply(operations);
+    operations[0]!.text = "mutated while queued";
+    operations.push({ op: "setText", pageIndex: 2, text: "extra" });
+    await Promise.all([earlier, later]);
+    assert.deepEqual(host.current, ["as called", "first", "three"]);
+  });
+
+  it("isolates throwing listeners from the call that emitted", async () => {
+    const { session: edit, host, apply } = session({}, { failEmit: true });
+    await quiet(async () => {
+      const receipt = await apply([{ op: "setText", pageIndex: 0, text: "x" }]);
+      assert.equal(receipt.revision, 1);
+      assert.equal(edit.state.revision, 1);
+      assert.deepEqual(host.current, ["x", "two", "three"]);
+      assert.deepEqual(host.eventTypes, ["editstatechange", "documentchange"]);
+      // A second apply works too: the first one was committed exactly once.
+      await apply([{ op: "setText", pageIndex: 0, text: "y" }]);
+      assert.equal(edit.state.revision, 2);
+    });
+  });
+
+  it("cancels queued calls with aborted when the session ends", async () => {
+    const { session: edit, apply } = session();
+    const pending = apply([{ op: "hang" }]);
+    const queued = apply([{ op: "setText", pageIndex: 0, text: "x" }]);
+    const read = edit.getElements();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await edit.end();
+    await assert.rejects(pending, rejectsWith("aborted"));
+    await assert.rejects(queued, rejectsWith("aborted"));
+    await assert.rejects(read, rejectsWith("aborted"));
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "x" }]),
+      rejectsWith("lifecycle-error"),
+    );
+  });
+
+  it("compares markSaved tokens by content state and ignores foreign ones", async () => {
+    const { session: edit, apply } = session();
+    await apply([{ op: "setText", pageIndex: 0, text: "a" }]);
+    const saved = await edit.save();
+    await apply([{ op: "setText", pageIndex: 0, text: "b" }]);
+    edit.markSaved(saved.stateToken);
+    assert.equal(edit.state.dirty, true, "a stale token keeps dirty");
+    await edit.undo();
+    assert.equal(edit.state.dirty, false, "back at the saved state");
+    await quiet(async () => {
+      edit.markSaved("otherSession:1");
+      edit.markSaved("garbage");
+    });
+    assert.equal(edit.state.dirty, false);
+    await edit.redo();
+    assert.equal(edit.state.dirty, true);
+  });
+
+  it("still saves the last committed bytes after a failed recovery", async () => {
+    const { session: edit, engine, host, apply } = session();
+    await apply([{ op: "setText", pageIndex: 0, text: "kept" }]);
+    engine.options.failRestore = true;
+    await assert.rejects(apply([{ op: "fail" }]), rejectsWith("edit-failed"));
+    assert.equal(edit.usable, false);
+    const saved = await edit.save();
+    assert.deepEqual(decodePages(saved.bytes), ["kept", "two", "three"]);
+    assert.deepEqual(decodePages(saved.bytes), host.current);
+    assert.equal(saved.revision, 1);
+    edit.markSaved(saved.stateToken);
+    assert.equal(edit.state.dirty, false);
+    await assert.rejects(edit.getElements(), rejectsWith("edit-failed"));
+  });
+});
+
+describe("two-phase reopen (revision 2)", () => {
+  it("completes a call that is aborted after the commit point", async () => {
+    const controller = new AbortController();
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { onCommit: () => controller.abort() });
+    const receipt = await apply(
+      [{ op: "setText", pageIndex: 0, text: "committed" }],
+      { signal: controller.signal },
+    );
+    assert.equal(receipt.revision, 1);
+    assert.deepEqual(host.current, ["committed", "two", "three"]);
+    assert.deepEqual(engine.pages, ["committed", "two", "three"]);
+    assert.deepEqual(host.discarded, []);
+    assert.deepEqual(decodePages((await edit.save()).bytes), host.current);
+  });
+
+  it("discards a preparation when the call is aborted before the commit", async () => {
+    const controller = new AbortController();
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { onPrepare: () => controller.abort() });
+    await assert.rejects(
+      apply([{ op: "setText", pageIndex: 0, text: "never shown" }], {
+        signal: controller.signal,
+      }),
+      rejectsWith("aborted"),
+    );
+    assert.equal(host.shown.length, 0);
+    assert.deepEqual(host.discarded, [["never shown", "two", "three"]]);
+    assert.deepEqual(engine.pages, ["one", "two", "three"], "rolled back");
+    assert.equal(edit.state.revision, 0);
+  });
+
+  it("takes the page count from the renderer and reports an engine that disagrees", async () => {
+    const { session: edit, host, apply } = session({}, { reportPageCount: 9 });
+    const receipt = await apply([{ op: "insertPage", index: 1, text: "x" }]);
+    assert.equal(receipt.pageCount, 9);
+    assert.equal(edit.state.pageCount, 9);
+    assert.equal(receipt.warnings.at(-1)?.code, "fidelity-degraded");
+    assert.deepEqual(receipt.warnings.at(-1)?.details, {
+      engine: 4,
+      renderer: 9,
+    });
+    const change = host.events.find((entry) => entry.type === "documentchange")
+      ?.event as { pageCount: number };
+    assert.equal(change.pageCount, 9);
+  });
+});
+
+describe("checkpoints and assets (revision 2)", () => {
+  const text = (index: number) => ({
+    op: "setText" as const,
+    pageIndex: 0,
+    text: `s${index}`,
+  });
+  /** The batch count of the engine's latest restore. */
+  const lastRestore = (calls: readonly string[]) =>
+    calls.filter((call) => call.startsWith("restore:")).at(-1);
+
+  it("restores from the newest checkpoint at or before the target", async () => {
+    // maxEditHistory 8 keeps a checkpoint every second commit.
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { limits: { maxEditHistory: 8 } });
+    for (let index = 1; index <= 6; index += 1) await apply([text(index)]);
+    await edit.undo();
+    assert.equal(lastRestore(engine.calls), "restore:1", "one batch after 4");
+    assert.deepEqual(engine.restoreBases.at(-1), ["s4", "two", "three"]);
+    assert.deepEqual(host.current, ["s5", "two", "three"]);
+    await edit.undo();
+    assert.deepEqual(engine.restoreBases.at(-1), ["s4", "two", "three"]);
+    assert.equal(lastRestore(engine.calls), "restore:0", "state 4 itself");
+    await edit.redo();
+    assert.deepEqual(host.current, ["s5", "two", "three"]);
+    // Three undos back to state 2 use that checkpoint, never the original.
+    await edit.undo();
+    await edit.undo();
+    await edit.undo();
+    assert.deepEqual(engine.restoreBases.at(-1), ["s2", "two", "three"]);
+    assert.deepEqual(host.current, ["s2", "two", "three"]);
+  });
+
+  it("falls back to the original when the budget allows no checkpoint", async () => {
+    const {
+      session: edit,
+      engine,
+      apply,
+    } = session(
+      {},
+      { limits: { maxEditHistory: 8, maxEditCheckpointBytes: 1 } },
+    );
+    for (let index = 1; index <= 4; index += 1) await apply([text(index)]);
+    await edit.undo();
+    assert.equal(engine.restoreBases.at(-1), undefined);
+    assert.equal(lastRestore(engine.calls), "restore:3");
+  });
+
+  it("forgets checkpoints a new change after an undo made unreachable", async () => {
+    const {
+      session: edit,
+      engine,
+      host,
+      apply,
+    } = session({}, { limits: { maxEditHistory: 8 } });
+    for (let index = 1; index <= 4; index += 1) await apply([text(index)]);
+    await edit.undo();
+    await edit.undo();
+    await apply([text(9)]);
+    await edit.undo();
+    assert.deepEqual(engine.restoreBases.at(-1), ["s2", "two", "three"]);
+    assert.deepEqual(host.current, ["s2", "two", "three"]);
+    await edit.reset();
+    assert.deepEqual(engine.restoreBases.at(-1), undefined);
+    assert.deepEqual(host.current, ["one", "two", "three"]);
+  });
+
+  it("interns binary payloads once and replays references", async () => {
+    const { session: edit, engine, host, apply } = session();
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    await apply([{ op: "stamp", pageIndex: 0, data: bytes }]);
+    assert.deepEqual(host.current, ["one+5", "two", "three"]);
+    const puts = () =>
+      engine.calls.filter((call) => call.startsWith("putAsset:")).length;
+    assert.equal(puts(), 1);
+    // The same bytes again, as base64 this time: known, not sent again.
+    await apply([
+      { op: "stamp", pageIndex: 1, data: btoa("\x01\x02\x03\x04\x05") },
+    ]);
+    assert.equal(puts(), 1);
+    await edit.undo();
+    await edit.redo();
+    assert.equal(puts(), 1, "replays carry references only");
+    assert.deepEqual(host.current, ["one+5", "two+5", "three"]);
+    const id = await edit.addAsset(bytes);
+    assert.match(id, /^asset:[0-9a-f]{64}$/);
+    assert.equal(puts(), 1, "already registered by the batch");
+    await apply([{ op: "stamp", pageIndex: 2, data: id }]);
+    assert.deepEqual(host.current, ["one+5", "two+5", "three+5"]);
+    await assert.rejects(
+      apply([{ op: "stamp", pageIndex: 0, data: `asset:${"0".repeat(64)}` }]),
+      rejectsWith("invalid-operation", (error) =>
+        assert.equal(
+          (error.details?.issues as OperationIssue[])[0]?.code,
+          "unknown-asset",
+        ),
+      ),
+    );
+    // apply, apply, undo, redo, apply: the rejected batch changed nothing.
+    assert.equal(edit.state.revision, 5);
+  });
+
+  it("bounds assets by maxInputBytes", async () => {
+    const { session: edit } = session({}, { limits: { maxInputBytes: 4 } });
+    await assert.rejects(
+      edit.addAsset(new Uint8Array(5)),
+      rejectsWith("resource-limit"),
+    );
+  });
+});

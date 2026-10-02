@@ -42,7 +42,7 @@ access.
 
 `@silurus/ooxml` is treated as a qualified upstream engine rather than copied source. Its DOCX/XLSX/PPTX entry points remain lazy imports.
 
-DOCX and XLSX stay on 0.72.2; PPTX uses the `@silurus/ooxml-pptx` npm alias pinned to 0.88.0 for per-point chart colors and Office-compatible axis intervals. The split preserves DOCX inline-image fitting, which still depends on the older engine computing layout after the document model is adjusted. Browser regressions exercise both chart rendering and oversized DOCX images against the real engines.
+DOCX, XLSX and PPTX all use `@silurus/ooxml` 0.88.0, one copy. (Until 2026-10-02 DOCX and XLSX stayed on 0.72.2 and PPTX reached 0.88.0 through the `@silurus/ooxml-pptx` npm alias, because inline-image fitting depended on the older engine computing layout after the document model was adjusted.) The 0.88 line lays a document out inside `load()`, so the fitting moved into the bytes the engine reads: `prepareDocxForDisplay` (`src/adapters/docx-prepass.ts`) scales oversized `wp:inline` pictures to their section's content box and marks every paragraph with a `_wd<id>` bookmark in a display copy, never in what an edit session saves. Browser regressions exercise chart rendering, the pre-pass and oversized DOCX images against the real engine.
 
 Legacy PPT uses `office_oxide::Document::to_ir`; Word 97–2003 DOC uses the project-owned bounded `legacy-doc` parser and source-backed IR projection. BIFF8 XLS combines the upstream value/cached-result conversion with a project-owned bounded Workbook-stream extractor and ZIP postprocessor so source styles, geometry, merges and hyperlinks survive the IR boundary. All three return OOXML bytes from memory and enter the same modern Office path. The stock heuristic DOC projection is never called.
 
@@ -67,3 +67,58 @@ All input is untrusted. The runtime will enforce source size, decompression, ent
 - The TypeScript/Rust boundary stays coarse-grained; page buffers and text maps cross it, not individual glyph calls.
 - Upstream upgrades require corpus, browser, size, license, and API qualification before changing a pin.
 - The public entry point is `ViewerClient.create`; one client owns shared policy and one or more independently disposable viewer instances.
+
+## Editing layer
+
+Status: added with the document-editing package on 2026-10-01.
+
+Editing is a session layered over the same adapters, not a second rendering
+path. `DocumentViewer.edit()` asks the loaded document's adapter for an edit
+engine provider, starts the engine lazily with a copy of the original bytes, and
+wraps it in a format-independent session (`src/edit/`): JSON operations checked
+against exported schemas, a linear history over the immutable original,
+revisions for optimistic concurrency, atomic batches with rollback, and
+`save()`.
+
+```text
+Host UI / AI agent
+        │ JSON operations, typed methods, expectedRevision
+        ▼
+EditSessionController ── validate → engine.apply → engine.materialize
+        │                                   │
+        │ replaceDocument(bytes)            │ edited bytes
+        ▼                                   ▼
+DocumentViewer ── adapter.reopen/open ──► new handle, caches dropped,
+        │                                 view state kept, events
+        ▼
+AdaptiveViewport repaints mounted pages (content revision in the render key)
+```
+
+PPTX and DOCX engines share the OOXML package layer (`src/edit/ooxml/`,
+module 03 of the editing package): a ZIP container read in place whose
+untouched entries are copied byte for byte on save, parts inflated on demand
+through the platform `DecompressionStream`, an offset-preserving XML scanner,
+range patches verified by re-scan and read-back, and transactions that keep
+`[Content_Types].xml` and relationship parts consistent while writing them as
+patches too. Changed entries are stored, not deflated, so a saved package is
+byte-identical across engines. The layer is thread-agnostic; the format engine
+decides where it runs.
+
+The PPTX engine (`src/edit/pptx/`, module 04) is the first format on that
+layer: it indexes the deck (presentation, slides, layouts, masters, theme
+fonts), reads every element of a slide from its XML — frames inherited
+through the placeholder chain or mapped through groups, the text model,
+styles resolved down to the master text styles — and writes each operation
+as patches of the slide part, the presentation part, the relationships and
+the content types in one transaction. It runs in the OOXML edit worker
+(`src/ooxml-edit-worker.ts`, `dist/workers/ooxml-edit-worker.js`), which
+module 06 will share; the main-thread client extends the worker transport
+the PDF client uses. After each change the viewer reopens the edited bytes
+with the same `@silurus/ooxml` renderer that shows originals.
+
+Each format supplies its engine behind the internal `EditEngine` interface;
+the engine may live in a worker, and the core never assumes shared memory.
+After a change the viewer reopens the edited bytes through the regular adapter
+and swaps handles, so every read API and the canvas show the file `save()`
+would return. The host draws its own controls, using `pageToClient` and
+`clientToPage` to place them over the painted pages.

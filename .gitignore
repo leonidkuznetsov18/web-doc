@@ -13,5 +13,11 @@ test-results/
 docs/.vitepress/cache/
 artifacts/*.tgz
 artifacts/*.png
+# Proof screenshots and demo frames for Linear tickets; attached there, not committed.
+artifacts/proofs/
 artifacts/SHA256SUMS
 artifacts/release/
+# Edited decks for the manual PowerPoint and Keynote check (npm run fixtures:pptx)
+artifacts/pptx-fixtures/
+# Edited documents for the manual Word and Pages check (npm run fixtures:docx)
+artifacts/docx-fixtures/

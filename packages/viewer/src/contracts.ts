@@ -1,3 +1,15 @@
+import type { EditEngineProvider } from "./edit/engine.js";
+import type { EditSession } from "./edit/sessions.js";
+import type {
+  DocumentChange,
+  LayoutChange,
+  EditOptions,
+  EditStateChange,
+  PageHit,
+  PageRect,
+  ViewportRect,
+} from "./edit/types.js";
+
 export const supportedFormats = [
   "docx",
   "docm",
@@ -39,6 +51,18 @@ export type ViewerErrorCode =
   | "render-failed"
   | "worker-crashed"
   | "lifecycle-error"
+  | "edit-unsupported"
+  | "invalid-operation"
+  | "edit-conflict"
+  | "edit-failed"
+  /** An OOXML package the editing layer cannot open: ZIP64, encryption, an unknown method, several disks. */
+  | "unsupported-package"
+  /** An OOXML part that can be read but not patched: not UTF-8, or not byte-stable through decoding. */
+  | "unsupported-part"
+  /** An XML part the scanner cannot parse. */
+  | "malformed-xml"
+  /** A patch that overlaps, is stale, is not well-formed, or does not read back as expected. */
+  | "invalid-patch"
   | "internal";
 
 export type ViewerWarningCode =
@@ -47,7 +71,8 @@ export type ViewerWarningCode =
   | "font-substitution"
   | "font-unavailable"
   | "external-resource-blocked"
-  | "fidelity-degraded";
+  | "fidelity-degraded"
+  | "privacy-not-guaranteed";
 
 export interface ViewerErrorData {
   readonly name: "ViewerError";
@@ -81,6 +106,12 @@ export interface ResourceLimits {
   readonly maxDocumentUnits: number;
   readonly maxConcurrentRenders: number;
   readonly maxOperationMs: number;
+  /** Operations in one `EditSession.apply()` call. */
+  readonly maxEditOperations: number;
+  /** Undoable edit batches kept; older ones are folded into the starting point. */
+  readonly maxEditHistory: number;
+  /** Memory for retained edit checkpoints; fewer are kept when a file is big. */
+  readonly maxEditCheckpointBytes: number;
 }
 
 export type BinaryDocumentSource = ArrayBuffer | Uint8Array | Blob;
@@ -249,6 +280,14 @@ export interface TextRun {
   readonly hyperlink?: HyperlinkTarget;
   readonly row?: number;
   readonly column?: number;
+  /**
+   * DOCX: the `w:p` of the source XML this run was laid out from, as the
+   * file's `w14:paraId` or the deterministic id the viewer assigns to a
+   * paragraph without one (eight hex digits). The runs of a paragraph that
+   * continues on the next page share it. Absent when the run belongs to no
+   * source paragraph.
+   */
+  readonly paragraphId?: string;
 }
 
 export type HyperlinkTarget =
@@ -303,6 +342,9 @@ export interface ViewerEventMap {
   readonly zoomchange: { readonly zoom: number; readonly fit: FitMode };
   readonly viewchange: ViewerState;
   readonly searchchange: SearchResult | null;
+  readonly editstatechange: EditStateChange;
+  readonly documentchange: DocumentChange;
+  readonly layoutchange: LayoutChange;
 }
 
 /**
@@ -491,6 +533,8 @@ export interface DocumentCapabilities {
   readonly cellSelection: boolean;
   readonly search: boolean;
   readonly thumbnails: boolean;
+  /** True when `edit()` is available for this document. */
+  readonly editing: boolean;
 }
 
 export type DocumentMetadata = DocumentInfo;
@@ -524,6 +568,17 @@ export interface DocumentAdapter<THandle = unknown> {
   ): Promise<readonly TextRun[]>;
   close(handle: THandle): void | Promise<void>;
   destroy?(): void | Promise<void>;
+  /** Editing support for some of this adapter's formats. */
+  readonly edit?: EditEngineProvider;
+  /**
+   * Opens edited bytes of a document, reusing what `previous` holds (for
+   * example a worker). `previous` stays open; the viewer closes it afterwards.
+   */
+  reopen?(
+    previous: THandle,
+    data: Uint8Array,
+    context: AdapterOpenContext,
+  ): Promise<THandle>;
 }
 
 export type ViewerEventListener<K extends keyof ViewerEventMap> = (
@@ -576,6 +631,14 @@ export interface ViewerApi {
   copySelection(): Promise<string>;
   getOriginalBytes(): Uint8Array | undefined;
   downloadOriginal(fileName?: string): Blob;
+  /** Starts editing the loaded document, or returns the session already started. */
+  edit(options?: EditOptions): Promise<EditSession>;
+  /** The active session of the loaded document, if `edit()` was called. */
+  getEditSession(): EditSession | undefined;
+  /** Client-space rectangle of a page-space rectangle; undefined if the page is not mounted. */
+  pageToClient(pageIndex: number, rect: PageRect): ViewportRect | undefined;
+  /** Page under a client-space point and the point in page space; undefined outside pages. */
+  clientToPage(clientX: number, clientY: number): PageHit | undefined;
   on<K extends keyof ViewerEventMap>(
     type: K,
     listener: ViewerEventListener<K>,

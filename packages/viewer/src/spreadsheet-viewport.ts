@@ -263,6 +263,24 @@ export class SpreadsheetViewport {
     this.schedule();
   }
 
+  /** Sheets are not editable yet, so new content is treated as a new document. */
+  replaceDocument(
+    info: DocumentInfo,
+    _changedPages?: readonly number[],
+    _revision?: number,
+  ): void {
+    this.setDocument(info);
+  }
+
+  /** Sheet geometry is cell-addressed; page-space helpers do not apply. */
+  pageToClient(): undefined {
+    return undefined;
+  }
+
+  clientToPage(): undefined {
+    return undefined;
+  }
+
   update(): void {
     if (!this.#info) return;
     const nextSheet = this.#host.state.pageIndex;

@@ -8,6 +8,9 @@ import type {
   TextRun,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
+import type { EditEngineProvider } from "../edit/engine.js";
+import type { PdfEditProviderOptions } from "../edit/pdf/provider.js";
+import { PdfSession } from "../edit/pdf/session.js";
 
 // Preserve the public zoom=1 contract: one PDF point maps to one renderer CSS
 // pixel. Per-page geometry still prevents the viewport from coercing pages to
@@ -44,6 +47,8 @@ export interface PdfAdapterOptions {
     data: Uint8Array,
     context: AdapterOpenContext,
   ) => Promise<PdfBackend>;
+  /** Where the PDF edit worker and its WebAssembly live. */
+  readonly edit?: PdfEditProviderOptions;
 }
 
 interface PdfHandle {
@@ -131,6 +136,20 @@ export class PdfDocumentAdapter implements DocumentAdapter<PdfHandle> {
   readonly id = "pdf";
   readonly formats = ["pdf"] as const;
   readonly #options: PdfAdapterOptions;
+  /**
+   * PDFium-backed editing. The worker, its WebAssembly and the engine client
+   * are imported on the first `edit()`; viewing never loads them.
+   */
+  readonly edit: EditEngineProvider = {
+    formats: ["pdf"],
+    load: async (original, context) =>
+      (await import("../edit/pdf/provider.js")).loadPdfEditEngine(
+        original,
+        context,
+        this.#options.edit ?? {},
+      ),
+    createSession: (core) => new PdfSession(core),
+  };
 
   constructor(options: PdfAdapterOptions = {}) {
     this.#options = options;

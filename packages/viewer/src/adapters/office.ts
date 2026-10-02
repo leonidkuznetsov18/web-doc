@@ -10,7 +10,17 @@ import type {
   ViewerWarning,
 } from "../contracts.js";
 import { abortError, ViewerError } from "../errors.js";
-import { fitInlineImagesToPage, type DocxModelLike } from "./docx-images.js";
+import { DocxSession } from "../edit/docx/session.js";
+import type { EditEngineProvider } from "../edit/engine.js";
+import type { OoxmlEditProviderOptions } from "../edit/ooxml/worker.js";
+import { PptxSession } from "../edit/pptx/session.js";
+import {
+  createDocxParagraphIdResolver,
+  type DocxModelDocument,
+  type DocxParagraphIdResolver,
+  type DocxRunSource,
+} from "./docx-paragraphs.js";
+import { prepareDocxForDisplay } from "./docx-prepass.js";
 import { enforceContainerLimits } from "../limits.js";
 
 const MODERN_FORMATS = [
@@ -36,6 +46,8 @@ interface EngineLoadOptions {
   readonly useGoogleFonts: false;
   readonly maxZipEntryBytes: number;
   readonly mode: "main";
+  /** Presentations: lay slides out in the background after the first ones. */
+  readonly progressiveLayout?: boolean;
 }
 
 interface EngineHyperlink {
@@ -53,6 +65,10 @@ interface DocxRun {
   readonly h: number;
   readonly fontSize: number;
   readonly font: string;
+  /** The `w14:paraId` of the run's paragraph, when the engine reads one. */
+  readonly paragraphId?: string;
+  /** Where the run came from in the engine's model; the paragraph bridge. */
+  readonly source?: DocxRunSource;
   readonly letterSpacingPx?: number;
   readonly transform?: string;
   readonly eastAsianVert?: boolean;
@@ -61,10 +77,11 @@ interface DocxRun {
 
 interface DocxBackend {
   readonly pageCount: number;
-  /** Render mode; the parsed model is only reachable in `main` mode. */
-  readonly mode?: "main" | "worker";
-  /** Parsed document model (main mode). Read lazily by the page layout. */
-  readonly document?: DocxModelLike;
+  /**
+   * The parsed model (`main` mode). Read once at open for the paragraph
+   * bridge: its paragraphs keep the pre-pass bookmarks that name each `w:p`.
+   */
+  readonly document?: DocxModelDocument;
   pageSize(pageIndex: number): { widthPt: number; heightPt: number };
   renderPage(
     target: HTMLCanvasElement | OffscreenCanvas,
@@ -229,6 +246,8 @@ export interface LegacyConversionOptions {
 export interface OfficeAdapterOptions {
   readonly engines?: OfficeEngineLoaders;
   readonly legacy?: LegacyConversionOptions;
+  /** Where the OOXML edit worker is served from; the package's own by default. */
+  readonly edit?: OoxmlEditProviderOptions;
 }
 
 interface DocumentHandle {
@@ -236,6 +255,8 @@ interface DocumentHandle {
   readonly format: DocumentFormat;
   readonly backend: DocxBackend;
   readonly warnings: readonly ViewerWarning[];
+  /** Maps a run's source to the id of its `w:p` (cached per paragraph). */
+  readonly paragraphIdOf: DocxParagraphIdResolver;
 }
 
 interface PresentationHandle {
@@ -258,6 +279,30 @@ type OfficeHandle = DocumentHandle | PresentationHandle | SpreadsheetHandle;
 
 export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   readonly id = "office";
+  /**
+   * PPTX and DOCX editing on the OOXML package layer. The worker and the
+   * engine client are imported on the first `edit()`; viewing never loads
+   * them.
+   */
+  readonly edit: EditEngineProvider = {
+    formats: ["pptx", "pptm", "ppsx", "docx", "docm"],
+    load: async (original, context) =>
+      context.format === "docx"
+        ? (await import("../edit/docx/provider.js")).loadDocxEditEngine(
+            original,
+            context,
+            this.#options.edit ?? {},
+          )
+        : (await import("../edit/pptx/provider.js")).loadPptxEditEngine(
+            original,
+            context,
+            this.#options.edit ?? {},
+          ),
+    createSession: (core, access) =>
+      core.format === "docx"
+        ? new DocxSession(core, access)
+        : new PptxSession(core),
+  };
   readonly formats = [...MODERN_FORMATS, ...LEGACY_FORMATS] as const;
   readonly #options: OfficeAdapterOptions;
 
@@ -268,6 +313,28 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   async open(
     input: Uint8Array,
     context: AdapterOpenContext,
+  ): Promise<OfficeHandle> {
+    return this.#open(input, context, false);
+  }
+
+  /**
+   * Edited bytes open as a fresh document (the engine owns no reusable
+   * state); a presentation lays its slides out progressively so the slide
+   * on screen paints without waiting for the whole deck — Firefox takes
+   * seconds for a 500-slide preflight. The viewer closes `previous`.
+   */
+  reopen(
+    _previous: OfficeHandle,
+    data: Uint8Array,
+    context: AdapterOpenContext,
+  ): Promise<OfficeHandle> {
+    return this.#open(data, context, true);
+  }
+
+  async #open(
+    input: Uint8Array,
+    context: AdapterOpenContext,
+    reopening: boolean,
   ): Promise<OfficeHandle> {
     throwIfAborted(context.signal);
     let format = context.format;
@@ -306,13 +373,23 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       useGoogleFonts: false,
       maxZipEntryBytes: context.limits.maxZipEntryBytes,
       mode: "main",
+      ...(reopening ? { progressiveLayout: true } : {}),
     };
-    const buffer = exactArrayBuffer(data);
-
     try {
       const kind = kindFor(format);
       if (kind === "document") {
-        const backend = await this.#loadDocx(buffer, engineOptions);
+        // What the renderer sees: oversized inline pictures fitted and every
+        // paragraph carrying an id; the bytes a session saves are the input.
+        const display = await prepareDocxForDisplay(
+          data,
+          context.limits,
+          context.signal,
+        );
+        throwIfAborted(context.signal);
+        const backend = await this.#loadDocx(
+          exactArrayBuffer(display.bytes),
+          engineOptions,
+        );
         throwIfAborted(context.signal, backend);
         context.reportProgress({
           phase: "parsing",
@@ -320,8 +397,15 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
           total: 1,
           ratio: 1,
         });
-        return { kind, format: context.format, backend, warnings };
+        return {
+          kind,
+          format: context.format,
+          backend,
+          warnings,
+          paragraphIdOf: createDocxParagraphIdResolver(docxModelOf(backend)),
+        };
       }
+      const buffer = exactArrayBuffer(data);
       if (kind === "presentation") {
         const backend = await this.#loadPptx(buffer, engineOptions);
         throwIfAborted(context.signal, backend);
@@ -504,6 +588,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       return runs.map((run) => {
         const logicalStart = logicalOffset;
         logicalOffset += run.text.length;
+        const paragraphId = run.paragraphId ?? handle.paragraphIdOf(run.source);
         return {
           text: run.text,
           x: run.x,
@@ -512,6 +597,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
           height: run.h,
           font: run.font,
           fontSize: run.fontSize,
+          ...(paragraphId === undefined ? {} : { paragraphId }),
           ...(run.letterSpacingPx === undefined
             ? {}
             : { letterSpacingPx: run.letterSpacingPx }),
@@ -641,13 +727,10 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
     data: ArrayBuffer,
     options: EngineLoadOptions,
   ): Promise<DocxBackend> {
-    const backend = this.#options.engines?.docx
-      ? await this.#options.engines.docx(data, options)
-      : await (
-          await import("@silurus/ooxml/docx")
-        ).DocxDocument.load(data, options);
-    fitDocxInlineImages(backend);
-    return backend;
+    if (this.#options.engines?.docx)
+      return this.#options.engines.docx(data, options);
+    const { DocxDocument } = await import("@silurus/ooxml/docx");
+    return DocxDocument.load(data, options);
   }
 
   async #loadXlsx(
@@ -666,7 +749,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   ): Promise<PptxBackend> {
     if (this.#options.engines?.pptx)
       return this.#options.engines.pptx(data, options);
-    const { PptxPresentation } = await import("@silurus/ooxml-pptx/pptx");
+    const { PptxPresentation } = await import("@silurus/ooxml/pptx");
     return PptxPresentation.load(data, options);
   }
 }
@@ -675,6 +758,15 @@ export function createOfficeAdapter(
   options: OfficeAdapterOptions = {},
 ): OfficeDocumentAdapter {
   return new OfficeDocumentAdapter(options);
+}
+
+/** The engine's model when it is reachable; a worker-mode getter throws. */
+function docxModelOf(backend: DocxBackend): DocxModelDocument | undefined {
+  try {
+    return backend.document;
+  } catch {
+    return undefined;
+  }
 }
 
 export function sanitizeOfficeHyperlink(
@@ -1093,21 +1185,4 @@ function normalizeOfficeError(error: unknown): ViewerError {
 
 function textDirection(text: string): "ltr" | "rtl" {
   return /[\u0590-\u08ff\ufb1d-\ufefc]/u.test(text) ? "rtl" : "ltr";
-}
-
-/**
- * Oversized inline pictures are shrunk to the section's content box before
- * the engine paginates (the layout is built lazily on first page access).
- * The model is reachable in `main` mode only; a worker-mode engine keeps
- * Word's geometry.
- */
-function fitDocxInlineImages(backend: DocxBackend): void {
-  if (backend.mode === "worker") return;
-  let model: DocxModelLike | undefined;
-  try {
-    model = backend.document;
-  } catch {
-    return;
-  }
-  if (model) fitInlineImagesToPage(model);
 }

@@ -48,6 +48,11 @@ export class FontManager {
     };
   }
 
+  /** Fonts the host registered, as given. */
+  get registered(): readonly RegisteredFont[] {
+    return this.#registered;
+  }
+
   async ensureRuns(
     runs: readonly TextRun[],
     reportWarning: (warning: ViewerWarning) => void,

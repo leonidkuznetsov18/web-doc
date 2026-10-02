@@ -31,6 +31,8 @@
     "test:regressions": "node --test scripts/release-content-policy.test.mjs scripts/regression-harness.test.mjs && node scripts/regression-harness.mjs",
     "release:gate": "node scripts/release-gate.mjs",
     "corpus:fetch": "node scripts/fetch-corpus.mjs",
+    "fixtures:pptx": "node scripts/pptx-fixtures.mjs",
+    "fixtures:docx": "node scripts/docx-fixtures.mjs",
     "test": "npm run test --workspaces --if-present && cargo test --workspace",
     "test:e2e": "node scripts/e2e.mjs",
     "test:e2e:matrix": "node scripts/e2e.mjs --config=playwright.matrix.config.ts",

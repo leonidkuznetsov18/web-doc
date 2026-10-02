@@ -215,6 +215,13 @@ export class BasicViewerUi {
         if (!this.#thumbnailPanel.hidden) void this.#renderThumbnails();
         this.#renderSheetTabs();
       }),
+      viewer.on("documentchange", () => {
+        // Edited content: counters, tabs and thumbnails follow the new document.
+        this.#info = viewer.getDocumentInfo();
+        this.#renderSheetTabs();
+        this.#syncState(viewer.state);
+        if (!this.#thumbnailPanel.hidden) void this.#renderThumbnails();
+      }),
     );
     this.root.addEventListener("keydown", this.#onKeyDown);
     document.addEventListener("fullscreenchange", this.#onFullscreenChange);

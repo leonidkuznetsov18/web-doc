@@ -13,6 +13,8 @@ import {
   sanitizeOfficeHyperlink,
   ViewerClient,
 } from "../src/index.js";
+import { OoxmlPackage } from "../src/edit/ooxml/package.js";
+import { buildDocx, inlinePicture, sectPr } from "./fixtures/docx-builder.js";
 
 const previousOffscreenCanvas = globalThis.OffscreenCanvas;
 
@@ -45,6 +47,12 @@ describe("OfficeDocumentAdapter", () => {
       engines: {
         docx: async () => ({
           pageCount: 2,
+          document: {
+            body: [
+              { type: "paragraph", bookmarks: ["_wd1A000001"] },
+              { type: "paragraph" },
+            ],
+          },
           pageSize: () => ({ widthPt: 612, heightPt: 792 }),
           renderPage: async (_target, _index, options) => {
             renderedWidth = options.width;
@@ -59,6 +67,8 @@ describe("OfficeDocumentAdapter", () => {
               fontSize: 12,
               font: '700 12px "Noto Sans"',
               letterSpacingPx: 0.5,
+              paragraphId: "2B000000",
+              source: { story: "body", storyInstance: "body", path: [1, 0] },
               hyperlink: { kind: "external", url: "https://example.com/a" },
             },
             {
@@ -70,6 +80,7 @@ describe("OfficeDocumentAdapter", () => {
               fontSize: 12,
               font: 'italic 12px "Noto Sans"',
               transform: "rotate(90deg)",
+              source: { story: "body", storyInstance: "body", path: [0, 0] },
               hyperlink: { kind: "external", url: "javascript:alert(1)" },
             },
             {
@@ -141,49 +152,90 @@ describe("OfficeDocumentAdapter", () => {
       ref: "chapter",
       pageIndex: 1,
     });
+    // The paragraph bridge: the engine's own id first, else the pre-pass
+    // bookmark of the paragraph the run's source names, else nothing.
+    assert.deepEqual(
+      runs.map((run) => run.paragraphId),
+      ["2B000000", "1A000001", undefined],
+    );
     await adapter.close(handle);
     assert.equal(destroyed, 1);
   });
 
-  it("fits oversized inline DOCX pictures to the page before the engine paginates", async () => {
-    const picture = {
-      type: "image",
-      widthPt: 1536,
-      heightPt: 864,
-      anchor: false,
-    };
-    let pagesReadAfterFit = false;
+  it("opens a DOCX whose model is unreachable and reports its runs without paragraph ids", async () => {
     const adapter = new OfficeDocumentAdapter({
       engines: {
         docx: async () => ({
-          mode: "main" as const,
-          document: {
-            section: {
-              pageWidth: 612,
-              pageHeight: 792,
-              marginLeft: 72,
-              marginRight: 72,
-              marginTop: 72,
-              marginBottom: 72,
-            },
-            body: [{ type: "paragraph", runs: [picture] }],
-          },
-          get pageCount() {
-            // The layout is built on first access, which must see the fitted size.
-            pagesReadAfterFit = picture.widthPt === 468;
-            return 1;
+          pageCount: 1,
+          get document(): never {
+            throw new Error("worker mode has no model");
           },
           pageSize: () => ({ widthPt: 612, heightPt: 792 }),
           renderPage: async () => {},
-          collectPageRuns: async () => [],
+          collectPageRuns: async () => [
+            {
+              text: "x",
+              x: 0,
+              y: 0,
+              w: 5,
+              h: 10,
+              fontSize: 10,
+              font: '10px "Noto Sans"',
+              source: { story: "body", storyInstance: "body", path: [0, 0] },
+            },
+          ],
           destroy: () => {},
         }),
       },
     });
     const handle = await adapter.open(Uint8Array.of(1), context("docx"));
+    const runs = await adapter.getTextMap(handle, 0);
+    assert.equal(runs.length, 1);
+    assert.equal("paragraphId" in runs[0]!, false);
+    await adapter.close(handle);
+  });
+
+  it("hands the DOCX engine the display pre-pass: fitted pictures and paragraph ids, not the saved bytes", async () => {
+    // A 21-inch inline picture on a 6.5-inch column; the engine lays the
+    // document out inside load(), so the fitting must already be in the XML
+    // it reads.
+    const source = buildDocx({
+      media: [
+        {
+          name: "word/media/image1.png",
+          data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]),
+        },
+      ],
+      body: `<w:p>${inlinePicture(19202400, 4800600)}</w:p>${sectPr()}`,
+    });
+    const original = source.slice();
+    const loaded: ArrayBuffer[] = [];
+    const adapter = new OfficeDocumentAdapter({
+      engines: {
+        docx: async (data) => {
+          loaded.push(data);
+          return {
+            pageCount: 1,
+            pageSize: () => ({ widthPt: 612, heightPt: 792 }),
+            renderPage: async () => {},
+            collectPageRuns: async () => [],
+            destroy: () => {},
+          };
+        },
+      },
+    });
+    const handle = await adapter.open(source, context("docx"));
     assert.equal((await adapter.getInfo(handle)).pageCount, 1);
-    assert.equal(picture.widthPt, 468);
-    assert.equal(pagesReadAfterFit, true);
+    assert.equal(loaded.length, 1);
+    const display = await OoxmlPackage.open(new Uint8Array(loaded[0]!), {
+      limits: defaultResourceLimits,
+    });
+    const xml = new TextDecoder().decode(
+      await display.part("/word/document.xml"),
+    );
+    assert.ok(xml.includes('<wp:extent cx="5943600" cy="1485900"/>'), xml);
+    assert.match(xml, /<w:bookmarkStart w:id="\d+" w:name="_wd[0-9A-F]{8}"\/>/);
+    assert.deepEqual(source, original);
   });
 
   it("normalizes presentations and resolves internal slide links", async () => {
@@ -222,6 +274,46 @@ describe("OfficeDocumentAdapter", () => {
         ? runs[0].hyperlink.pageIndex
         : undefined,
       2,
+    );
+  });
+
+  it("reopens edited presentations with progressive layout and advertises editing for them", async () => {
+    const seen: unknown[] = [];
+    const adapter = new OfficeDocumentAdapter({
+      engines: {
+        pptx: async (_data, options) => {
+          seen.push(options);
+          return {
+            slideCount: 1,
+            slideWidth: 9_144_000,
+            slideHeight: 6_858_000,
+            renderSlide: async () => {},
+            collectSlideRuns: async () => [],
+            destroy: () => {},
+          };
+        },
+      },
+    });
+    assert.deepEqual(adapter.edit.formats, [
+      "pptx",
+      "pptm",
+      "ppsx",
+      "docx",
+      "docm",
+    ]);
+    const first = await adapter.open(Uint8Array.of(1), context("pptx"));
+    const second = await adapter.reopen(
+      first,
+      Uint8Array.of(2),
+      context("pptx"),
+    );
+    assert.equal((await adapter.getInfo(second)).pageCount, 1);
+    assert.deepEqual(
+      seen.map(
+        (options) =>
+          (options as { progressiveLayout?: boolean }).progressiveLayout,
+      ),
+      [undefined, true],
     );
   });
 

@@ -20,6 +20,16 @@ extent, and logical UTF-16 offsets. The viewport delegates selection and find
 geometry to the pinned `@silurus/ooxml` overlay builders; zoom scales the entire
 natural coordinate layer rather than re-estimating individual glyph boxes.
 
+Before the engine reads a DOCX, the adapter prepares a display copy of the
+bytes: inline pictures wider than their section's content box are scaled to
+fit, and every paragraph of the body, headers, footers, footnotes and endnotes
+receives a hidden bookmark that carries its id, the file's `w14:paraId` where
+the file has one and otherwise a deterministic id derived from the paragraph's
+position. Every DOCX text run the adapter reports therefore carries
+`paragraphId`, the id of the `w:p` it was laid out from; the runs of a
+paragraph that continues on the next page share it. The copy exists only for
+rendering: `getOriginalBytes()` and edit sessions keep the input bytes.
+
 Modern OOXML parsing occurs in the backend's module worker. DOC/XLS/PPT conversion occurs in the package's `legacy-converter-worker.js`: input and generated OOXML use transferable buffers, never a Blob URL, server request, native executable, or temporary file. DOC uses the project-owned bounded `legacy-doc` parser instead of the heuristic upstream DOC projection. BIFF8 XLS keeps `office_oxide` as the value/cached-result converter, then a project-owned bounded extractor projects source XF/font/fill/border/alignment, number formats, row/column geometry, hidden bands, styled blanks, merges and sanitized hyperlink relationships into the generated XLSX. Generated OOXML is an internal derived artifact; only the original input remains available through `getOriginalBytes()` and all parser/converter state is released on `close()`/`destroy()`.
 
 The package distribution contains the converter worker and `assets/legacy/index.js`/`index_bg.wasm`. With a self-hosted asset directory, set `assetBaseUrl`; the expected paths are `workers/legacy-converter-worker.js` and `assets/legacy/index.js`. `legacy.workerUrl` and `legacy.moduleUrl` can be overridden when constructing `OfficeDocumentAdapter`.
@@ -53,7 +63,7 @@ panes are supplied to the renderer. Public document/sheet indices remain
 
 ## Fidelity and known limitations
 
-The goal is practical viewing fidelity, not editing compatibility. Modern documents use the feature set of pinned `@silurus/ooxml@0.72.2`; unsupported equations (the optional math bundle is not included), embedded OLE objects, uncommon effects, and malformed sheet parts can degrade. A partially parsed sheet and an XLS/PPT legacy normalization both produce explicit `fidelity-degraded` warnings.
+The goal is practical viewing fidelity, not editing compatibility. Modern documents use the feature set of pinned `@silurus/ooxml@0.88.0`; unsupported equations (the optional math bundle is not included), embedded OLE objects, uncommon effects, and malformed sheet parts can degrade. A partially parsed sheet and an XLS/PPT legacy normalization both produce explicit `fidelity-degraded` warnings.
 
 BIFF8 XLS retains saved numeric/boolean/error values and formula cached results;
 it never evaluates formulas. Fonts, palette colors, fills, four-side borders,

@@ -2,10 +2,16 @@
  * Word draws an inline picture at its declared extent even when that is wider
  * than the text area, so a generated document that embeds a 21-inch chart on
  * a 6.5-inch column shows a clipped picture. A viewer has no margin to spill
- * into, so before the page layout runs the oversized inline pictures are
- * scaled down to fit the section's content box, aspect ratio preserved.
- * Anchored (floating) pictures keep their geometry: their position is part of
- * the author's layout.
+ * into, so the oversized inline pictures are scaled down to fit the section's
+ * content box, aspect ratio preserved. Anchored (floating) pictures keep
+ * their geometry: their position is part of the author's layout.
+ *
+ * @deprecated The viewer no longer calls this helper: since `@silurus/ooxml`
+ * 0.88 lays a document out inside `load()`, adjusting the parsed model
+ * changes nothing on the page. The fitting now happens in the XML before the
+ * engine reads it (`prepareDocxForDisplay`). The helper stays exported for
+ * hosts that applied it to their own `main`-mode models and is removed in
+ * the next major version.
  */
 export interface DocxSectionGeometry {
   readonly pageWidth: number;
@@ -48,6 +54,9 @@ export interface DocxModelLike {
 /**
  * Shrink every inline picture that would not fit its section's content box.
  * Mutates the model in place and returns how many pictures were scaled.
+ *
+ * @deprecated See the module note: the viewer fits pictures in the XML
+ * pre-pass instead; this helper is removed in the next major version.
  */
 export function fitInlineImagesToPage(model: DocxModelLike): number {
   let scaled = 0;

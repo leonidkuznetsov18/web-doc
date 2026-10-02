@@ -60,6 +60,36 @@
       "family": "runtime",
       "expected": "resource-limit-and-termination",
       "test": "packages/viewer/test/worker.test.ts"
+    },
+    {
+      "id": "ooxml-package-zip64",
+      "family": "office",
+      "expected": "unsupported-package",
+      "test": "packages/viewer/test/ooxml-zip.test.ts"
+    },
+    {
+      "id": "ooxml-package-encrypted-entry",
+      "family": "office",
+      "expected": "unsupported-package",
+      "test": "packages/viewer/test/ooxml-zip.test.ts"
+    },
+    {
+      "id": "ooxml-package-lying-size",
+      "family": "office",
+      "expected": "resource-limit",
+      "test": "packages/viewer/test/ooxml-zip.test.ts"
+    },
+    {
+      "id": "ooxml-package-corrupt-deflate",
+      "family": "office",
+      "expected": "invalid-file",
+      "test": "packages/viewer/test/ooxml-zip.test.ts"
+    },
+    {
+      "id": "ooxml-package-malformed-part",
+      "family": "office",
+      "expected": "malformed-xml",
+      "test": "packages/viewer/test/ooxml-xml.test.ts"
     }
   ],
   "mutationTargets": {
