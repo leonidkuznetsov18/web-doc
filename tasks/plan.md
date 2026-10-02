@@ -102,6 +102,7 @@ but share `schemas.ts`, so they are planned sequentially to avoid conflicts.
 | 6. PDF overlay primitives  | T32–T37 | Checkpoint G: layout, suppressed render, selection and range mapping, range-scoped `replaceText`, geometry cache, browser test (Linear ACTION-825) |
 | 7. OOXML package layer     | T38–T43 | Checkpoint H: ZIP reader and writer, OPC model, XML scanner, patches and transactions, corpus and browser reopen (Linear ACTION-810)               |
 | 8. PPTX editing            | T44–T49 | Checkpoint I: inspection, text, shapes, images and tables, slides, browser round trip and latency on 10/100/500 slides (Linear ACTION-812)         |
+| 9. DOCX engine upgrade     | T50–T53 | Checkpoint J: spike, XML pre-pass (image fitting, paragraph ids), the approved bump to one engine copy, the run bridge (Linear ACTION-813)         |
 
 ## Revision 2 decisions (ACTION-821)
 
@@ -203,6 +204,18 @@ listed here for explicit approval with the plan:
 27. **Full reopen per `apply()` with a three-second ceiling**, measured on
     synthetic 10-, 100- and 500-slide decks that the renderer opens; the
     spike also tries `progressiveLayout` on reopen.
+
+## Phase 9 decisions (ACTION-813)
+
+28. **The bump waits for approval; the pre-pass does not.** The spike (T50)
+    and the XML pre-pass (T51) run behind the existing alias, so the only
+    change that needs Leonid's word — `@silurus/ooxml` 0.72.2 → 0.88.0 for
+    DOCX and XLSX — is isolated in T52 (05-docx-engine-upgrade, open
+    question).
+29. **Generated paragraph ids live in the display copy only.** Files without
+    `w14:paraId` get deterministic ids before the engine reads them;
+    `docx-edit` recomputes the same ids from the original bytes, so saved
+    files do not change for a read (05-docx-engine-upgrade decision 2).
 
 ## Verification commands
 

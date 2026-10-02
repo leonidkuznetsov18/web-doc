@@ -1526,3 +1526,108 @@ Linear proofs; ACTION-812 Done except its release criterion.
 ### Checkpoint I: PPTX editing done
 
 - [x] ACTION-812 Done with proofs (release criterion left to Leonid); ACTION-813 next
+
+## Phase 9 — DOCX engine upgrade (Linear ACTION-813)
+
+Spec: `docs/document-editing/todo/05-docx-engine-upgrade.md` (draft
+2026-10-02). Commits carry `[linear:ACTION-813]`.
+
+### Task 50: Spike
+
+**Description:** Render the DOCX fixtures through the vendored 0.88 engine
+next to the shipped 0.72.2, compare with SSIM, inspect the 0.88 run data
+(`paragraphId`, `source`), measure load; record the results in the spec and
+ask for the bump's approval.
+
+**Acceptance criteria:**
+
+- [x] `tests/e2e/docx-engine-spike.spec.ts` reports SSIM, run data and
+      timings for `sample.docx` and `oversized-inline-image.docx`.
+- [x] Spec 05 drafted with the results and the pre-pass design.
+
+**Verification:**
+
+- [x] `npm run test:e2e -- tests/e2e/docx-engine-spike.spec.ts`
+
+**Dependencies:** Task 49
+
+**Files likely touched:** `tests/e2e/docx-engine-spike.spec.ts` (new), spec 05, roadmap, plan
+
+**Estimated scope:** Small
+
+### Task 51: XML pre-pass
+
+**Description:** `src/adapters/docx-prepass.ts` on the package layer: scale
+oversized `wp:inline` pictures to their section's content box and give every
+`w:p` without one a deterministic `w14:paraId`, in the bytes the engine
+loads (never in what the editor saves); the model patch stays as a fallback
+until the bump; the pre-passed fixture joins the spike.
+
+**Acceptance criteria:**
+
+- [ ] `docx-inline-images.spec.ts` passes through the pre-pass on the shipped
+      engine; the spike shows the pre-passed fixture rendering alike on 0.88
+      with a `paragraphId` on every run.
+- [ ] Unit tests cover sections, tables, headers, `w:sdt`, existing ids kept,
+      the `w14` namespace declared, malformed parts passed through.
+
+**Verification:**
+
+- [ ] `node --test .test-dist/test/docx-prepass.test.js`;
+      `npm run test:e2e -- tests/e2e/docx-inline-images.spec.ts tests/e2e/docx-engine-spike.spec.ts`
+
+**Dependencies:** Task 50
+
+**Files likely touched:** `src/adapters/docx-prepass.ts` (new),
+`src/adapters/office.ts`, `test/fixtures/docx-builder.ts` (new),
+`test/docx-prepass.test.ts` (new), `tests/e2e/docx-engine-spike.spec.ts`
+
+**Estimated scope:** Medium
+
+### Task 52: The bump (after approval)
+
+**Description:** `@silurus/ooxml` → 0.88.0 for DOCX and XLSX; the alias
+removed; the model patch retired; scripts, docs and notices follow; fidelity
+snapshots re-checked; regression harness; size report with one engine copy;
+license gate.
+
+**Acceptance criteria:**
+
+- [ ] One `@silurus/ooxml` copy at 0.88.0; the matrix, the fidelity gate and
+      `npm run check` green; the size report shows the engine once.
+
+**Verification:**
+
+- [ ] `npm run test:e2e:matrix`, `npm run check`, `npm run report:size`
+
+**Dependencies:** Task 51 and Leonid's approval
+
+**Files likely touched:** `packages/viewer/package.json`, `package-lock.json`,
+`src/adapters/office.ts`, `scripts/example.mjs`, `scripts/size-report.mjs`,
+docs, notices
+
+**Estimated scope:** Medium
+
+### Task 53: Run bridge and docs
+
+**Description:** `TextRun.paragraphId` on the adapter's DOCX runs; docs;
+roadmap; Linear proofs.
+
+**Acceptance criteria:**
+
+- [ ] Every DOCX run the adapter reports carries a `paragraphId` naming a
+      `w:p` of the source XML.
+
+**Verification:**
+
+- [ ] `npm test`, `npm run test:e2e -- tests/e2e/doc.spec.ts`
+
+**Dependencies:** Task 52
+
+**Files likely touched:** `src/adapters/office.ts`, `src/contracts.ts`, docs
+
+**Estimated scope:** Small
+
+### Checkpoint J: one engine copy
+
+- [ ] ACTION-813 Done except its release criterion
