@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.7.0...v0.8.0) (2026-10-02)
+
+### Features
+
+* **viewer:** name, restore and drop edit checkpoints ([89f091d](https://github.com/leonidkuznetsov18/web-doc/commit/89f091df59193710d7600dacbfe79ac3e7dce590))
+* **viewer:** outline and describe edit sessions for prompts ([5993843](https://github.com/leonidkuznetsov18/web-doc/commit/59938434a9899050c76259d91bd608890940202a))
+* **viewer:** resolve edit targets from quoted text, citations and kinds ([3724be2](https://github.com/leonidkuznetsov18/web-doc/commit/3724be2f506362dc67de801dc75b9e7ee2ac8d29))
+* **viewer:** tool definitions and a tool executor for models ([43d6745](https://github.com/leonidkuznetsov18/web-doc/commit/43d6745bc92adb5e8599bf1ecdc46b3b2f37e632))
+* **viewer:** write docx batches as tracked changes and list revisions ([d3ad054](https://github.com/leonidkuznetsov18/web-doc/commit/d3ad0541419f0e6a37226172b5a4e49a5d0d5e73))
+
+### Bug fixes
+
+* **viewer:** harden the tracked writer and the restore bookkeeping ([039c578](https://github.com/leonidkuznetsov18/web-doc/commit/039c5786d280c65f9fa055022c6d3281dc375c3a))
+* **viewer:** keep classes defined in consumer bundles without splitting ([0c0f3af](https://github.com/leonidkuznetsov18/web-doc/commit/0c0f3af49c7a87fd1d5c67d4957a2e7a7902a5e6))
+* **viewer:** keep classes defined in consumer bundles without splitting ([5532ddc](https://github.com/leonidkuznetsov18/web-doc/commit/5532ddc2d040fc4795161ee8675af5724d2116a7))
+
 ## [0.7.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.6.2...v0.7.0) (2026-10-02)
 
 ### Features
