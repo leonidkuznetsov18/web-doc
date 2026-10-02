@@ -1,7 +1,7 @@
 # Module 07. `ai-edit` — AI tooling over the edit sessions
 
 **Status:** Draft 2026-10-02, awaiting approval. Starts after the approval;
-Linear ticket under ACTION-723 (web-doc). Everything here is additive to the
+Linear ACTION-858 under ACTION-723 (web-doc). Everything here is additive to the
 `EditSession` contract of module 01 and to the three format sessions:
 nothing a host or the Operators shell uses today changes shape.
 
