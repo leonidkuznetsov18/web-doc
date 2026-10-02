@@ -11,6 +11,12 @@ import {
   insertTableHandler,
   setTableCellHandler,
 } from "./image-table-ops.js";
+import {
+  deleteSlideHandler,
+  duplicateSlideHandler,
+  insertSlideHandler,
+  moveSlideHandler,
+} from "./slide-ops.js";
 import { replaceTextHandler, setTextStyleHandler } from "./text-ops.js";
 
 /** Handlers by operation name; `IMPLEMENTED_OPERATIONS` in schemas.ts lists the same names. */
@@ -28,4 +34,8 @@ export const pptxHandlers: ReadonlyMap<string, PptxOperationHandler> = new Map<
   ["insertImage", insertImageHandler as PptxOperationHandler],
   ["insertTable", insertTableHandler as PptxOperationHandler],
   ["setTableCell", setTableCellHandler as PptxOperationHandler],
+  ["insertSlide", insertSlideHandler as PptxOperationHandler],
+  ["duplicateSlide", duplicateSlideHandler as PptxOperationHandler],
+  ["deleteSlide", deleteSlideHandler as PptxOperationHandler],
+  ["moveSlide", moveSlideHandler as PptxOperationHandler],
 ]);

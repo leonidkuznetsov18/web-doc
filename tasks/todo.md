@@ -1481,14 +1481,14 @@ refused), `moveSlide`.
 
 **Acceptance criteria:**
 
-- [ ] Every slide operation changes `pageCount` and `changedPages` as the
+- [x] Every slide operation changes `pageCount` and `changedPages` as the
       spec says, renders in the viewer and survives save and reload.
-- [ ] A duplicated slide with a chart renders both charts; no dangling
+- [x] A duplicated slide with a chart renders both charts; no dangling
       relationship warning is raised.
 
 **Verification:**
 
-- [ ] `node --test .test-dist/test/pptx-edit-slides.test.js`; the e2e spec
+- [x] `node --test .test-dist/test/pptx-edit-slides.test.js`; the e2e spec
 
 **Dependencies:** Task 47
 

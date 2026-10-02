@@ -560,6 +560,97 @@ test("inserts a picture and a table that the renderer draws, and edits a cell", 
   ).toEqual(["picture", "shape", "shape", "table"].sort());
 });
 
+test("inserts, duplicates, moves and deletes slides that the renderer paints in the new order", async ({
+  page,
+}) => {
+  const original = new Uint8Array(
+    await readFile(new URL("sample.pptx", CORPUS)),
+  );
+  await loadDeck(page, original, "sample.pptx");
+  const result = await page.evaluate(
+    async ({ renderer }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const layouts = (await session.getLayouts()).items as {
+        id: string;
+        name: string;
+      }[];
+      const titleOnly = layouts.find((layout) => layout.name === "Title Only")!;
+      const inserted = await session.apply([
+        { op: "insertSlide", index: 1, layout: titleOnly.id },
+        { op: "replaceText", target: "$0", text: "Inserted slide title" },
+      ]);
+      const afterInsert = viewer.state.pageCount;
+      const duplicated = await session.duplicateSlide({ pageIndex: 0 });
+      const moved = await session.moveSlide({ from: 3, to: 0 });
+      const removed = await session.deleteSlide({ pageIndex: 1 });
+      const slides = (await session.getSlides()).items as {
+        key: string;
+        layout: string;
+      }[];
+      const texts: string[] = [];
+      for (let index = 0; index < viewer.state.pageCount; index += 1)
+        texts.push(await viewer.getPageText(index));
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(1, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const { data } = canvas
+        .getContext("2d")!
+        .getImageData(0, 0, canvas.width, canvas.height);
+      let dark = 0;
+      for (let offset = 0; offset < data.length; offset += 4)
+        if (data[offset]! + data[offset + 1]! + data[offset + 2]! < 384)
+          dark += 1;
+      const saved = await session.save();
+      const { PptxPresentation } = (await import(renderer)) as any;
+      const presentation = await PptxPresentation.load(
+        (saved.bytes as Uint8Array).slice().buffer,
+        { useGoogleFonts: false, mode: "main" },
+      );
+      const slideCount = presentation.slideCount;
+      presentation.destroy();
+      return {
+        titleOnly: titleOnly.id,
+        inserted: {
+          createdIds: inserted.createdIds,
+          changedPages: inserted.changedPages,
+        },
+        afterInsert,
+        duplicated: duplicated.createdIds,
+        moved: moved.changedPages,
+        removed: removed.removedIds,
+        pageCount: viewer.state.pageCount,
+        slides,
+        texts,
+        dark,
+        slideCount,
+        dirty: session.state.dirty,
+      };
+    },
+    { renderer: RENDERER },
+  );
+  expect(result.inserted.createdIds).toEqual(["sld3:2"]);
+  expect(result.inserted.changedPages).toEqual([1, 2]);
+  expect(result.afterInsert).toBe(3);
+  expect(result.duplicated).toEqual(["sld4:2", "sld4:3"]);
+  expect(result.moved).toEqual([0, 1, 2, 3]);
+  expect(result.removed).toEqual(["sld1:2", "sld1:3"]);
+  expect(result.pageCount).toBe(3);
+  expect(result.slideCount).toBe(3);
+  // [sld1, sld2] → insert → [sld1, sld3, sld2] → duplicate → [sld1, sld4, sld3, sld2]
+  // → move 3 to 0 → [sld2, sld1, sld4, sld3] → delete 1 → [sld2, sld4, sld3].
+  expect(result.slides.map((slide) => slide.key)).toEqual([
+    "sld2",
+    "sld4",
+    "sld3",
+  ]);
+  expect(result.slides[2]!.layout).toBe(result.titleOnly);
+  expect(result.texts[0]).toContain("This is the second slide");
+  expect(result.texts[1]).toContain("Title of the first slide");
+  expect(result.texts[2]).toContain("Inserted slide title");
+  expect(result.dark).toBeGreaterThan(50);
+  expect(result.dirty).toBe(true);
+});
+
 test("spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout", async ({
   page,
 }) => {

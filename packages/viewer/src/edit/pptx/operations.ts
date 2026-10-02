@@ -18,6 +18,8 @@ export interface PptxOperationContext {
   readonly limits: ResourceLimits;
   /** Bytes behind `asset:` references. */
   readonly assets: AssetSource;
+  /** Slides after the operations before this one in the batch; the model's count when applying. */
+  readonly pageCount: number;
   /** The batch's state id, for ids an operation derives. */
   readonly stateId: number;
   readonly operationIndex: number;

@@ -552,10 +552,7 @@ export function paragraphsXml(
 export const insertTextBoxHandler: PptxOperationHandler<PptxInsertTextBoxOperation> =
   {
     async validate(operation, context, issue) {
-      if (
-        operation.pageIndex < 0 ||
-        operation.pageIndex >= context.model.pageCount
-      )
+      if (operation.pageIndex < 0 || operation.pageIndex >= context.pageCount)
         issue(
           "/pageIndex",
           "unknown-target",

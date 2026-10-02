@@ -37,7 +37,7 @@ function checkSlide(
   context: PptxOperationContext,
   issue: Issue,
 ): boolean {
-  if (pageIndex < 0 || pageIndex >= context.model.pageCount) {
+  if (pageIndex < 0 || pageIndex >= context.pageCount) {
     issue("/pageIndex", "unknown-target", `No slide ${pageIndex}`);
     return false;
   }

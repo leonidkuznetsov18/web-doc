@@ -259,6 +259,10 @@ export const IMPLEMENTED_OPERATIONS: readonly string[] = [
   "insertImage",
   "insertTable",
   "setTableCell",
+  "insertSlide",
+  "duplicateSlide",
+  "deleteSlide",
+  "moveSlide",
 ];
 
 export const pptxOperationSchemas: OperationSchemaSet = Object.freeze({

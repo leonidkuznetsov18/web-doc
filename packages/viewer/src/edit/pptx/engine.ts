@@ -136,8 +136,22 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
     signal: AbortSignal,
   ): Promise<readonly OperationIssue[]> {
     const issues: OperationIssue[] = [];
-    const context = await this.#context(0, signal);
+    const base = await this.#context(0, signal);
+    // Slide operations change the count the later operations see.
+    let pageCount = base.pageCount;
     for (const [index, operation] of operations.entries()) {
+      const context = { ...base, pageCount, operationIndex: index };
+      switch (operation.op) {
+        case "insertSlide":
+        case "duplicateSlide":
+          pageCount += 1;
+          break;
+        case "deleteSlide":
+          pageCount = Math.max(1, pageCount - 1);
+          break;
+        default:
+          break;
+      }
       const handler = pptxHandlers.get(operation.op);
       if (!handler) {
         issues.push({
@@ -165,7 +179,7 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
       const collect = issueCollector(index, issues);
       await handler.validate(
         operation as PptxOperation,
-        { ...context, operationIndex: index },
+        context,
         reference === undefined
           ? collect
           : (path, code, message) => {
@@ -250,6 +264,7 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
       model,
       limits: this.#limits,
       assets: this.#assets,
+      pageCount: model.pageCount,
       stateId,
       operationIndex,
       elements: (pageIndex) => this.#slideElements(pageIndex, signal),
