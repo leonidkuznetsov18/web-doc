@@ -8,7 +8,15 @@ export * from "./edit/pptx/types.js";
 export * from "./edit/docx/types.js";
 export * from "./client.js";
 export * from "./detect.js";
-export * from "./errors.js";
+// Named like the worker client below: the error class is reached from the
+// lazily loaded engines too and must not come out undefined in a consumer
+// bundle without code splitting.
+export {
+  abortError,
+  errorFromData,
+  normalizeError,
+  ViewerError,
+} from "./errors.js";
 export * from "./format.js";
 export * from "./limits.js";
 export * from "./interaction.js";
@@ -25,7 +33,12 @@ export * from "./ui.js";
 export * from "./ui-styles.js";
 export * from "./registry.js";
 export * from "./viewer.js";
-export * from "./worker-client.js";
+// Named on purpose: a bundler that inlines the lazily loaded edit engines
+// (esbuild without code splitting) initialises this module lazily, and a
+// star re-export would then hand a consumer an undefined class
+// (`scripts/consumer-bundle.test.mjs` guards every class and constant).
+export { WorkerRpcClient } from "./worker-client.js";
+export type { WorkerLike, WorkerRequestOptions } from "./worker-client.js";
 export * from "./worker-adapter.js";
 export * from "./worker-endpoint.js";
 export * from "./worker-protocol.js";
