@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-02T00:11:25.724Z",
+  "generatedAt": "2026-10-02T07:17:20.118Z",
   "thresholds": {
     "targetBrotliBytes": 20971520,
     "releaseBlockBrotliBytes": 26214400,
@@ -9,9 +9,9 @@
   "status": "pass",
   "totals": {
     "base": {
-      "raw": 17194696,
-      "gzip": 7467180,
-      "brotli": 5962114
+      "raw": 19195354,
+      "gzip": 8235005,
+      "brotli": 6509182
     },
     "optionalFonts": {
       "raw": 11184768,
@@ -19,9 +19,9 @@
       "brotli": 11052193
     },
     "deliveredWithAllFonts": {
-      "raw": 28379464,
-      "gzip": 18541404,
-      "brotli": 17014307
+      "raw": 30380122,
+      "gzip": 19309229,
+      "brotli": 17561375
     }
   },
   "assets": [
@@ -56,9 +56,16 @@
     {
       "name": "code/adapters/docx-images.js",
       "group": "code",
-      "raw": 2508,
-      "gzip": 828,
-      "brotli": 703
+      "raw": 2654,
+      "gzip": 907,
+      "brotli": 762
+    },
+    {
+      "name": "code/adapters/docx-prepass.js",
+      "group": "code",
+      "raw": 12384,
+      "gzip": 3743,
+      "brotli": 3186
     },
     {
       "name": "code/adapters/image.js",
@@ -70,9 +77,9 @@
     {
       "name": "code/adapters/office.js",
       "group": "code",
-      "raw": 27939,
-      "gzip": 6512,
-      "brotli": 5701
+      "raw": 28312,
+      "gzip": 6618,
+      "brotli": 5775
     },
     {
       "name": "code/adapters/pdf.js",
@@ -168,9 +175,9 @@
     {
       "name": "code/edit/ooxml/package.js",
       "group": "code",
-      "raw": 8986,
-      "gzip": 2492,
-      "brotli": 2143
+      "raw": 9493,
+      "gzip": 2683,
+      "brotli": 2302
     },
     {
       "name": "code/edit/ooxml/patch.js",
@@ -378,30 +385,30 @@
     {
       "name": "code/edit/pptx/elements.js",
       "group": "code",
-      "raw": 11846,
-      "gzip": 3051,
-      "brotli": 2696
+      "raw": 11855,
+      "gzip": 3053,
+      "brotli": 2686
     },
     {
       "name": "code/edit/pptx/engine.js",
       "group": "code",
-      "raw": 15188,
-      "gzip": 3736,
-      "brotli": 3298
+      "raw": 19164,
+      "gzip": 4854,
+      "brotli": 4263
     },
     {
       "name": "code/edit/pptx/geometry.js",
       "group": "code",
-      "raw": 7169,
-      "gzip": 2277,
-      "brotli": 2025
+      "raw": 7393,
+      "gzip": 2359,
+      "brotli": 2066
     },
     {
       "name": "code/edit/pptx/handler.js",
       "group": "code",
-      "raw": 3391,
-      "gzip": 1019,
-      "brotli": 856
+      "raw": 3590,
+      "gzip": 1095,
+      "brotli": 917
     },
     {
       "name": "code/edit/pptx/handlers.js",
@@ -413,23 +420,23 @@
     {
       "name": "code/edit/pptx/image-table-ops.js",
       "group": "code",
-      "raw": 10965,
-      "gzip": 3160,
-      "brotli": 2752
+      "raw": 11304,
+      "gzip": 3215,
+      "brotli": 2814
     },
     {
       "name": "code/edit/pptx/model.js",
       "group": "code",
-      "raw": 6887,
-      "gzip": 2031,
-      "brotli": 1737
+      "raw": 7333,
+      "gzip": 2152,
+      "brotli": 1858
     },
     {
       "name": "code/edit/pptx/operations.js",
       "group": "code",
-      "raw": 149,
-      "gzip": 122,
-      "brotli": 87
+      "raw": 404,
+      "gzip": 224,
+      "brotli": 159
     },
     {
       "name": "code/edit/pptx/provider.js",
@@ -441,9 +448,9 @@
     {
       "name": "code/edit/pptx/schemas.js",
       "group": "code",
-      "raw": 7431,
-      "gzip": 1683,
-      "brotli": 1434
+      "raw": 7818,
+      "gzip": 1791,
+      "brotli": 1517
     },
     {
       "name": "code/edit/pptx/session.js",
@@ -455,16 +462,16 @@
     {
       "name": "code/edit/pptx/shape-ops.js",
       "group": "code",
-      "raw": 18192,
-      "gzip": 4867,
-      "brotli": 4302
+      "raw": 20141,
+      "gzip": 5391,
+      "brotli": 4760
     },
     {
       "name": "code/edit/pptx/slide-ops.js",
       "group": "code",
-      "raw": 12905,
-      "gzip": 3526,
-      "brotli": 3069
+      "raw": 17249,
+      "gzip": 4522,
+      "brotli": 3948
     },
     {
       "name": "code/edit/pptx/style.js",
@@ -476,16 +483,16 @@
     {
       "name": "code/edit/pptx/text-ops.js",
       "group": "code",
-      "raw": 10868,
-      "gzip": 2827,
-      "brotli": 2500
+      "raw": 11599,
+      "gzip": 3016,
+      "brotli": 2665
     },
     {
       "name": "code/edit/pptx/text-write.js",
       "group": "code",
-      "raw": 10498,
-      "gzip": 3402,
-      "brotli": 3027
+      "raw": 10790,
+      "gzip": 3489,
+      "brotli": 3100
     },
     {
       "name": "code/edit/pptx/text.js",
@@ -805,9 +812,9 @@
     {
       "name": "code/workers/ooxml-edit-worker.js",
       "group": "code",
-      "raw": 174630,
-      "gzip": 41114,
-      "brotli": 35091
+      "raw": 184864,
+      "gzip": 43647,
+      "brotli": 37008
     },
     {
       "name": "code/workers/pdf-edit-worker.js",
@@ -2233,16 +2240,16 @@
     {
       "name": "wasm/ooxml-docx",
       "group": "wasm",
-      "raw": 892883,
-      "gzip": 392757,
-      "brotli": 297932
+      "raw": 1947090,
+      "gzip": 806459,
+      "brotli": 589532
     },
     {
       "name": "wasm/ooxml-xlsx",
       "group": "wasm",
-      "raw": 815854,
-      "gzip": 363092,
-      "brotli": 277267
+      "raw": 1725510,
+      "gzip": 707103,
+      "brotli": 524370
     },
     {
       "name": "wasm/ooxml-pptx",

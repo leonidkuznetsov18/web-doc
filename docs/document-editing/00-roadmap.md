@@ -108,7 +108,7 @@ User stories for the MVP:
 | 02  | `pdf-edit`            | PDF methods on PDFium: text boxes (font, size, colour, alignment), replace and restyle existing text, images, shapes, simple tables, move/resize/delete objects, page operations; incremental save                                        | `edit-core`                            | [`todo/02-pdf-edit.md`](./todo/02-pdf-edit.md)                       | Done                                                                |
 | 03  | `ooxml-package`       | Shared OOXML layer: unzip once, copy untouched ZIP entries as they are, offset-preserving XML scanner, patches with self-verification, relationships and content types                                                                    | `edit-core`                            | [`todo/03-ooxml-package.md`](./todo/03-ooxml-package.md)             | Done 2026-10-02 (ACTION-810)                                        |
 | 04  | `pptx-edit`           | PPTX methods: shape text, run formatting, paragraph alignment, text and fill colours, move/resize/delete shapes, insert text box, image and table, add/duplicate/delete/move slides                                                       | `ooxml-package`                        | [`todo/04-pptx-edit.md`](./todo/04-pptx-edit.md)                     | Done 2026-10-02 (ACTION-812)                                        |
-| 05  | `docx-engine-upgrade` | Move DOCX rendering from `@silurus/ooxml` 0.72.2 to the 0.88 line (one engine copy), with image fitting done as an XML pre-pass; brings `w14:paraId` into text runs for mapping selections and geometry to paragraphs                     | `ooxml-package`                        | [`todo/05-docx-engine-upgrade.md`](./todo/05-docx-engine-upgrade.md) | Draft 2026-10-02, spike done; the bump awaits approval (ACTION-813) |
+| 05  | `docx-engine-upgrade` | Move DOCX rendering from `@silurus/ooxml` 0.72.2 to the 0.88 line (one engine copy), with image fitting done as an XML pre-pass; brings `w14:paraId` into text runs for mapping selections and geometry to paragraphs                     | `ooxml-package`                        | [`todo/05-docx-engine-upgrade.md`](./todo/05-docx-engine-upgrade.md) | Bump done 2026-10-02 (T52); run bridge T53 next (ACTION-813)        |
 | 06  | `docx-edit`           | DOCX methods: paragraph text, run formatting, alignment and spacing, text colour and highlight, insert/delete/move paragraphs, tables, images                                                                                             | `docx-engine-upgrade`                  | [`todo/06-docx-edit.md`](./todo/06-docx-edit.md)                     | Draft 2026-10-02, after module 05 (ACTION-814)                      |
 | 07  | `ai-edit`             | AI tooling over the same operations: document outline, target resolution from text or citations, tool schemas, suggestion mode (tracked changes where the format has them), checkpoints                                                   | `edit-core`, plus formats as they land | Written before the module starts                                     | Not started                                                         |
 
@@ -142,8 +142,9 @@ targets that their own specs will make exact.
 - Build: `tsc` plus esbuild 0.28.1 through `scripts/build-viewer.mjs`; workers
   are bundled into `dist/workers/`, WASM and other assets are copied into
   `dist/assets/`.
-- Renderers (unchanged): `pdfjs-dist` 6.2.108 for PDF; `@silurus/ooxml` 0.72.2
-  for DOCX and 0.88.0 (npm alias `@silurus/ooxml-pptx`) for PPTX.
+- Renderers: `pdfjs-dist` 6.2.108 for PDF; `@silurus/ooxml` 0.88.0 for DOCX,
+  XLSX and PPTX, one copy since 2026-10-02 (before that DOCX and XLSX were on
+  0.72.2 and PPTX on the npm alias `@silurus/ooxml-pptx` at 0.88.0).
 - New runtime dependency, approved on 2026-10-01: `@embedpdf/pdfium` 2.15.1,
   pinned exactly (MIT wrapper; PDFium itself is BSD-3-Clause). WASM is
   4,646,932 bytes raw, about 1.65 MB Brotli.
@@ -289,8 +290,9 @@ browser round-trip test, and every error code has a test that triggers it.
 - Changing CI, release, license-gate or size-gate configuration.
 - Adding bundled font or other large assets beyond the approved PDF fallback
   font (a TrueType build of the bundled Noto Sans Latin/Cyrillic face).
-- Changing the pinned `@silurus/ooxml` versions (the `docx-engine-upgrade`
-  module will ask with its own spec).
+- Changing the pinned `@silurus/ooxml` version (the `docx-engine-upgrade`
+  module asked with its own spec; the move to 0.88.0 was approved on
+  2026-10-02).
 - Committing the research report or notes to this public repository.
 
 **Never**
@@ -369,6 +371,7 @@ Stated so that hosts plan around them rather than discover them:
 | 2026-10-02 | `pptx-edit` done (T44–T49, ACTION-812): 14 operations, XML inspection matching the renderer within a pixel, latency 23–226 ms per `apply()` up to 500 slides; the fixture set for the PowerPoint/Keynote check and the release are Leonid's.                                                                        |
 | 2026-10-02 | `pptx-edit` spec drafted (ACTION-812): own XML inspection, one OOXML edit worker, ids `<slideKey>:<cNvPrId>`, `\n`/`\v` text model, minimal run patches, theme colours kept, full reopen per `apply()` (04-pptx-edit decisions 1–13).                                                                               |
 | 2026-10-02 | PDF overlay primitives done (T32–T37, ACTION-825): layout, caret, range rectangles, suppressed render, selection and range mapping, ranged `replaceText`, geometry cache.                                                                                                                                           |
+| 2026-10-02 | `docx-engine-upgrade` bump approved by Leonid and done (T52, ACTION-813): one `@silurus/ooxml` 0.88.0 for DOCX, XLSX and PPTX; alias and model patch retired; `sample.docx` pixel-identical to 0.72.2; DOCX and XLSX WASM grow by 0.54 MB Brotli, size gate still `pass`; matrix 176/176.                        |
 
 ## Open questions
 

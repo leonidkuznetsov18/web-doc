@@ -47,7 +47,7 @@ function changedEntries(a: Uint8Array, b: Uint8Array): string[] {
   return changed.sort();
 }
 const EDIT_ASSETS = ["/workers/ooxml-edit-worker.js"];
-const RENDERER = "/vendor/ooxml-pptx/pptx.mjs";
+const RENDERER = "/vendor/ooxml/pptx.mjs";
 
 async function loadDeck(
   page: Page,

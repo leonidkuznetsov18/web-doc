@@ -9,11 +9,10 @@ const viewerRequire = createRequire(
   new URL("../packages/viewer/package.json", import.meta.url),
 );
 const officeDist = dirname(viewerRequire.resolve("@silurus/ooxml/docx"));
-const pptxDist = dirname(viewerRequire.resolve("@silurus/ooxml-pptx/pptx"));
 const wasmArtifacts = [
   ["ooxml-docx", resolve(officeDist, "docx_parser_bg.wasm")],
   ["ooxml-xlsx", resolve(officeDist, "xlsx_parser_bg.wasm")],
-  ["ooxml-pptx", resolve(pptxDist, "pptx_parser_bg.wasm")],
+  ["ooxml-pptx", resolve(officeDist, "pptx_parser_bg.wasm")],
   ["legacy-office", "packages/viewer/dist/assets/legacy/index_bg.wasm"],
   ["tiff-image", "packages/viewer/dist/assets/image/index_bg.wasm"],
   // Fetched by the PDF edit worker on the first edit() of a PDF.

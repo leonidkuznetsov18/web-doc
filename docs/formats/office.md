@@ -53,7 +53,7 @@ panes are supplied to the renderer. Public document/sheet indices remain
 
 ## Fidelity and known limitations
 
-The goal is practical viewing fidelity, not editing compatibility. Modern documents use the feature set of pinned `@silurus/ooxml@0.72.2`; unsupported equations (the optional math bundle is not included), embedded OLE objects, uncommon effects, and malformed sheet parts can degrade. A partially parsed sheet and an XLS/PPT legacy normalization both produce explicit `fidelity-degraded` warnings.
+The goal is practical viewing fidelity, not editing compatibility. Modern documents use the feature set of pinned `@silurus/ooxml@0.88.0`; unsupported equations (the optional math bundle is not included), embedded OLE objects, uncommon effects, and malformed sheet parts can degrade. A partially parsed sheet and an XLS/PPT legacy normalization both produce explicit `fidelity-degraded` warnings.
 
 BIFF8 XLS retains saved numeric/boolean/error values and formula cached results;
 it never evaluates formulas. Fonts, palette colors, fills, four-side borders,

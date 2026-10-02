@@ -2,7 +2,7 @@
 
 The release artifact contains or depends on the following principal components. The generated SPDX SBOM in `artifacts/sbom.spdx.json` is the complete machine-readable inventory for the pinned lockfiles.
 
-- [`@silurus/ooxml`](https://github.com/yukiyokotani/office-open-xml-viewer) — MIT; modern Office parsing/rendering.
+- [`@silurus/ooxml`](https://github.com/yukiyokotani/office-open-xml-viewer) — MIT; modern Office parsing/rendering (0.88.0 for DOCX, XLSX and PPTX). The package ships its own `THIRD_PARTY_NOTICES.md` for what the engine bundles; its optional region-map renderer carries a public-domain Natural Earth dataset and its optional math bundle MathJax, neither of which Zrimo imports.
 - [`office_oxide`](https://github.com/yfedoseev/office_oxide) — MIT OR Apache-2.0; compound-file handling, Office IR/writer utilities and legacy XLS/PPT conversion.
 - [`Fuse.js`](https://github.com/krisk/Fuse) — Apache-2.0; fuzzy matching behind the opt-in `search()` fallback.
 - [`pdfjs-dist` / Mozilla PDF.js](https://github.com/mozilla/pdf.js) — Apache-2.0; browser PDF parsing,

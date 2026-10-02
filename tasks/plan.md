@@ -211,8 +211,8 @@ listed here for explicit approval with the plan:
 28. **The bump waits for approval; the pre-pass does not.** The spike (T50)
     and the XML pre-pass (T51) run behind the existing alias, so the only
     change that needs Leonid's word — `@silurus/ooxml` 0.72.2 → 0.88.0 for
-    DOCX and XLSX — is isolated in T52 (05-docx-engine-upgrade, open
-    question).
+    DOCX and XLSX — is isolated in T52 (05-docx-engine-upgrade). Approved
+    and done on 2026-10-02: one engine copy, alias and model patch retired.
 29. **Generated paragraph ids live in the display copy only.** Files without
     `w14:paraId` get deterministic ids before the engine reads them;
     `docx-edit` recomputes the same ids from the original bytes, so saved

@@ -1593,14 +1593,14 @@ license gate.
 
 **Acceptance criteria:**
 
-- [ ] One `@silurus/ooxml` copy at 0.88.0; the matrix, the fidelity gate and
+- [x] One `@silurus/ooxml` copy at 0.88.0; the matrix, the fidelity gate and
       `npm run check` green; the size report shows the engine once.
 
 **Verification:**
 
-- [ ] `npm run test:e2e:matrix`, `npm run check`, `npm run report:size`
+- [x] `npm run test:e2e:matrix`, `npm run check`, `npm run report:size`
 
-**Dependencies:** Task 51 and Leonid's approval
+**Dependencies:** Task 51 and Leonid's approval (given 2026-10-02)
 
 **Files likely touched:** `packages/viewer/package.json`, `package-lock.json`,
 `src/adapters/office.ts`, `scripts/example.mjs`, `scripts/size-report.mjs`,

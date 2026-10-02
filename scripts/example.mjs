@@ -10,7 +10,6 @@ const viewerRequire = createRequire(
   new URL("../packages/viewer/package.json", import.meta.url),
 );
 const officeDist = dirname(viewerRequire.resolve("@silurus/ooxml/docx"));
-const pptxDist = dirname(viewerRequire.resolve("@silurus/ooxml-pptx/pptx"));
 
 await mkdir(outdir, { recursive: true });
 await copyFile(resolve(root, "index.html"), resolve(outdir, "index.html"));
@@ -18,19 +17,16 @@ await copyFile(
   resolve(root, "../../packages/viewer/dist/styles.css"),
   resolve(outdir, "viewer.css"),
 );
+// The engine on its own as well, so browser tests can ask it for geometry.
 await cp(officeDist, resolve(outdir, "vendor/ooxml"), {
   recursive: true,
 });
-// The PPTX renderer on its own, so browser tests can ask it for geometry.
-await cp(pptxDist, resolve(outdir, "vendor/ooxml-pptx"), {
-  recursive: true,
-});
-for (const [directory, wasm] of [
-  [officeDist, "docx_parser_bg.wasm"],
-  [officeDist, "xlsx_parser_bg.wasm"],
-  [pptxDist, "pptx_parser_bg.wasm"],
+for (const wasm of [
+  "docx_parser_bg.wasm",
+  "xlsx_parser_bg.wasm",
+  "pptx_parser_bg.wasm",
 ])
-  await copyFile(resolve(directory, wasm), resolve(outdir, wasm));
+  await copyFile(resolve(officeDist, wasm), resolve(outdir, wasm));
 try {
   await cp(
     resolve(root, "../../packages/viewer/dist/workers"),

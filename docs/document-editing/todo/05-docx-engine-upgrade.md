@@ -1,10 +1,11 @@
 # Module 05. `docx-engine-upgrade` — one `@silurus/ooxml` engine, on the 0.88 line
 
-**Status:** Draft 2026-10-02 with spike results (Linear ACTION-813).
-**Waiting for approval:** the ticket and the roadmap make the change of the
-pinned `@silurus/ooxml` version an "ask first" item; this spec records what
-the spike found so the decision can be taken on data. Nothing in
-`package.json` changes before Leonid approves.
+**Status:** Bump done 2026-10-02 (T52); the run bridge (T53) follows
+(Linear ACTION-813).
+**Approval:** the ticket and the roadmap make the change of the pinned
+`@silurus/ooxml` version an "ask first" item; the spike results below were
+the case for it, and Leonid approved the bump on 2026-10-02. One
+`@silurus/ooxml` 0.88.0 serves every format since T52.
 
 ## Goal
 
@@ -41,7 +42,8 @@ id where it does not.
 
 ## Spike results (T50, 2026-10-02)
 
-`tests/e2e/docx-engine-spike.spec.ts` renders each fixture twice in
+`tests/e2e/docx-engine-spike.spec.ts` (since T52 the regression
+`docx-engine.spec.ts`) renders each fixture twice in
 headless Chromium with deterministic fonts: through the viewer (0.72.2) and
 through the 0.88 DOCX engine that the example build already vendors as the
 PPTX engine (`/vendor/ooxml-pptx/docx.mjs`), then compares the two
@@ -136,7 +138,8 @@ Readings:
 
 Proposed tasks for `tasks/plan.md` Phase 9, each a commit with tests:
 
-- **T50 Spike.** `tests/e2e/docx-engine-spike.spec.ts` (done above); this
+- **T50 Spike.** `tests/e2e/docx-engine-spike.spec.ts` (done above; renamed
+  to `docx-engine.spec.ts` as the regression in T52); this
   spec with the results; the approval request.
 - **T51 Pre-pass.** `docx-prepass.ts` on the package layer: image fitting
   and paragraph ids, unit tests, the inline-image spec against the pre-pass
@@ -198,9 +201,31 @@ Proposed in the draft; the bump itself awaits approval.
   rewritten as one element patch; the spike now renders the pre-passed fixture
   identically on 0.88 (SSIM 1.000 for both fixtures) and resolves all 228
   runs of `sample.docx` to their paragraph through the bookmark bridge.
+- **T52 (2026-10-02, after approval)**: `@silurus/ooxml` is 0.88.0 for
+  DOCX, XLSX and PPTX; the `@silurus/ooxml-pptx` alias is gone from
+  `package.json`, the lockfile, the adapter, `scripts/example.mjs` (one
+  `vendor/ooxml` copy) and `scripts/size-report.mjs`; the adapter no longer
+  touches the engine's model (`fitInlineImagesToPage` stays exported but
+  deprecated for hosts that applied it to their own models, removal in the
+  next major). Before the bump a pixel comparison of the two engines on
+  `sample.docx` (deterministic fonts, the smoke and the fidelity set-ups)
+  found 0 differing pixels in 816 × 1056, so the stored Linux snapshots
+  hold. The spike spec became the regression `tests/e2e/docx-engine.spec.ts`:
+  viewer against bare engine on the pre-passed bytes SSIM 1.000 for both
+  fixtures, the pre-pass moves the oversized picture (original against
+  pre-passed SSIM 0.365) and changes nothing on `sample.docx` (1.000), 228 of
+  228 runs resolve through the bookmark bridge, layout complete. Gates:
+  matrix 176/176 (Chromium, Chromium DPR 2, Firefox, WebKit), unit 360/360,
+  `npm run licenses` pass (9 npm runtime packages). Size: the DOCX WASM goes
+  from 892,883 to 1,947,090 bytes raw (297,932 → 589,532 Brotli) and the XLSX
+  WASM from 815,854 to 1,725,510 (277,267 → 524,370 Brotli); the PPTX WASM
+  was already 0.88; the base total grows by 547,068 bytes Brotli to 6.21 MiB,
+  well under the 20 MiB target, and the example vendors one engine directory
+  instead of two. The ticket's "the bundle does not grow" is therefore met
+  only for the number of engine copies, not for the bytes a DOCX or XLSX
+  viewer fetches; recorded here for the release note.
 
 ## Open questions
 
-- **Approval of the bump** (`@silurus/ooxml` 0.72.2 → 0.88.0, DOCX and
-  XLSX): the data above is the case for it. T51 proceeds behind the alias
-  meanwhile; T52 waits.
+- None for the bump. The release and the monorepo verification on DOCX
+  previews stay Leonid's.

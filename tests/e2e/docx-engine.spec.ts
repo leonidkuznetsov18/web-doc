@@ -7,19 +7,25 @@ import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
 import { installDeterministicOfficeFonts } from "./deterministic-fonts.js";
 
 /*
- * Spike for the DOCX engine upgrade (module 05): the 0.88 line of
- * @silurus/ooxml, vendored by the example build as the PPTX engine, renders
- * the DOCX fixtures next to the 0.72.2 engine the viewer ships. The spec
- * reports the structural similarity of the two renderings, what the 0.88
- * text runs carry (w14:paraId, story source), the load and layout cost,
- * and whether the inline-image fitting still has a model to adjust. It
- * records numbers; it fails only when 0.88 cannot open a fixture at all.
+ * Regression for the DOCX engine upgrade (module 05). The viewer renders
+ * DOCX through the 0.88 line of @silurus/ooxml after an XML pre-pass on the
+ * bytes. For each fixture the spec paints the page three ways: through the
+ * viewer, through the bare engine on the pre-passed bytes and through the
+ * bare engine on the original bytes. The viewer and the engine must agree on
+ * the pre-passed bytes to the fidelity gate's SSIM threshold; the pre-pass
+ * must change what the engine draws for an oversized inline picture and
+ * nothing for a corpus document; and every text run the engine reports must
+ * resolve to the `_wd<id>` bookmark of its paragraph, the bridge the adapter
+ * uses for paragraph ids. Load and render times are logged for the record.
+ * This spec began as the upgrade's spike (T50) and kept its measurements.
  */
 
 const CORPUS = new URL("../../.cache/corpus/", import.meta.url);
 const FIXTURES = new URL("../fixtures/docx/", import.meta.url);
-const NEW_ENGINE = "/vendor/ooxml-pptx/docx.mjs";
+const ENGINE = "/vendor/ooxml/docx.mjs";
 const WIDTH = 816;
+/** The fidelity gate's threshold for the modern Office family. */
+const SSIM_THRESHOLD = 0.94;
 
 interface Rendering {
   readonly pageCount: number;
@@ -71,7 +77,7 @@ async function renderWithViewer(
   );
 }
 
-async function renderWithNewEngine(
+async function renderWithEngine(
   page: Page,
   bytes: Uint8Array,
 ): Promise<
@@ -81,7 +87,6 @@ async function renderWithNewEngine(
     readonly resolvedIds: number;
     readonly withSource: number;
     readonly firstRun: unknown;
-    readonly hasDocumentModel: boolean;
     readonly layoutComplete: boolean;
   }
 > {
@@ -103,7 +108,7 @@ async function renderWithNewEngine(
         width,
         dpr: 1,
       })) as Record<string, unknown>[];
-      // The bridge the adapter will use: a run's story path names a model
+      // The bridge the adapter uses: a run's story path names a model
       // paragraph; the pre-pass bookmark on it, or on the nearest earlier
       // paragraph of the same container (a page break splits a paragraph),
       // carries the id.
@@ -143,13 +148,6 @@ async function renderWithNewEngine(
       const resolved = runs.filter(
         (run) => resolveId(run) !== undefined,
       ).length;
-      let hasDocumentModel = false;
-      try {
-        hasDocumentModel =
-          typeof document.document === "object" && document.document !== null;
-      } catch {
-        hasDocumentModel = false;
-      }
       const result = {
         pageCount: document.pageCount as number,
         loadMs,
@@ -178,13 +176,12 @@ async function renderWithNewEngine(
               ),
             )
           : undefined,
-        hasDocumentModel,
         layoutComplete: document.layoutComplete !== false,
       };
       document.destroy();
       return result;
     },
-    { data: Array.from(bytes), engine: NEW_ENGINE, width: WIDTH },
+    { data: Array.from(bytes), engine: ENGINE, width: WIDTH },
   );
 }
 
@@ -244,28 +241,34 @@ async function ssim(page: Page, a: string, b: string): Promise<number> {
   );
 }
 
-for (const [name, url] of [
-  ["sample.docx", new URL("sample.docx", CORPUS)],
-  [
-    "oversized-inline-image.docx",
-    new URL("oversized-inline-image.docx", FIXTURES),
-  ],
+const sameSize = (a: Rendering, b: Rendering): boolean =>
+  a.width === b.width && a.height === b.height;
+
+for (const { name, url, scaledImages } of [
+  { name: "sample.docx", url: new URL("sample.docx", CORPUS), scaledImages: 0 },
+  {
+    name: "oversized-inline-image.docx",
+    url: new URL("oversized-inline-image.docx", FIXTURES),
+    scaledImages: 1,
+  },
 ] as const)
-  test(`spike: ${name} through the 0.88 DOCX engine next to the shipped 0.72.2`, async ({
+  test(`DOCX engine: ${name} through the viewer, the pre-pass and the bare engine`, async ({
     page,
   }, testInfo) => {
     test.setTimeout(120_000);
     const bytes = new Uint8Array(await readFile(url));
     await page.goto("/");
     await installDeterministicOfficeFonts(page);
-    const current = await renderWithViewer(page, bytes, name);
-    // The 0.88 engine reads what the viewer's display pre-pass produces.
+    const viewer = await renderWithViewer(page, bytes, name);
     const display = await prepareDocxForDisplay(bytes, defaultResourceLimits);
-    const next = await renderWithNewEngine(page, display.bytes);
-    const similarity =
-      current.width === next.width && current.height === next.height
-        ? await ssim(page, current.pixels, next.pixels)
-        : 0;
+    const prepassed = await renderWithEngine(page, display.bytes);
+    const original = await renderWithEngine(page, bytes);
+    const viewerToEngine = sameSize(viewer, prepassed)
+      ? await ssim(page, viewer.pixels, prepassed.pixels)
+      : 0;
+    const prepassEffect = sameSize(original, prepassed)
+      ? await ssim(page, original.pixels, prepassed.pixels)
+      : 0;
     const report = {
       name,
       prepass: {
@@ -273,37 +276,45 @@ for (const [name, url] of [
         markedParagraphs: display.markedParagraphs,
         generatedIds: display.generatedIds,
       },
-      pages: { current: current.pageCount, next: next.pageCount },
+      pages: { viewer: viewer.pageCount, engine: prepassed.pageCount },
       size: {
-        current: [current.width, current.height],
-        next: [next.width, next.height],
+        viewer: [viewer.width, viewer.height],
+        engine: [prepassed.width, prepassed.height],
       },
       loadMs: {
-        current: Math.round(current.loadMs),
-        next: Math.round(next.loadMs),
+        viewer: Math.round(viewer.loadMs),
+        engine: Math.round(prepassed.loadMs),
       },
       renderMs: {
-        current: Math.round(current.renderMs),
-        next: Math.round(next.renderMs),
+        viewer: Math.round(viewer.renderMs),
+        engine: Math.round(prepassed.renderMs),
       },
-      ssim: Number(similarity.toFixed(4)),
-      runs: next.runs,
-      withParagraphId: next.withParagraphId,
-      resolvedIds: next.resolvedIds,
-      withSource: next.withSource,
-      firstRun: next.firstRun,
-      hasDocumentModel: next.hasDocumentModel,
-      layoutComplete: next.layoutComplete,
+      ssim: {
+        viewerToEngine: Number(viewerToEngine.toFixed(4)),
+        originalToPrepassed: Number(prepassEffect.toFixed(4)),
+      },
+      runs: prepassed.runs,
+      withParagraphId: prepassed.withParagraphId,
+      resolvedIds: prepassed.resolvedIds,
+      withSource: prepassed.withSource,
+      firstRun: prepassed.firstRun,
+      layoutComplete: prepassed.layoutComplete,
     };
-    console.log(`docx engine spike ${JSON.stringify(report)}`);
-    await testInfo.attach(`${name}-0.72.png`, {
-      body: Buffer.from(current.pixels.split(",")[1]!, "base64"),
+    console.log(`docx engine ${JSON.stringify(report)}`);
+    await testInfo.attach(`${name}-viewer.png`, {
+      body: Buffer.from(viewer.pixels.split(",")[1]!, "base64"),
       contentType: "image/png",
     });
-    await testInfo.attach(`${name}-0.88.png`, {
-      body: Buffer.from(next.pixels.split(",")[1]!, "base64"),
+    await testInfo.attach(`${name}-engine.png`, {
+      body: Buffer.from(prepassed.pixels.split(",")[1]!, "base64"),
       contentType: "image/png",
     });
-    expect(next.pageCount).toBeGreaterThan(0);
-    expect(next.resolvedIds).toBe(next.runs);
+    expect(viewer.pageCount).toBe(prepassed.pageCount);
+    expect(prepassed.pageCount).toBeGreaterThan(0);
+    expect(display.scaledImages).toBe(scaledImages);
+    expect(viewerToEngine).toBeGreaterThanOrEqual(SSIM_THRESHOLD);
+    if (scaledImages > 0) expect(prepassEffect).toBeLessThan(SSIM_THRESHOLD);
+    else expect(prepassEffect).toBeGreaterThanOrEqual(SSIM_THRESHOLD);
+    expect(prepassed.resolvedIds).toBe(prepassed.runs);
+    expect(prepassed.layoutComplete).toBe(true);
   });

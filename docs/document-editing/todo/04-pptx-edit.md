@@ -81,8 +81,9 @@ uses, so the canvas always shows the file `save()` returns.
 
 - Module 01 `edit-core` (revision 2) and module 03 `ooxml-package`, both
   done.
-- `@silurus/ooxml-pptx` (`@silurus/ooxml` 0.88.0) as the renderer, unchanged.
-  No new runtime dependency.
+- `@silurus/ooxml` 0.88.0 as the renderer, unchanged (reached through the
+  `@silurus/ooxml-pptx` alias until module 05 made it the one engine copy on
+  2026-10-02). No new runtime dependency.
 
 ## In scope
 
