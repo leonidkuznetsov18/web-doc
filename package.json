@@ -28,7 +28,7 @@
     "report:size": "node scripts/size-report.mjs",
     "report:sbom": "node scripts/generate-sbom.mjs",
     "test:pack": "npm run build && node scripts/pack-test.mjs",
-    "test:regressions": "node --test scripts/release-content-policy.test.mjs scripts/regression-harness.test.mjs && node scripts/regression-harness.mjs",
+    "test:regressions": "node --test scripts/release-content-policy.test.mjs scripts/regression-harness.test.mjs scripts/consumer-bundle.test.mjs && node scripts/regression-harness.mjs",
     "release:gate": "node scripts/release-gate.mjs",
     "corpus:fetch": "node scripts/fetch-corpus.mjs",
     "fixtures:pptx": "node scripts/pptx-fixtures.mjs",
