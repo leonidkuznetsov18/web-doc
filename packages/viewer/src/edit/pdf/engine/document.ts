@@ -919,23 +919,50 @@ export class PdfEditDocument {
     }
     record.objects = objects.map((object, index) =>
       object.mark && stale.has(object.id)
-        ? { id: `${record.key}:o${index}`, type: object.type }
+        ? {
+            id: `${record.key}:o${index}`,
+            type: object.type,
+            staleMarkId: object.id,
+          }
         : object,
     );
     return record.objects;
   }
 
-  /** `id`, or `id~n` with the smallest `n` no object of the page has yet. */
+  /**
+   * `id`, or its first free `~n` when an object saved by an earlier session
+   * has it already. Only ids a session numbered (`<key>:n…`) can collide, so
+   * only those are gathered; the objects are read without the page's text.
+   */
   #unusedId(pageIndex: number, id: string): string {
     const record = this.#pages[pageIndex]!;
-    const objects =
-      record.objects ??
-      this.#withPage(pageIndex, (page) => this.#objectsOf(pageIndex, page));
-    const taken = new Set(objects.map((object) => object.id));
+    const objects = record.objects ?? this.#loadObjects(pageIndex);
+    const numbered = `${record.key}:n`;
+    const taken = new Set<string>();
+    for (const object of objects) {
+      if (object.id.startsWith(numbered)) taken.add(object.id);
+      if (object.staleMarkId?.startsWith(numbered))
+        taken.add(object.staleMarkId);
+    }
     if (!taken.has(id)) return id;
     let suffix = 1;
     while (taken.has(`${id}~${suffix}`)) suffix += 1;
     return `${id}~${suffix}`;
+  }
+
+  /** A page's objects, loading the page alone when they are not known yet. */
+  #loadObjects(pageIndex: number): ObjectRecord[] {
+    const { lib } = this.#pdfium;
+    const page = lib.FPDF_LoadPage(this.#document.handle, pageIndex);
+    if (!page)
+      throw new ViewerError("render-failed", "PDFium could not load the page", {
+        details: { pageIndex },
+      });
+    try {
+      return this.#objectsOf(pageIndex, page);
+    } finally {
+      lib.FPDF_ClosePage(page);
+    }
   }
 
   /** Marks from other sessions keep their id only if it cannot collide with ours. */

@@ -465,7 +465,9 @@ interface PdfTextStyle {
 | `other`   | Shadings, form XObjects and anything else                               | `moveElement`, `resizeElement`, `deleteElement`                                |
 
 Ids look like `p0:o3` for objects of the original file and `p0:n2.0.0` for
-elements an operation created. They are stable for the whole session —
+elements an operation created. A file saved by an earlier session already
+carries such ids, so a new element whose id one of them has takes the first
+free `~n` after it, as in `p0:n2.0.0~1`. They are stable for the whole session —
 across undo, redo and page moves — and the same history always yields the
 same ids. Text boxes and tables are parametric: their objects carry a
 `WebDoc` marked-content tag holding the inputs they were drawn from, so they
