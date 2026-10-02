@@ -1657,3 +1657,6 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
 
 - [x] ACTION-814 Done except its release criterion (2026-10-02; the ticket
       stays In Progress for the Word/Pages check and the release)
+- [x] Review pass: code review + coverage audit
+      (`test/docx-edit-audit.test.ts`, 44 tests), every finding fixed in
+      `fix(viewer): harden docx editing after review` (2026-10-02)
