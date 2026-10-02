@@ -17,7 +17,11 @@ Browser work should also run:
 ```bash
 npm run test:e2e
 npm run test:e2e:matrix
+npm run test:e2e:performance
 ```
+
+The performance suite keeps the DOCX edit latency budget on every matrix
+browser and runs with one worker, after the parallel functional suites.
 
 Public qualification fixtures are downloaded into ignored `.cache/corpus/` with pinned hashes. User-provided regression files belong outside the repository or in ignored `.tmp/`; do not add them to tests, docs, screenshots or release artifacts.
 

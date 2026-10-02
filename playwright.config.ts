@@ -7,6 +7,7 @@ const chromiumPath =
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  grepInvert: /@performance/,
   use: {
     baseURL: "http://127.0.0.1:4173",
     launchOptions: chromiumPath ? { executablePath: chromiumPath } : {},

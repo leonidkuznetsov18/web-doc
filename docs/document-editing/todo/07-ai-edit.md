@@ -2,7 +2,7 @@
 
 **Status:** Done 2026-10-02 (T59–T64; approved the same day with the
 recommended answers to the open questions, decisions 8–10), Linear
-ACTION-858 under ACTION-723 (web-doc); release pending. Everything here is additive to the
+ACTION-858 under ACTION-723 (web-doc); released in web-doc 0.8.0. Everything here is additive to the
 `EditSession` contract of module 01 and to the three format sessions:
 nothing a host or the Operators shell uses today changes shape.
 
@@ -457,7 +457,8 @@ None: the three questions of the draft were decided on 2026-10-02
 
 ## Actual result
 
-Done 2026-10-02 on `feat/ai-edit` (T59–T64, ACTION-858); every method of
+Done 2026-10-02 on `feat/ai-edit` (T59–T64, ACTION-858), merged as PR #16
+and released in web-doc 0.8.0; every method of
 the spec works on PDF, PPTX and DOCX sessions, in the worker-backed sessions
 of the viewer and through the tool path only. Deviations from the draft:
 
