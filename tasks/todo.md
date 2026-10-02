@@ -1649,7 +1649,7 @@ Starts after Checkpoint J. Commits carry `[linear:ACTION-814]`.
 - [x] Task 56: Structure and pictures — `insertParagraph`, `deleteElement`,
       `moveElement`, `insertImage`. (2026-10-02; table ids follow their first
       paragraph and are reported through `remappedIds`)
-- [ ] Task 57: Tables — `insertTable`, `setTableCell`.
+- [x] Task 57: Tables — `insertTable`, `setTableCell`. (2026-10-02)
 - [ ] Task 58: Round trip, latency on 10/100/500 pages, `npm run
     fixtures:docx`, docs, `npm run check`, Linear proofs.
 

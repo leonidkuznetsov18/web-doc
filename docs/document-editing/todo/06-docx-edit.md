@@ -540,3 +540,31 @@ Proposed in the draft; open for review.
   `edit-docx.spec.ts` (insert with style, move before, picture after,
   `getPageText` order, delete, reload, reset to identical bytes). Unit
   399/399.
+- **T57 (2026-10-02)**: `insertTable` and `setTableCell` in
+  `src/edit/docx/table-ops.ts`. A new table is one `insertBefore`/
+  `insertAfter` patch next to a body-level paragraph or table (a cell
+  paragraph is refused: nested tables are not listed): `w:tblPr` with
+  `w:tblStyle` `TableGrid` when the styles part defines a table style of
+  that id, else single `w:tblBorders`, `w:tblW` auto and `w:tblLook`;
+  `w:tblGrid` and `w:tcW` from the relative weights over the content
+  width of the section the reference belongs to (the next paragraph
+  carrying a `w:sectPr`, else the body's, else US Letter with one-inch
+  margins; the remainder of the integer split goes to the last column);
+  one paragraph per cell with a fresh id and the cell's text as one run
+  (newlines become `w:br`); a trailing empty paragraph when the next
+  block would be a table or the body's `w:sectPr`. `createdIds` names the
+  table, the cell paragraphs, then the trailing paragraph. `setTableCell`
+  reuses the paragraph replacement of T55 (`replacedParagraph`, now
+  exported from `text-ops.ts`) on the cell's first paragraph as a whole
+  replacement with newlines as line breaks, removes the cell's other
+  paragraphs (their ids and inline objects in `removedIds`, nested
+  paragraphs out of the id list) and keeps `w:tcPr`; a row or column
+  outside the table is a `range` issue at `/row` or `/column`. Tests:
+  `docx-edit-table.test.ts` (3: grid widths from a narrow section with
+  weights 1:3 → 1750/5250, TableGrid or borders, trailing paragraphs,
+  element listing, cell replacement keeping `w:tcPr`/`w:pPr`/first-run
+  style and dropping a picture paragraph, range and target issues,
+  session undo/redo) and the browser round trip in `edit-docx.spec.ts`
+  (insert with weights, `getPageText` shows the cells, `setTableCell`,
+  table placed from its cells, hit test, reload, undo to identical
+  bytes).

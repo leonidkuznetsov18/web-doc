@@ -480,3 +480,97 @@ test("inserts, moves and deletes paragraphs and pictures that the renderer draws
   expect(result.reloaded).not.toContain("Beta paragraph");
   expect(result.identical).toBe(true);
 });
+
+test("inserts a table the renderer draws and edits a cell that the page text shows", async ({
+  page,
+}) => {
+  const bytes = buildDocx({
+    body:
+      paragraph("Before the table") + paragraph("After the table") + sectPr(),
+  });
+  await loadDocument(page, bytes, "table.docx");
+  const result = await page.evaluate(
+    async ({ data }) => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const [before] = (await session.getElements({ pageIndex: 0 }))
+        .items as Element[];
+      const inserted = await session.insertTable({
+        after: before!.id,
+        rows: [
+          ["Name", "Value"],
+          ["alpha", "one"],
+        ],
+        columnWidths: [1, 2],
+      });
+      const table = inserted.createdIds[0]!;
+      const afterInsert = await viewer.getPageText(0);
+      const edited = await session.setTableCell({
+        target: table,
+        row: 1,
+        column: 1,
+        text: "uno",
+      });
+      const afterEdit = await viewer.getPageText(0);
+      const placed = (await session.getElements({ pageIndex: 0 }))
+        .items as (Element & {
+        table?: { rows: string[][] };
+      })[];
+      const tableElement = placed.find((element) => element.id === table)!;
+      const hit = (
+        await session.elementsAt(0, {
+          x: tableElement.bounds.x + 2,
+          y: tableElement.bounds.y + 2,
+        })
+      ).items as Element[];
+      const saved = await session.save();
+      const client = (await import("/main.js")) as any;
+      const fresh = client.ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href),
+        fontPolicy: { mode: "offline" },
+      }).createViewer();
+      await fresh.load(saved.bytes, { fileName: "tabled.docx" });
+      const reloaded = await fresh.getPageText(0);
+      await fresh.destroy();
+      await session.undo();
+      await session.undo();
+      const restored = await session.save();
+      const identical =
+        restored.bytes.length === data.length &&
+        restored.bytes.every(
+          (byte: number, index: number) => byte === data[index],
+        );
+      return {
+        created: inserted.createdIds.length,
+        insertPages: inserted.changedPages,
+        editPages: edited.changedPages,
+        afterInsert,
+        afterEdit,
+        tableRows: tableElement.table,
+        tableBounds: tableElement.bounds,
+        hit: hit.map((element) => element.kind),
+        reloaded,
+        identical,
+      };
+    },
+    { data: Array.from(bytes) },
+  );
+  expect(result.created).toBe(5);
+  expect(result.insertPages).toEqual([0]);
+  expect(result.editPages).toEqual([0]);
+  expect(result.afterInsert).toContain("Name");
+  expect(result.afterInsert).toContain("alpha");
+  expect(result.afterInsert).toContain("one");
+  expect(result.afterEdit).toContain("uno");
+  expect(result.afterEdit).not.toContain("one");
+  expect(result.tableRows).toEqual({
+    rows: [
+      ["Name", "Value"],
+      ["alpha", "uno"],
+    ],
+  });
+  expect(result.tableBounds.width).toBeGreaterThan(0);
+  expect(result.hit).toEqual(["paragraph", "table"]);
+  expect(result.reloaded).toContain("uno");
+  expect(result.identical).toBe(true);
+});

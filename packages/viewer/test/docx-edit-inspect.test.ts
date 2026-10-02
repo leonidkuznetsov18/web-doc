@@ -103,7 +103,7 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
         assert.deepEqual(element.bounds, { x: 0, y: 0, width: 0, height: 0 });
         assert.deepEqual(element.fragments, []);
         assert.deepEqual(element.story, { kind: "body" });
-        // Only the shipped handlers are offered; tables' own operations wait.
+        // Every operation of the module has shipped.
         assert.deepEqual(
           element.operations,
           {
@@ -112,12 +112,15 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
               "setTextStyle",
               "setParagraphStyle",
               "insertParagraph",
+              "insertTable",
               "insertImage",
               "moveElement",
               "deleteElement",
             ],
             table: [
+              "setTableCell",
               "insertParagraph",
+              "insertTable",
               "insertImage",
               "moveElement",
               "deleteElement",
@@ -362,7 +365,7 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
       assert.deepEqual(await engine.materialize(signal), bytes);
       const issues = await engine.validate(
         [
-          { op: "insertTable", rows: [["a"]] } as EditOperation,
+          { op: "nope" } as EditOperation,
           { op: "replaceText", target: "p:1", text: "y" } as EditOperation,
         ],
         signal,

@@ -443,7 +443,6 @@ export const replaceTextHandler: DocxOperationHandler<DocxReplaceTextOperation> 
     },
     async apply(operation, context) {
       const target = (await textTarget(operation.target, context, () => {}))!;
-      const { part, record } = target;
       const { start, end } = checkRange(
         target,
         operation.target,
@@ -451,67 +450,83 @@ export const replaceTextHandler: DocxOperationHandler<DocxReplaceTextOperation> 
         () => {},
         true,
       )!;
-      const segments = normalizeText(operation.text).split("\n");
-      const split = splitAt(
-        part,
-        record.node,
-        record.text.items,
+      const { items, createdIds, removedIds } = replacedParagraph(
+        context,
+        target.record,
         start,
         end,
-        (rPr) => runXml(rPr, runContentXml(segments[0]!)),
-        paragraphMarkRPr(part, record),
+        normalizeText(operation.text),
       );
-      const pPr = sliceOf(part, record.pPr);
-      const single = segments.length === 1;
-      const first = paragraphXml(
-        record.node,
-        record.id,
-        pPr,
-        split.before + (single ? split.after : ""),
-      );
-      const items: XmlPatch[] = [
-        patches.replaceElement(part, record.node, first),
-      ];
-      const createdIds: string[] = [];
-      const copiedPPr = paragraphPropertiesWithoutSection(part, record.pPr);
-      segments.slice(1).forEach((segment, index) => {
-        const id = context.freshParagraphId();
-        createdIds.push(`p:${id}`);
-        const last = index === segments.length - 2;
-        items.push(
-          patches.insertAfter(
-            part,
-            record.node,
-            paragraphXml(
-              record.node,
-              id,
-              copiedPPr,
-              runXml(split.rPr, runContentXml(segment)) +
-                (last ? split.after : ""),
-            ),
-          ),
-        );
-      });
-      const removedIds = droppedInlines(record, record.text.items, start, end);
-      // Inline objects that moved to a new paragraph change their id.
-      if (!single)
-        for (const inline of record.inlines) {
-          const item = record.text.items.find(
-            (candidate) => candidate.child === inline.node,
-          );
-          if (
-            item &&
-            item.start >= end &&
-            !removedIds.includes(inline.elementId)
-          )
-            removedIds.push(inline.elementId);
-        }
       return commitParagraph(context, target, items, {
         createdIds,
         ...(removedIds.length > 0 ? { removedIds } : {}),
       });
     },
   };
+
+/**
+ * The patches that replace `[start, end)` of a paragraph's text with
+ * `text`, newlines splitting it into new paragraphs after it: the first
+ * paragraph rebuilt in place, the others inserted with fresh ids.
+ */
+export function replacedParagraph(
+  context: DocxOperationContext,
+  record: ParagraphRecord,
+  start: number,
+  end: number,
+  text: string,
+): { items: XmlPatch[]; createdIds: string[]; removedIds: string[] } {
+  const part = context.model.document;
+  const segments = text.split("\n");
+  const split = splitAt(
+    part,
+    record.node,
+    record.text.items,
+    start,
+    end,
+    (rPr) => runXml(rPr, runContentXml(segments[0]!)),
+    paragraphMarkRPr(part, record),
+  );
+  const pPr = sliceOf(part, record.pPr);
+  const single = segments.length === 1;
+  const first = paragraphXml(
+    record.node,
+    record.id,
+    pPr,
+    split.before + (single ? split.after : ""),
+  );
+  const items: XmlPatch[] = [patches.replaceElement(part, record.node, first)];
+  const createdIds: string[] = [];
+  const copiedPPr = paragraphPropertiesWithoutSection(part, record.pPr);
+  segments.slice(1).forEach((segment, index) => {
+    const id = context.freshParagraphId();
+    createdIds.push(`p:${id}`);
+    const last = index === segments.length - 2;
+    items.push(
+      patches.insertAfter(
+        part,
+        record.node,
+        paragraphXml(
+          record.node,
+          id,
+          copiedPPr,
+          runXml(split.rPr, runContentXml(segment)) + (last ? split.after : ""),
+        ),
+      ),
+    );
+  });
+  const removedIds = droppedInlines(record, record.text.items, start, end);
+  // Inline objects that moved to a new paragraph change their id.
+  if (!single)
+    for (const inline of record.inlines) {
+      const item = record.text.items.find(
+        (candidate) => candidate.child === inline.node,
+      );
+      if (item && item.start >= end && !removedIds.includes(inline.elementId))
+        removedIds.push(inline.elementId);
+    }
+  return { items, createdIds, removedIds };
+}
 
 /** The paragraph mark's `w:rPr`, the style of text in an empty paragraph. */
 function paragraphMarkRPr(part: XmlPart, record: ParagraphRecord): string {

@@ -5,6 +5,7 @@ import {
   insertParagraphHandler,
   moveElementHandler,
 } from "./structure-ops.js";
+import { insertTableHandler, setTableCellHandler } from "./table-ops.js";
 import {
   replaceTextHandler,
   setParagraphStyleHandler,
@@ -23,4 +24,6 @@ export const docxHandlers: ReadonlyMap<string, DocxOperationHandler> = new Map<
   ["deleteElement", deleteElementHandler as DocxOperationHandler],
   ["moveElement", moveElementHandler as DocxOperationHandler],
   ["insertImage", insertImageHandler as DocxOperationHandler],
+  ["insertTable", insertTableHandler as DocxOperationHandler],
+  ["setTableCell", setTableCellHandler as DocxOperationHandler],
 ]);

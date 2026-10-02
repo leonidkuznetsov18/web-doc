@@ -228,6 +228,8 @@ export const IMPLEMENTED_OPERATIONS: readonly string[] = [
   "deleteElement",
   "moveElement",
   "insertImage",
+  "insertTable",
+  "setTableCell",
 ];
 
 export const docxOperationSchemas: OperationSchemaSet = Object.freeze({

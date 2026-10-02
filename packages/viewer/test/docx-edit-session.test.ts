@@ -248,6 +248,8 @@ describe("DOCX edit session: geometry join (docx-edit T54)", () => {
         "deleteElement",
         "moveElement",
         "insertImage",
+        "insertTable",
+        "setTableCell",
       ]);
       await assert.rejects(
         session.applyJson([
