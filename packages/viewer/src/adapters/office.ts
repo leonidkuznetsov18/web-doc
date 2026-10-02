@@ -39,6 +39,8 @@ interface EngineLoadOptions {
   readonly useGoogleFonts: false;
   readonly maxZipEntryBytes: number;
   readonly mode: "main";
+  /** Presentations: lay slides out in the background after the first ones. */
+  readonly progressiveLayout?: boolean;
 }
 
 interface EngineHyperlink {
@@ -288,6 +290,28 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
     input: Uint8Array,
     context: AdapterOpenContext,
   ): Promise<OfficeHandle> {
+    return this.#open(input, context, false);
+  }
+
+  /**
+   * Edited bytes open as a fresh document (the engine owns no reusable
+   * state); a presentation lays its slides out progressively so the slide
+   * on screen paints without waiting for the whole deck — Firefox takes
+   * seconds for a 500-slide preflight. The viewer closes `previous`.
+   */
+  reopen(
+    _previous: OfficeHandle,
+    data: Uint8Array,
+    context: AdapterOpenContext,
+  ): Promise<OfficeHandle> {
+    return this.#open(data, context, true);
+  }
+
+  async #open(
+    input: Uint8Array,
+    context: AdapterOpenContext,
+    reopening: boolean,
+  ): Promise<OfficeHandle> {
     throwIfAborted(context.signal);
     let format = context.format;
     let data = input;
@@ -325,6 +349,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       useGoogleFonts: false,
       maxZipEntryBytes: context.limits.maxZipEntryBytes,
       mode: "main",
+      ...(reopening ? { progressiveLayout: true } : {}),
     };
     const buffer = exactArrayBuffer(data);
 

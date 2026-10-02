@@ -1,9 +1,9 @@
 # Module 04. `pptx-edit` — PPTX editing on the package layer
 
-**Status:** Draft 2026-10-02, written under Leonid's instruction of 2026-10-02
-to execute the Linear plan without stopping (ACTION-812). Implementation
-starts from this draft; every decision below is recorded so the review can
-overturn it.
+**Status:** ✅ Done 2026-10-02 (T44–T49, Linear ACTION-812), except the
+ticket's release criterion, which is Leonid's call. Drafted and implemented
+under the instruction of 2026-10-02 to execute the Linear plan without
+stopping; the decisions below were taken in the draft and are open to review.
 
 ## Goal
 
@@ -604,9 +604,11 @@ Taken in the draft of 2026-10-02; open for review.
    not have; an unscaled `a:normAutofit` is valid and PowerPoint recomputes
    it on its next layout. The renderer then shows the text unscaled, which
    can overflow the box until PowerPoint resaves; the docs say so.
-10. **Full reopen per `apply()`.** The renderer has no update API (03's
-    reading); `reopen` is a fresh load. The spike measures the cost and the
-    three-second ceiling guards it.
+10. **Full reopen per `apply()`, progressive for edited bytes.** The
+    renderer has no update API (03's reading); `reopen` is a fresh load with
+    `progressiveLayout` on, so the slide on screen paints without waiting
+    for the deck's preflight (Firefox needs seconds for 500 slides); the
+    three-second ceiling guards it in every browser of the matrix.
 11. **Orphaned parts stay.** Deleting an element removes its relationships
     only; a reference count across every slide's relationships would be
     needed to remove parts safely, and PowerPoint discards orphans on save.
@@ -634,10 +636,14 @@ at 960 px, then `waitUntilLayoutComplete`:
 |    100 |    120 ms |           122 ms |           209 ms |                  210 ms |               262 ms |
 |    500 |    214 ms |           215 ms |           142 ms |                  143 ms |               284 ms |
 
-A full reopen of a 500-slide deck costs about a fifth of a second, so the
-reopen per `apply()` stays well inside the three-second ceiling (decision
-10 holds) and `progressiveLayout` is not worth its later completion: the
-adapter keeps loading edited bytes exactly as it loads originals.
+In Chromium a full reopen of a 500-slide deck costs about a fifth of a
+second. The browser matrix then showed Firefox taking about four seconds
+for the same full load (its preflight of every slide is far slower), while
+its progressive load resolves in 0.18 s and lays the rest out in the
+background. The adapter therefore reopens edited bytes with
+`progressiveLayout: true` (originals open as before): `apply()` resolves
+when the shown slide can paint, and the three-second ceiling holds in
+every browser of the matrix (decision 10, amended at T49).
 
 Engine bounds against the renderer's `getElementBoundsByIds`: every shape
 of `sample.pptx` (two inherited placeholders per slide, through the "Title
@@ -647,4 +653,62 @@ and the renderer reports every one of them with origin `slide`.
 
 ## Actual result
 
-To be filled as the tasks land.
+Implemented 2026-10-02 in `packages/viewer/src/edit/pptx/` (`types.ts`,
+`schemas.ts`, `model.ts`, `geometry.ts`, `text.ts`, `style.ts`,
+`elements.ts`, `engine.ts`, `operations.ts`, `handlers.ts`, `text-write.ts`,
+`text-ops.ts`, `shape-ops.ts`, `image-table-ops.ts`, `slide-ops.ts`,
+`handler.ts`, `provider.ts`, `session.ts`), `src/ooxml-edit-worker.ts`,
+`src/edit/worker-engine.ts` (the worker transport shared with the PDF
+client), the Office adapter's `edit` provider and the viewer's variant
+mapping; tasks 44–49 of `tasks/todo.md`.
+
+- **Every operation of the table ships** with its typed method, unit tests
+  with byte-level expectations and a browser round trip on the corpus deck;
+  the renderer's `getElementBoundsByIds` on the saved bytes agrees with the
+  engine's frames within one CSS pixel after every geometry change, and the
+  extracted text, the pixel checks and the reloads confirm what the
+  renderer draws.
+- **Deviations from the draft**, all in the API section and the docs:
+  `PptxElement.hidden` reports `p:cNvPr/@hidden`; new `cNvPr` ids are
+  allocated from the slide's own ids (ECMA-376 scopes them per part, and
+  the renderer already prefers the slide on a clash with the layout);
+  `insertTable` writes the id that `ppt/tableStyles.xml` names in `@def`
+  (PowerPoint writes it even when the list defines nothing);
+  `insertSlide` and `duplicateSlide` return the new slide's element ids in
+  `createdIds`, so a batch can fill what it created; `insertImage` reuses
+  identical bytes already in the package, not only within one batch;
+  validation tracks the slide count through a batch; `moveElement` reports
+  `required`/`conflict` for `to` and `by`.
+- **Tests**: `pptx-edit-inspect` (6), `pptx-edit-text` (6),
+  `pptx-edit-shapes` (5), `pptx-edit-tables` (4), `pptx-edit-slides` (5);
+  `tests/e2e/edit-pptx.spec.ts` (8, in the matrix): worker fetched only on
+  `edit()`, geometry oracle on the corpus and built decks, text, shapes,
+  pictures and tables, slides, latency, the renderer load spike; the text
+  test also compares the saved package entry by entry with the original
+  (only `ppt/slides/slide1.xml` differs). `npm run fixtures:pptx` writes
+  sixteen edited decks (one per operation plus "everything") to
+  `artifacts/pptx-fixtures/` for the manual PowerPoint and Keynote check.
+- **Latency** (`apply()` in the headless browser matrix, Apple M4 Pro,
+  decks from the builder with one placeholder and one text box per slide;
+  each call saves the package and reopens it progressively in the
+  renderer; first then second `replaceText`, then an `insertTextBox` on the
+  last slide):
+
+  | Slides | Chromium             | Firefox                | WebKit               |
+  | -----: | -------------------- | ---------------------- | -------------------- |
+  |     10 | 32 ms, 204 ms, 80 ms | 79 ms, 198 ms, 53 ms   | 52 ms, 51 ms, 50 ms  |
+  |    100 | 123 ms, 22 ms, 15 ms | 207 ms, 179 ms, 166 ms | 42 ms, 39 ms, 42 ms  |
+  |    500 | 35 ms, 40 ms, 60 ms  | 93 ms, 144 ms, 177 ms  | 161 ms, 57 ms, 55 ms |
+
+  Every call stays far inside the three-second ceiling. Before the
+  progressive reopen, Firefox needed 3.9 s for an `apply()` on 500 slides
+  because its full preflight of the deck takes four seconds; the decision 10
+  amendment removed that.
+
+- **Manual check (pending, Leonid)**: the sixteen fixtures in
+  `artifacts/pptx-fixtures/` are to be opened in PowerPoint and Keynote; the
+  result goes here. The ticket's release criterion is likewise Leonid's.
+- Gates: unit suite, `fuzz:js`, the browser matrix and `npm run check`
+  green at the T49 commit; the size report lists the one new asset,
+  `workers/ooxml-edit-worker.js` (175 KB, 41 KB gzip), fetched only on the
+  first `edit()` of a deck.

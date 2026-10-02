@@ -1508,13 +1508,13 @@ Linear proofs; ACTION-812 Done except its release criterion.
 
 **Acceptance criteria:**
 
-- [ ] The definition of done of `04-pptx-edit.md` is met, except the manual
+- [x] The definition of done of `04-pptx-edit.md` is met, except the manual
       PowerPoint/Keynote check, which is handed to Leonid with the fixture
       set.
 
 **Verification:**
 
-- [ ] `npm run test:e2e -- tests/e2e/edit-pptx.spec.ts`,
+- [x] `npm run test:e2e -- tests/e2e/edit-pptx.spec.ts`,
       `npm run test:e2e:matrix`, `npm run check`
 
 **Dependencies:** Task 48
@@ -1525,4 +1525,4 @@ Linear proofs; ACTION-812 Done except its release criterion.
 
 ### Checkpoint I: PPTX editing done
 
-- [ ] ACTION-812 Done with proofs (release criterion left to Leonid); ACTION-813 next
+- [x] ACTION-812 Done with proofs (release criterion left to Leonid); ACTION-813 next

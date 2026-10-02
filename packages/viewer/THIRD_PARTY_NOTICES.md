@@ -29,8 +29,13 @@ The release artifact contains or depends on the following principal components. 
 - [GenOffice](https://github.com/genspark-ai/genoffice) — Apache-2.0; the
   selection-to-object matching ladder of the PDF overlay primitives (rectangle
   overlap, then a single containing object, then a text match after NFKC
-  folding) follows the technique of its `apps/pdf/src/main/text-edit.ts`. The
-  implementation in `packages/viewer/src/edit/pdf/selection.ts` is web-doc's
-  own; no GenOffice code is included.
+  folding) follows the technique of its `apps/pdf/src/main/text-edit.ts`, and
+  the PPTX text editing of `packages/viewer/src/edit/pptx/` follows its
+  published ideas of tracing edited runs to their source so formatting
+  survives, rebuilding only the paragraphs an edit touches, keeping
+  `a:bodyPr` and `a:lstStyle`, and dropping a stale autofit scale. The
+  implementations in `packages/viewer/src/edit/pdf/selection.ts` and
+  `packages/viewer/src/edit/pptx/` are web-doc's own; no GenOffice code is
+  included.
 - [Noto Sans](https://github.com/notofonts/noto-fonts) and [Noto Sans CJK](https://github.com/notofonts/noto-cjk) subset fonts — SIL Open Font License 1.1. The font manifest, complete OFL text, pinned source commits and SHA-256 hashes are included in `dist/fonts/`.
   No Microsoft proprietary font or copyleft runtime component is bundled. Transitive notices and license expressions are verified by `npm run licenses`.

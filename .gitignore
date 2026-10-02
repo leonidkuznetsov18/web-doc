@@ -17,3 +17,5 @@ artifacts/*.png
 artifacts/proofs/
 artifacts/SHA256SUMS
 artifacts/release/
+# Edited decks for the manual PowerPoint and Keynote check (npm run fixtures:pptx)
+artifacts/pptx-fixtures/

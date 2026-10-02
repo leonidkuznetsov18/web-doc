@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import {
+  localRecordOf,
+  parseZip,
+} from "../../packages/viewer/src/edit/ooxml/zip.js";
+import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
 import { syntheticDeck } from "../../packages/viewer/test/fixtures/pptx-builder.js";
 
 /*
@@ -12,6 +17,35 @@ import { syntheticDeck } from "../../packages/viewer/test/fixtures/pptx-builder.
  */
 
 const CORPUS = new URL("../../.cache/corpus/", import.meta.url);
+
+/** Names of the ZIP entries whose local records differ between two packages. */
+function changedEntries(a: Uint8Array, b: Uint8Array): string[] {
+  const left = parseZip(a, defaultResourceLimits);
+  const right = parseZip(b, defaultResourceLimits);
+  const changed: string[] = [];
+  for (const entry of right.entries) {
+    const before = left.entries.find(
+      (candidate) => candidate.name === entry.name,
+    );
+    if (!before) {
+      changed.push(entry.name);
+      continue;
+    }
+    const x = localRecordOf(left, before);
+    const y = localRecordOf(right, entry);
+    const bytesBefore = a.subarray(x.headerOffset, x.recordEnd);
+    const bytesAfter = b.subarray(y.headerOffset, y.recordEnd);
+    if (
+      bytesBefore.length !== bytesAfter.length ||
+      bytesBefore.some((byte, index) => byte !== bytesAfter[index])
+    )
+      changed.push(entry.name);
+  }
+  for (const entry of left.entries)
+    if (!right.entries.some((candidate) => candidate.name === entry.name))
+      changed.push(`-${entry.name}`);
+  return changed.sort();
+}
 const EDIT_ASSETS = ["/workers/ooxml-edit-worker.js"];
 const RENDERER = "/vendor/ooxml-pptx/pptx.mjs";
 
@@ -304,6 +338,11 @@ test("replaces and restyles text so the renderer shows it, and the edit survives
   const darkAfter = await darkPixelsIn(page, 0, before.bounds);
   expect(darkAfter).toBeGreaterThan(50);
   expect(darkAfter).not.toBe(darkBefore);
+
+  // Only the slide's entry changed; every other entry is the original record.
+  expect(changedEntries(original, new Uint8Array(after.saved))).toEqual([
+    "ppt/slides/slide1.xml",
+  ]);
 
   // The saved bytes reopen with the edit; nothing else of the deck changed.
   const reloaded = await page.evaluate(async (data) => {
@@ -649,6 +688,38 @@ test("inserts, duplicates, moves and deletes slides that the renderer paints in 
   expect(result.texts[2]).toContain("Inserted slide title");
   expect(result.dark).toBeGreaterThan(50);
   expect(result.dirty).toBe(true);
+});
+
+test("applies an edit within the budget on 10-, 100- and 500-slide decks", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const timings: Record<string, number[]> = {};
+  for (const count of [10, 100, 500]) {
+    await loadDeck(page, syntheticDeck(count), `deck-${count}.pptx`);
+    timings[count] = await page.evaluate(async () => {
+      const viewer = (window as unknown as { __viewer: any }).__viewer;
+      const session = await viewer.edit();
+      const out: number[] = [];
+      for (const text of ["First edit", "Second edit"]) {
+        const started = performance.now();
+        await session.replaceText({ target: "sld1:3", text });
+        out.push(performance.now() - started);
+      }
+      const started = performance.now();
+      await session.insertTextBox({
+        pageIndex: viewer.state.pageCount - 1,
+        rect: { x: 50, y: 50, width: 300, height: 40 },
+        text: "Last slide",
+      });
+      out.push(performance.now() - started);
+      return out;
+    });
+    console.log(
+      `pptx apply ${count} slides: replaceText ${timings[count]![0]!.toFixed(0)} ms then ${timings[count]![1]!.toFixed(0)} ms, insertTextBox on the last slide ${timings[count]![2]!.toFixed(0)} ms`,
+    );
+    for (const value of timings[count]!) expect(value).toBeLessThan(3000);
+  }
 });
 
 test("spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout", async ({

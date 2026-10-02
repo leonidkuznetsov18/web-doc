@@ -651,6 +651,186 @@ PDF.js parsing it again); the browser suite fails above three seconds. Batch ope
 together, and keep `getElements()` queries to the pages you need — the engine
 loads a page only when an operation or a query touches it.
 
+## PPTX
+
+PPTX decks are edited XML-first on the shared OOXML package layer: the
+original package is the source of truth, every change is a patch to a slide
+part, untouched ZIP entries are copied byte for byte, and the parts an edit
+touched are stored uncompressed, so a saved deck is byte-identical whatever
+engine wrote it. The package lives in a module worker
+(`workers/ooxml-edit-worker.js`, resolved against `assetBaseUrl` and fetched
+on the first `edit()` of a deck, never before; no WebAssembly). The same
+`@silurus/ooxml` renderer that shows the deck reopens the edited bytes after
+each change. `.pptm` and `.ppsx` decks take the same path; a macro part is
+copied byte for byte and never read. Hosts that serve the worker elsewhere
+pass `edit: { workerUrl }` to the Office adapter.
+
+`session.format` is `"pptx"` and the session is a `PptxEditSession`: `apply()`
+takes `PptxOperation` values, the inspection methods return `PptxElement`
+values, and each operation has a typed method with the same name. Two more
+reads describe the deck: `getSlides()` lists the slides in order with a key
+that survives reordering (`"sld3"`, the slide part's number) and their
+layout; `getLayouts()` lists every layout of every master with its id
+(`"layout2"`), name and type, for `insertSlide`.
+
+### Methods
+
+Geometry is slide space: CSS pixels at 96 dpi (`EMU / 9525`), the unit of
+`DocumentInfo.pageSizes` for presentations. Font sizes and line widths are
+points.
+
+| Method           | Fields                                                                                                                  | Notes                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replaceText`    | `target` (a `shape` with text), `text` (up to 100 000 chars), `range?: TextRange` on the target                         | Without `range` the whole body: new text takes the first run's properties, `\n` splits paragraphs (each copies the first paragraph's properties), `\v` is a line break. With `range` only that part: untouched runs keep their bytes, a collapsed range inserts with the style of the run before it, a range across a paragraph break merges under the first paragraph. A range that cuts a field is `invalid-range`. |
+| `setTextStyle`   | `target` (a `shape` with text), `range?`, `style: PptxTextStyleChange`                                                  | Writes only the properties given, splitting runs at the range ends; `align` applies to every paragraph the range touches (all of them without a range). The paragraph end takes the change too, so text typed later inherits it.                                                                                                                                                                                      |
+| `setShapeStyle`  | `target` (a `shape` or `connector`), `fill?: EditColor \| "none" \| null`, `line?: { color, width? } \| "none" \| null` | `"none"` writes no fill or no line; `null` drops the explicit value so the theme or style reference applies again; absent keeps it. A connector takes `line` only.                                                                                                                                                                                                                                                    |
+| `moveElement`    | `target`, exactly one of `to: PagePoint` (new top-left of the bounds) or `by: { dx, dy }`                               | Any element; a group child moves in its group's space, a placeholder that inherited its frame gets an explicit one.                                                                                                                                                                                                                                                                                                   |
+| `resizeElement`  | `target`, `rect`                                                                                                        | `rect` is the new `bounds`; a rotated element keeps its rotation and gets the frame whose rotated box is `rect`. Resizing a group scales its children.                                                                                                                                                                                                                                                                |
+| `deleteElement`  | `target`                                                                                                                | Removes the element and the slide's relationships only it used; media parts stay in the package (PowerPoint drops orphans on its own save). Every element of a deleted group is in `removedIds`.                                                                                                                                                                                                                      |
+| `insertTextBox`  | `pageIndex`, `rect`, `text`, `style?: PptxTextStyleChange`                                                              | A text box (`spAutoFit`, no fill) with the next free id of the slide; the new element's id is `createdIds[0]`.                                                                                                                                                                                                                                                                                                        |
+| `insertImage`    | `pageIndex`, `rect`, `data: BinaryData`, `mimeType: "image/png" \| "image/jpeg"`                                        | The bytes are stored once as a media part (identical bytes already in the package are reused) and placed in `rect` as given; the bytes must carry the signature of their type (`invalid-value`).                                                                                                                                                                                                                      |
+| `insertTable`    | `pageIndex`, `rect`, `rows: string[][]`, `columnWidths?: number[]`, `style?: { firstRow?, bandRow? }`                   | 1–100 rows, 1–20 columns, every row the same length; `columnWidths` are relative weights; rows share `rect.height` equally; the deck's default table style applies when it names one.                                                                                                                                                                                                                                 |
+| `setTableCell`   | `target` (a `table`), `row`, `column`, `text`                                                                           | Replaces the cell's text like `replaceText` on a whole body; the cell's properties stay. A row or column outside the table is a `range` issue.                                                                                                                                                                                                                                                                        |
+| `insertSlide`    | `index` (0 to the slide count), `layout?` (a `getLayouts()` id)                                                         | A slide with the layout's placeholders instantiated (titles, bodies, content, pictures, tables, charts, media), as PowerPoint's New Slide does; their ids are in `createdIds`. The default layout is that of the slide before the position, else the first.                                                                                                                                                           |
+| `duplicateSlide` | `pageIndex`, `index?` (default: right after the source)                                                                 | Copies the slide and clones the parts only it may own (charts, diagrams, embeddings); layouts, images and media are shared; notes and comments are not copied. The copy's element ids are in `createdIds`.                                                                                                                                                                                                            |
+| `deleteSlide`    | `pageIndex`                                                                                                             | Removes the slide, its notes slide and its presentation entry; the last slide cannot be deleted (issue code `last-slide`).                                                                                                                                                                                                                                                                                            |
+| `moveSlide`      | `from`, `to` (the slide's index after the move)                                                                         | Reorders the slide list only.                                                                                                                                                                                                                                                                                                                                                                                         |
+
+```ts
+interface PptxTextStyleChange {
+  fontFamily?: string; // written as a:latin; theme names such as "+mn-lt" pass through
+  fontSize?: number; // 1–400 pt
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: EditColor; // "#RRGGBB", or { theme, mods } for a scheme colour
+  align?: "left" | "center" | "right" | "justify";
+}
+
+type EditColor = string | { theme: string; mods?: Record<string, number> };
+```
+
+A theme colour names a scheme slot (`tx1`, `bg1`, `accent1` … `accent6`,
+`hlink`, `folHlink`, or `dk1`, `lt1`, `dk2`, `lt2`) with optional DrawingML
+modifiers (`lumMod`, `lumOff`, `tint`, `shade`, `alpha`, `satMod`, …) in
+thousandths of a percent, as the file stores them. What was written in theme
+form is read back in theme form, so the link to the theme survives a round
+trip through a host's UI.
+
+### Elements
+
+```ts
+type PptxElementKind =
+  | "shape" // p:sp — a text box, a placeholder, an auto shape, WordArt
+  | "image" // p:pic
+  | "table" // p:graphicFrame holding a:tbl
+  | "connector" // p:cxnSp
+  | "group" // p:grpSp; its children carry parentId
+  | "other"; // charts, diagrams, OLE objects, media frames
+
+interface PptxElement extends EditElement {
+  kind: PptxElementKind;
+  name: string; // p:cNvPr/@name, as PowerPoint's selection pane shows it
+  placeholder?: { type: string; idx?: number };
+  textStyle?: PptxTextStyle; // a shape with a text body
+  shapeStyle?: PptxShapeStyle; // shape, connector
+  table?: { rows: string[][] }; // table
+  hidden?: boolean; // p:cNvPr/@hidden: listed and editable, not drawn
+}
+
+interface PptxTextStyle {
+  fontFamily: string; // theme fonts resolved ("+mn-lt" → the minor Latin face)
+  fontSize: number; // points
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  color: EditColor; // "auto" when the file uses a fill the API cannot express
+  align: "left" | "center" | "right" | "justify";
+}
+
+interface PptxShapeStyle {
+  fill?: EditColor | "none"; // absent when inherited from the style or theme
+  line?: { color: EditColor | "none"; width: number }; // points
+}
+```
+
+| Kind        | What it is                                             | Accepts                                                                                                            |
+| ----------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `shape`     | A text box, placeholder, auto shape or WordArt         | `replaceText`, `setTextStyle` (with a text body), `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement` |
+| `image`     | A picture                                              | `moveElement`, `resizeElement`, `deleteElement`                                                                    |
+| `table`     | A table; `text` joins cells by tab and rows by newline | `setTableCell`, `moveElement`, `resizeElement`, `deleteElement`                                                    |
+| `connector` | A connector line                                       | `setShapeStyle` (line only), `moveElement`, `resizeElement`, `deleteElement`                                       |
+| `group`     | A group; its children list it as `parentId`            | `moveElement`, `resizeElement`, `deleteElement`                                                                    |
+| `other`     | A chart, diagram, OLE object or media frame            | `moveElement`, `resizeElement`, `deleteElement`                                                                    |
+
+Ids are `<slide key>:<shape id>`, for example `sld3:7`: the number of the
+slide part and `p:cNvPr/@id`. They are stable across reordering and across
+sessions on the same file, so a host can persist them. A file with duplicate
+ids on one slide gets `#2`, `#3` suffixes on the later duplicates. New
+elements take the next free id of their slide and a new slide the next free
+slide number, as PowerPoint allocates them, so a replay reproduces them; a
+slide number is reissued only after a slide the session created was deleted
+and its elements reported in `removedIds`.
+
+`textStyle` describes the first run with text, resolved through the
+placeholder chain (run, the shape's list style, the layout placeholder, the
+master placeholder, the master text styles, the presentation defaults) and
+the theme's fonts. `bounds` is the axis-aligned box of the rotated frame;
+`frame` keeps the untransformed box with `rotation`, `flipH` and `flipV`. A
+placeholder without a frame of its own reports the one it inherits from its
+layout or master; a group child's frame is mapped through its groups.
+Elements inside the fallback branch of `mc:AlternateContent` are listed with
+no operations. Only the slide's own shapes are listed: what the renderer
+composes from the layout or master is not editable here.
+
+`elementsAt()` lists the elements under a point top-most first, groups after
+their children. `findText()` searches the text of every shape and table and
+returns the shape's bounds as the match rectangle: the engine has no glyph
+geometry, so the viewer's `search()` remains the source of word rectangles.
+
+### Text
+
+A shape's `text` is its paragraphs joined by `\n`; inside a paragraph a line
+break is `\v` (PowerPoint's own character for it), a tab is `\t` and a field
+contributes its cached text. `TextRange` offsets count UTF-16 code units of
+that text. Characters XML cannot carry (control characters, lone surrogates)
+are `invalid-text`.
+
+A shape whose body autofits (`a:normAutofit`) carries a font scale computed
+for its old text; `replaceText` and `setTextStyle` drop that scale, so the
+text shows unscaled until PowerPoint lays the shape out again — it may
+overflow the box in the viewer until then.
+
+### What stays unchanged
+
+Everything an operation does not touch keeps its bytes: other shapes, other
+slides, layouts, masters, themes, notes, comments, animations, transitions,
+custom XML and extension lists. Layouts, masters and notes are not editable.
+Table cells accept text changes only. Fonts are written by name; nothing is
+embedded, and PowerPoint substitutes a missing face.
+
+### PPTX issue codes
+
+Besides the core codes, validation reports `unknown-target`, `invalid-target`
+(a read-only element or one without the needed text body or style),
+`invalid-range`, `invalid-text`, `invalid-value` (a colour that is neither
+`#RRGGBB` nor a theme slot, image bytes that do not match their type, rows
+of unequal length), `unknown-asset`, `unknown-layout`, `range` (a slide or
+cell index), `required`/`conflict` (`moveElement` needs exactly one of `to`
+and `by`) and `last-slide`.
+
+### Performance
+
+Each `apply()` saves the package and reopens it in the renderer, which lays
+the slides out progressively on a reopen so the slide on screen paints
+without waiting for the whole deck. Measured in the headless browser matrix
+on an Apple M4 Pro with synthetic decks of one placeholder and one text box
+per slide, a `replaceText` resolves in about 30 ms on 10 slides, 20–40 ms on
+100 slides and 35–40 ms on 500 slides in Chromium; Firefox takes 90–145 ms
+and WebKit 55–160 ms on 500 slides. An `insertTextBox` on the last of 500
+slides takes 50–180 ms. The browser suite fails above three seconds on every
+browser of the matrix. Batch operations that belong together.
+
 ## Guidance for AI clients
 
 - Read before writing: list elements or `findText()` to obtain ids and

@@ -104,6 +104,18 @@ patches too. Changed entries are stored, not deflated, so a saved package is
 byte-identical across engines. The layer is thread-agnostic; the format engine
 decides where it runs.
 
+The PPTX engine (`src/edit/pptx/`, module 04) is the first format on that
+layer: it indexes the deck (presentation, slides, layouts, masters, theme
+fonts), reads every element of a slide from its XML — frames inherited
+through the placeholder chain or mapped through groups, the text model,
+styles resolved down to the master text styles — and writes each operation
+as patches of the slide part, the presentation part, the relationships and
+the content types in one transaction. It runs in the OOXML edit worker
+(`src/ooxml-edit-worker.ts`, `dist/workers/ooxml-edit-worker.js`), which
+module 06 will share; the main-thread client extends the worker transport
+the PDF client uses. After each change the viewer reopens the edited bytes
+with the same `@silurus/ooxml` renderer that shows originals.
+
 Each format supplies its engine behind the internal `EditEngine` interface;
 the engine may live in a worker, and the core never assumes shared memory.
 After a change the viewer reopens the edited bytes through the regular adapter

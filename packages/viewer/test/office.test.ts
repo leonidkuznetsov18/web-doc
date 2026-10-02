@@ -225,6 +225,40 @@ describe("OfficeDocumentAdapter", () => {
     );
   });
 
+  it("reopens edited presentations with progressive layout and advertises editing for them", async () => {
+    const seen: unknown[] = [];
+    const adapter = new OfficeDocumentAdapter({
+      engines: {
+        pptx: async (_data, options) => {
+          seen.push(options);
+          return {
+            slideCount: 1,
+            slideWidth: 9_144_000,
+            slideHeight: 6_858_000,
+            renderSlide: async () => {},
+            collectSlideRuns: async () => [],
+            destroy: () => {},
+          };
+        },
+      },
+    });
+    assert.deepEqual(adapter.edit.formats, ["pptx", "pptm", "ppsx"]);
+    const first = await adapter.open(Uint8Array.of(1), context("pptx"));
+    const second = await adapter.reopen(
+      first,
+      Uint8Array.of(2),
+      context("pptx"),
+    );
+    assert.equal((await adapter.getInfo(second)).pageCount, 1);
+    assert.deepEqual(
+      seen.map(
+        (options) =>
+          (options as { progressiveLayout?: boolean }).progressiveLayout,
+      ),
+      [undefined, true],
+    );
+  });
+
   it("uses cached spreadsheet values, exposes sheet geometry, and never calculates formulas", async () => {
     let volatileFormulaAfterOpen: string | undefined = "not-rendered";
     let renderedColumnWidth: number | undefined;
