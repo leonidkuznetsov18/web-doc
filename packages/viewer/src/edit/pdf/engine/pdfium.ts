@@ -50,6 +50,13 @@ export interface PdfiumFunctions {
     right: number,
     top: number,
   ): void;
+  FPDFPage_SetMediaBox(
+    page: number,
+    left: number,
+    bottom: number,
+    right: number,
+    top: number,
+  ): void;
   FPDF_MovePages(
     document: number,
     pageIndices: number,
@@ -74,6 +81,47 @@ export interface PdfiumFunctions {
     index: number,
   ): boolean;
   FPDFPage_GenerateContent(page: number): boolean;
+  /** -1 when the object is not a form. */
+  FPDFFormObj_CountObjects(form: number): number;
+  FPDFFormObj_GetObject(form: number, index: number): number;
+  /** Detaches an object from its form; PDFium does not write forms back, see forms.ts. */
+  FPDFFormObj_RemoveObject(form: number, object: number): boolean;
+  /** A new Form XObject drawing a page of `source` into `destination`. */
+  FPDF_NewXObjectFromPage(
+    destination: number,
+    source: number,
+    pageIndex: number,
+  ): number;
+  FPDF_NewFormObjectFromXObject(xobject: number): number;
+  FPDF_CloseXObject(xobject: number): void;
+  /** The object's clip path, owned by the object; 0 when it has none. */
+  FPDFPageObj_GetClipPath(object: number): number;
+  /** Paths of a clip path, -1 when it has none. */
+  FPDFClipPath_CountPaths(clipPath: number): number;
+  FPDFPageObj_TransformClipPath(
+    object: number,
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number,
+  ): void;
+  /** Wraps the page's content streams in `q <clip> W n … Q`. */
+  FPDFPage_InsertClipPath(page: number, clipPath: number): void;
+  /** Copies pages, with what they use, from `source` into `destination` at `index`. */
+  FPDF_ImportPagesByIndex(
+    destination: number,
+    source: number,
+    pageIndices: number,
+    count: number,
+    index: number,
+  ): boolean;
+  /** The object number of a page's dictionary (an embedpdf addition). */
+  EPDFDoc_GetPageObjectNumberByIndex(
+    document: number,
+    pageIndex: number,
+  ): number;
   FPDFPageObj_GetType(object: number): number;
   /** Four floats: left, bottom, right, top in user space. */
   FPDFPageObj_GetBounds(

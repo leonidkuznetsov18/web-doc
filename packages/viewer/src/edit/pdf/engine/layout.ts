@@ -14,6 +14,7 @@ import {
   unionRects,
   userRectToPage,
   userToPage,
+  type Matrix,
   type PageGeometry,
 } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
@@ -33,6 +34,8 @@ export interface TextPageScan {
   readonly geometry: PageGeometry;
   /** Object handle → element id, in drawing order. */
   readonly byObject: ReadonlyMap<number, string>;
+  /** Text objects inside forms → the matrix that maps their form onto the page. */
+  readonly outer: ReadonlyMap<number, Matrix>;
   readonly elements: readonly PdfElement[];
   /** Per character of the text page: its element and offset, when an object draws it. */
   readonly offsets: readonly (TextPosition | undefined)[];
@@ -212,7 +215,7 @@ function linesOf(
     const members = byObject.get(object);
     if (!members) continue;
     members.sort((a, b) => a.position.offset - b.position.offset);
-    const style = textStyle(pdfium, object);
+    const style = textStyle(pdfium, object, scan.outer.get(object));
     const { elementId } = members[0]!.position;
     lines.push({
       range: {
