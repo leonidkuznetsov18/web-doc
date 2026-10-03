@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.12.1...v0.13.0) (2026-10-03)
+
+### Features
+
+* **viewer:** report the advance frame of pdf text lines ([3426834](https://github.com/leonidkuznetsov18/web-doc/commit/3426834da84b925b57e18503c4e06f22ec2cbff2))
+
+### Bug fixes
+
+* **viewer:** validate sequential pdf batch transforms ([0b65e53](https://github.com/leonidkuznetsov18/web-doc/commit/0b65e53a7bfeedf4fe5745f464834a27620ea0f4))
+
 ## [0.12.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.12.0...v0.12.1) (2026-10-03)
 
 ### Bug fixes
