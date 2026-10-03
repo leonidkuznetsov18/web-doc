@@ -277,6 +277,39 @@ describe("OfficeDocumentAdapter", () => {
     );
   });
 
+  for (const format of ["docx", "docm"] as const) {
+    it(`reopens edited ${format} with its complete page count`, async () => {
+      const adapter = new OfficeDocumentAdapter({
+        engines: {
+          docx: async (_data, options) => ({
+            // The DOCX loader returns its first partial page when progressive;
+            // otherwise load resolves only after the whole flow is laid out.
+            pageCount: options.progressiveLayout ? 1 : 3,
+            pageSize: () => ({ widthPt: 612, heightPt: 792 }),
+            renderPage: async () => {},
+            collectPageRuns: async () => [],
+            destroy: () => {},
+          }),
+        },
+      });
+      const source = buildDocx({ body: "<w:p/>" + sectPr() });
+      const first = await adapter.open(source, context(format));
+      try {
+        assert.equal((await adapter.getInfo(first)).pageCount, 3);
+        const second = await adapter.reopen(first, source, context(format));
+        try {
+          const info = await adapter.getInfo(second);
+          assert.equal(info.pageCount, 3);
+          assert.equal(info.pageSizes?.length, 3);
+        } finally {
+          await adapter.close(second);
+        }
+      } finally {
+        await adapter.close(first);
+      }
+    });
+  }
+
   it("reopens edited presentations with progressive layout and advertises editing for them", async () => {
     const seen: unknown[] = [];
     const adapter = new OfficeDocumentAdapter({
