@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.12.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.11.0...v0.12.0) (2026-10-03)
+
+### Features
+
+* **viewer:** add native editing of imported pdf paragraphs ([857ad95](https://github.com/leonidkuznetsov18/web-doc/commit/857ad95296e1ae0203dd4d15e477dfa23b776a16))
+
+### Bug fixes
+
+* **viewer:** finish raster after text layer failure ([5c2b582](https://github.com/leonidkuznetsov18/web-doc/commit/5c2b582bd6d31c3eeb5a5f9905aab6016d4ef906))
+* **viewer:** harden imported paragraph compatibility ([9b95069](https://github.com/leonidkuznetsov18/web-doc/commit/9b950693da270156dfcc3d2306a1253dc3b343d5))
+* **viewer:** keep an embedded cff subset when replacing pdf text ([c28d7de](https://github.com/leonidkuznetsov18/web-doc/commit/c28d7de9f63f5f1b5af54045db2194fd4cc7be4f))
+* **viewer:** preserve safe paragraph editing beside neighboring text ([b382a05](https://github.com/leonidkuznetsov18/web-doc/commit/b382a0590a9171431018e806b4758af79771dd27))
+* **viewer:** read the font of a pdf paragraph target ([f88623a](https://github.com/leonidkuznetsov18/web-doc/commit/f88623a2a1d93d3944998722e5558817e81ff706))
+* **viewer:** reconcile render retirement with staged paints ([61bbe72](https://github.com/leonidkuznetsov18/web-doc/commit/61bbe72f445e874b104ba96b5be5127239a1a1c4))
+* **viewer:** retry renders retired during pdf edits ([767aad3](https://github.com/leonidkuznetsov18/web-doc/commit/767aad3bb8fde97e36effad04a379c30829964f9))
+* **viewer:** safely retire active pdf renders ([53ff51a](https://github.com/leonidkuznetsov18/web-doc/commit/53ff51a38ba05ffb7624077806600c560e4b8f6a))
+
+### Performance
+
+* **viewer:** avoid repeated pdf paragraph discovery scans ([b940215](https://github.com/leonidkuznetsov18/web-doc/commit/b9402152751dcc2e64e3550684df7b4ae7da3208))
+
 ## [0.11.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.10.0...v0.11.0) (2026-10-03)
 
 ### Features
