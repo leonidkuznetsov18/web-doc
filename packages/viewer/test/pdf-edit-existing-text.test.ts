@@ -205,7 +205,11 @@ describe("edits to existing text objects", () => {
       assert.ok(after.bounds.height > before.bounds.height * 1.8);
       const issues = await engine.validate(
         [
-          op({ op: "setTextStyle", target: "p0:o0", style: { bold: true } }),
+          op({
+            op: "setTextStyle",
+            target: "p0:o0",
+            style: { fontFamily: "Times" },
+          }),
           op({ op: "replaceText", target: "p0:o0", text: "שלום" }),
           op({ op: "replaceText", target: "p0:o9", text: "x" }),
         ],
@@ -216,7 +220,7 @@ describe("edits to existing text objects", () => {
           (issue) => `${issue.operationIndex}${issue.path}:${issue.code}`,
         ),
         [
-          "0/style/bold:unsupported-style",
+          "0/style/fontFamily:unsupported-style",
           "1/text:unsupported-script",
           "2/target:unknown-target",
         ],

@@ -120,7 +120,23 @@ export class PdfEditEngineClient
     };
     await this.request("edit-init", init, this.context.signal);
     const data = original.slice().buffer;
-    const fonts = (this.context.fonts ?? []).map(toWorkerFont);
+    const fonts = [
+      ...(this.context.fonts ?? []).map(toWorkerFont),
+      ...(["Regular", "Bold", "Italic", "BoldItalic"] as const).map((face) => {
+        const path = `assets/pdfjs/standard_fonts/LiberationSans-${face}.ttf`;
+        return {
+          family: "Liberation Sans",
+          weight: face.includes("Bold") ? 700 : 400,
+          style: face.includes("Italic")
+            ? ("italic" as const)
+            : ("normal" as const),
+          source: (base
+            ? new URL(path, base)
+            : packageRelativeUrl(`../../../${path}`, import.meta.url)
+          ).href,
+        };
+      }),
+    ];
     const open: EditWorkerOpenPayload = {
       data,
       limits: this.context.limits,

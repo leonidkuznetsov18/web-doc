@@ -4,8 +4,15 @@ import type {
   ReplaceParagraphTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
-import { MARK_NAME, MARK_PARAM, OBJECT_PATH, OBJECT_TEXT } from "./elements.js";
+import {
+  MARK_NAME,
+  MARK_PARAM,
+  OBJECT_PATH,
+  OBJECT_TEXT,
+  writeWebDocMark,
+} from "./elements.js";
 import { fontCanDraw, isStandardFamily, validateScript } from "./fonts.js";
+import { createUnderline } from "./text-decoration.js";
 import { pageToUser, round } from "./geometry.js";
 import { layoutText, type Layout } from "./text-layout.js";
 import { parseColor, placeUpright, setText } from "./text-box.js";
@@ -51,31 +58,103 @@ export const paragraphSetTextStyle: OperationHandler<SetTextStyleOperation> = {
   validate(operation, context, issue) {
     const target = targetOf(operation.target, context, issue);
     if (!target) return;
-    for (const field of [
-      "fontFamily",
-      "bold",
-      "italic",
-      "align",
-      "lineHeight",
-    ] as const)
+    for (const field of ["fontFamily", "align", "lineHeight"] as const)
       if (operation.style[field] !== undefined)
         issue(
           `/style/${field}`,
           "unsupported-style",
-          `Only color and fontSize can change on imported paragraphs; ${field} cannot`,
+          `Imported paragraphs accept color, fontSize, bold, italic and underline; ${field} cannot`,
         );
     const spec = styled(target.spec, operation);
-    if (spec.style.fontSize !== target.spec.style.fontSize)
-      prepare(context, target, spec, issue);
+    if (layoutChanges(target.spec, spec)) prepare(context, target, spec, issue);
   },
   apply(operation, context) {
     const target = requireTarget(operation.target, context);
     const spec = styled(target.spec, operation);
-    if (spec.style.fontSize === target.spec.style.fontSize)
-      return colorInPlace(context, target, spec);
+    if (!layoutChanges(target.spec, spec))
+      return operation.style.underline !== undefined ||
+        spec.style.underline === true
+        ? decorateInPlace(context, target, spec, operation.style.color)
+        : colorInPlace(context, target, spec);
     return rebuild(context, target, spec);
   },
 };
+
+function layoutChanges(previous: ParagraphSpec, next: ParagraphSpec): boolean {
+  return (
+    previous.style.fontSize !== next.style.fontSize ||
+    previous.style.bold !== next.style.bold ||
+    previous.style.italic !== next.style.italic
+  );
+}
+
+/** Underlining retains the original glyph objects and their exact native font and positioning. */
+function decorateInPlace(
+  context: OperationContext,
+  target: ParagraphTarget,
+  spec: ParagraphSpec,
+  colorChange: string | undefined,
+): OperationResult {
+  const { pdfium } = context;
+  const { lib } = pdfium;
+  const pageIndex = target.paragraph.pageIndex;
+  context.withPage(pageIndex, (page) => {
+    const texts = target.indexes
+      .map((index) => lib.FPDFPage_GetObject(page, index))
+      .filter((object) => lib.FPDFPageObj_GetType(object) === OBJECT_TEXT);
+    if (texts.length === 0) {
+      for (const index of target.indexes) {
+        const object = lib.FPDFPage_GetObject(page, index);
+        writeWebDocMark(pdfium, context.document, object, spec);
+        context.spliceObjects(pageIndex, index, 1, [
+          { id: spec.id, type: OBJECT_PATH, mark: spec },
+        ]);
+      }
+      return;
+    }
+    for (const index of [...target.indexes].reverse()) {
+      const object = lib.FPDFPage_GetObject(page, index);
+      if (lib.FPDFPageObj_GetType(object) !== OBJECT_PATH) continue;
+      lib.FPDFPage_RemoveObject(page, object);
+      lib.FPDFPageObj_Destroy(object);
+      context.spliceObjects(pageIndex, index, 1, []);
+    }
+    const color = parseColor(spec.style.color);
+    let after = 0;
+    for (let index = 0; index < lib.FPDFPage_CountObjects(page); index += 1) {
+      const object = lib.FPDFPage_GetObject(page, index);
+      if (!texts.includes(object)) continue;
+      if (colorChange !== undefined)
+        lib.FPDFPageObj_SetFillColor(object, ...color, 255);
+      writeWebDocMark(pdfium, context.document, object, spec);
+      context.spliceObjects(pageIndex, index, 1, [
+        { id: spec.id, type: OBJECT_TEXT, mark: spec },
+      ]);
+      after = index + 1;
+    }
+    if (!spec.style.underline) return;
+    const textPage = lib.FPDFText_LoadPage(page);
+    try {
+      for (const object of texts) {
+        const path = createUnderline(pdfium, object, textPage);
+        if (!path)
+          throw new ViewerError(
+            "invalid-operation",
+            "This paragraph has no drawable underline geometry",
+          );
+        writeWebDocMark(pdfium, context.document, path, spec);
+        lib.FPDFPage_InsertObjectAtIndex(page, path, after);
+        context.spliceObjects(pageIndex, after, 0, [
+          { id: spec.id, type: OBJECT_PATH, mark: spec },
+        ]);
+        after += 1;
+      }
+    } finally {
+      lib.FPDFText_ClosePage(textPage);
+    }
+  });
+  return paragraphChange(target, spec, []);
+}
 
 /** Color never rewrites glyphs or changes an imported font resource. */
 function colorInPlace(
@@ -127,6 +206,15 @@ function styled(
     ...spec,
     style: {
       ...spec.style,
+      ...(operation.style.underline === undefined
+        ? {}
+        : { underline: operation.style.underline }),
+      ...(operation.style.bold === undefined
+        ? {}
+        : { bold: operation.style.bold }),
+      ...(operation.style.italic === undefined
+        ? {}
+        : { italic: operation.style.italic }),
       ...(operation.style.fontSize === undefined
         ? {}
         : { fontSize: round(operation.style.fontSize) }),
@@ -211,12 +299,29 @@ function fontFor(
     .find((object) => lib.FPDFPageObj_GetType(object) === OBJECT_TEXT);
   const native =
     original === undefined ? undefined : lib.FPDFTextObj_GetFont(original);
-  if (native !== undefined && fontCanDraw(context.pdfium, native, spec.text))
+  const faceChanged =
+    spec.style.bold !== target.spec.style.bold ||
+    spec.style.italic !== target.spec.style.italic;
+  if (
+    !faceChanged &&
+    native !== undefined &&
+    fontCanDraw(context.pdfium, native, spec.text)
+  )
     return {
       handle: native,
       family: spec.style.fontFamily,
       substituted: false,
     };
+  if (faceChanged || spec.style.bold || spec.style.italic) {
+    const font = context.fonts.resolveStyle(context.pdfium, context.document, {
+      family: spec.style.fontFamily,
+      bold: spec.style.bold,
+      italic: spec.style.italic,
+      text: spec.text,
+    });
+    if ("code" in font) return { problem: font };
+    return { ...font, substituted: Boolean(font.substitution) };
+  }
   const family =
     isStandardFamily(spec.style.fontFamily) ||
     context.fonts.hasFamily(spec.style.fontFamily)
@@ -426,6 +531,20 @@ function rebuild(
     );
     const textPage = lib.FPDFText_LoadPage(page);
     try {
+      if (prepared.spec.style.underline) {
+        for (const { object, type } of [...objects]) {
+          if (type !== OBJECT_TEXT) continue;
+          const path = createUnderline(pdfium, object, textPage);
+          if (!path)
+            throw new ViewerError(
+              "invalid-operation",
+              "This paragraph has no drawable underline geometry",
+            );
+          writeWebDocMark(pdfium, context.document, path, prepared.spec);
+          lib.FPDFPage_InsertObjectAtIndex(page, path, first + objects.length);
+          objects.push({ object: path, type: OBJECT_PATH });
+        }
+      }
       const drawn = objects
         .filter(({ type }) => type === OBJECT_TEXT)
         .map(({ object }) =>
@@ -453,6 +572,14 @@ function rebuild(
       objects.map(({ type }) => ({ id: spec.id, type, mark: prepared.spec })),
     );
   });
+  return paragraphChange(target, spec, prepared.warnings);
+}
+
+function paragraphChange(
+  target: ParagraphTarget,
+  spec: ParagraphSpec,
+  warnings: readonly ViewerWarning[],
+): OperationResult {
   const promoted = !target.paragraph.memberIds.includes(spec.id);
   // The logical paragraph already existed before promotion. Reporting it as
   // newly created would incorrectly destroy its ranges when Undo restores rows.
@@ -469,7 +596,7 @@ function rebuild(
           })),
         }
       : {}),
-    changedPages: [pageIndex],
-    warnings: prepared.warnings,
+    changedPages: [target.paragraph.pageIndex],
+    warnings,
   };
 }

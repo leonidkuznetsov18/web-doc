@@ -5,6 +5,7 @@ import type {
   PdfOperation,
   PdfTextAlign,
   PdfTextBoxStyle,
+  PdfTextStyle,
   ReplaceTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
@@ -12,9 +13,15 @@ import {
   MARK_NAME,
   MARK_PARAM,
   OBJECT_TEXT,
+  OBJECT_PATH,
+  writeWebDocMark,
   type MarkParams,
 } from "./elements.js";
-import type { FontRequest } from "./fonts.js";
+import {
+  STYLE_FALLBACK_FAMILY,
+  type FontPreparation,
+  type FontRequest,
+} from "./fonts.js";
 import { displayedSize, pageToUser, type PageGeometry } from "./geometry.js";
 import { layoutText } from "./text-layout.js";
 import { tableSpecOf, tableText, type TableSpec } from "./tables.js";
@@ -25,6 +32,8 @@ import type {
   OperationHandler,
   OperationResult,
 } from "./operations.js";
+import { createUnderline } from "./text-decoration.js";
+import { ViewerError } from "../../../errors.js";
 import type { Pdfium } from "./pdfium.js";
 
 /** A text box's inputs with every default filled in; stored in its mark. */
@@ -38,6 +47,7 @@ export type TextBoxSpec = {
     readonly fontSize: number;
     readonly bold: boolean;
     readonly italic: boolean;
+    readonly underline?: boolean;
     readonly color: string;
     readonly align: PdfTextAlign;
     readonly lineHeight: number;
@@ -134,11 +144,18 @@ export function drawTextBox(
 ): DrawnTextBox {
   const { pdfium, measurer } = context;
   const { lib } = pdfium;
-  const font = context.fonts.resolve(
-    pdfium,
-    context.document,
-    fontRequest(spec.style, spec.text),
-  );
+  const request = fontRequest(spec.style, spec.text);
+  const font =
+    request.bold || request.italic
+      ? context.fonts.resolveStyle(pdfium, context.document, request)
+      : context.fonts.resolve(pdfium, context.document, request);
+  if ("code" in font) throw new ViewerError("invalid-operation", font.message);
+  // Retain a real substitute's family so later typing and reopening choose
+  // the same native face instead of falling back to a regular font again.
+  const writtenSpec =
+    font.substitution && font.family === STYLE_FALLBACK_FAMILY
+      ? { ...spec, style: { ...spec.style, fontFamily: font.family } }
+      : spec;
   const { ascent } = measurer.metrics(font.handle, spec.style.fontSize);
   const layout = layoutText({
     text: spec.text,
@@ -152,9 +169,10 @@ export function drawTextBox(
   });
   const geometry = context.geometry(pageIndex);
   const [r, g, b] = parseColor(spec.style.color);
-  const params = JSON.stringify(spec);
+  const params = JSON.stringify(writtenSpec);
   context.withPage(pageIndex, (page) => {
     const records = [];
+    const textObjects: number[] = [];
     let index = insertAt ?? -1;
     for (const line of layout.lines) {
       const object = lib.FPDFPageObj_CreateTextObj(
@@ -181,7 +199,27 @@ export function drawTextBox(
       );
       if (insertAt === undefined) lib.FPDFPage_InsertObject(page, object);
       else lib.FPDFPage_InsertObjectAtIndex(page, object, index++);
-      records.push({ id: spec.id, type: OBJECT_TEXT, mark: spec });
+      records.push({ id: spec.id, type: OBJECT_TEXT, mark: writtenSpec });
+      textObjects.push(object);
+    }
+    if (spec.style.underline) {
+      const textPage = lib.FPDFText_LoadPage(page);
+      try {
+        for (const object of textObjects) {
+          const path = createUnderline(pdfium, object, textPage);
+          if (!path)
+            throw new ViewerError(
+              "invalid-operation",
+              "This text box has no drawable underline geometry",
+            );
+          writeWebDocMark(pdfium, context.document, path, writtenSpec);
+          if (insertAt === undefined) lib.FPDFPage_InsertObject(page, path);
+          else lib.FPDFPage_InsertObjectAtIndex(page, path, index++);
+          records.push({ id: spec.id, type: OBJECT_PATH, mark: writtenSpec });
+        }
+      } finally {
+        lib.FPDFText_ClosePage(textPage);
+      }
     }
     if (insertAt === undefined) context.appendObjects(pageIndex, records);
     else context.spliceObjects(pageIndex, insertAt, 0, records);
@@ -294,8 +332,8 @@ export function fontRequestsOf(
   operations: readonly EditOperation[],
   markOf: (id: string) => MarkParams | undefined,
   elementOf: (id: string) => PdfElement | undefined,
-): { readonly family: string; readonly text: string }[] {
-  const requests: { family: string; text: string }[] = [];
+): FontPreparation[] {
+  const requests: FontPreparation[] = [];
   const spec = (id: string): TextBoxSpec | undefined => {
     const mark = markOf(id);
     return mark?.kind === "textBox"
@@ -307,55 +345,82 @@ export function fontRequestsOf(
     const operation = raw as PdfOperation;
     switch (operation.op) {
       case "insertTextBox":
-        requests.push({
-          family: operation.style?.fontFamily ?? "Helvetica",
-          text: operation.text,
-        });
+        requests.push(
+          fontPreparation(resolveStyle(operation.style ?? {}), operation.text),
+        );
         break;
       case "replaceParagraphText":
       case "replaceText": {
         const box = spec(operation.target);
         if (box) {
-          requests.push({ family: box.style.fontFamily, text: operation.text });
+          requests.push(fontPreparation(box.style, operation.text));
           break;
         }
         const element = elementOf(operation.target);
         if (element?.kind === "text" || element?.kind === "paragraph")
-          requests.push({
-            family: element.textStyle?.fontFamily ?? "Helvetica",
-            text:
+          requests.push(
+            fontPreparation(
+              element.textStyle ?? {
+                fontFamily: "Helvetica",
+                bold: false,
+                italic: false,
+              },
               element.kind === "paragraph" && operation.range
                 ? (element.text ?? "").slice(0, operation.range.start.offset) +
-                  operation.text +
-                  (element.text ?? "").slice(operation.range.end.offset)
+                    operation.text +
+                    (element.text ?? "").slice(operation.range.end.offset)
                 : operation.text,
-          });
+            ),
+          );
         break;
       }
       case "setTextStyle": {
         const paragraph = elementOf(operation.target);
         if (
+          paragraph?.textStyle &&
+          (operation.style.bold !== undefined ||
+            operation.style.italic !== undefined)
+        ) {
+          requests.push({
+            family:
+              operation.style.fontFamily ?? paragraph.textStyle.fontFamily,
+            text: paragraph.text ?? "",
+            face: {
+              bold: operation.style.bold ?? paragraph.textStyle.bold,
+              italic: operation.style.italic ?? paragraph.textStyle.italic,
+            },
+          });
+          break;
+        }
+        if (
           paragraph?.kind === "paragraph" &&
           operation.style.fontSize !== undefined &&
           operation.style.fontSize !== paragraph.textStyle?.fontSize
         )
-          requests.push({
-            family: paragraph.textStyle?.fontFamily ?? "Helvetica",
-            text: paragraph.text ?? "",
-          });
+          requests.push(
+            fontPreparation(
+              paragraph.textStyle ?? {
+                fontFamily: "Helvetica",
+                bold: false,
+                italic: false,
+              },
+              paragraph.text ?? "",
+            ),
+          );
         const box = spec(operation.target);
         if (box)
-          requests.push({
-            family: operation.style.fontFamily ?? box.style.fontFamily,
-            text: box.text,
-          });
+          requests.push(
+            fontPreparation(
+              { ...box.style, ...definedFields(operation.style) },
+              box.text,
+            ),
+          );
         break;
       }
       case "resizeElement":
       case "moveElement": {
         const box = spec(operation.target);
-        if (box)
-          requests.push({ family: box.style.fontFamily, text: box.text });
+        if (box) requests.push(fontPreparation(box.style, box.text));
         const grid = table(operation.target);
         if (grid)
           requests.push({
@@ -386,6 +451,19 @@ export function fontRequestsOf(
   return requests;
 }
 
+function fontPreparation(
+  style: Pick<PdfTextStyle, "fontFamily" | "bold" | "italic">,
+  text: string,
+): FontPreparation {
+  return {
+    family: style.fontFamily,
+    text,
+    ...(style.bold || style.italic
+      ? { face: { bold: style.bold, italic: style.italic } }
+      : {}),
+  };
+}
+
 export function fontRequest(
   style: TextBoxSpec["style"],
   text: string,
@@ -404,6 +482,19 @@ export function validateFont(
   issue: Issue,
 ): void {
   const problem = context.fonts.problem(request);
+  if (problem?.code === "unknown-font") {
+    issue(problem.path, problem.code, problem.message);
+    return;
+  }
+  if (request.bold || request.italic) {
+    const font = context.fonts.resolveStyle(
+      context.pdfium,
+      context.document,
+      request,
+    );
+    if ("code" in font) issue(font.path, font.code, font.message);
+    return;
+  }
   if (problem) issue(problem.path, problem.code, problem.message);
 }
 
@@ -452,6 +543,7 @@ export function resolveStyle(style: PdfTextBoxStyle): TextBoxSpec["style"] {
     fontSize: style.fontSize ?? 12,
     bold: style.bold ?? false,
     italic: style.italic ?? false,
+    ...(style.underline === undefined ? {} : { underline: style.underline }),
     color: style.color ?? "#000000",
     align: style.align ?? "left",
     lineHeight: style.lineHeight ?? 1.2,

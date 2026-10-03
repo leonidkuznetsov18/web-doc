@@ -281,7 +281,7 @@ export class PdfEditDocument {
    */
   fontRequests(
     operations: readonly PdfOrUnknownOperation[],
-  ): { readonly family: string; readonly text: string }[] {
+  ): ReturnType<typeof fontRequestsOf> {
     return fontRequestsOf(
       operations,
       (id) => this.#locate(id)?.record.mark,

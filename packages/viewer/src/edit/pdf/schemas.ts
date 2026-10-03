@@ -88,6 +88,7 @@ const definitions: Readonly<Record<string, JsonSchema>> = {
       fontSize: { type: "number", minimum: 1, maximum: 500 },
       bold: { type: "boolean" },
       italic: { type: "boolean" },
+      underline: { type: "boolean" },
       color: { $ref: "#/$defs/color" },
       align: { enum: ["left", "center", "right"] },
       lineHeight: { type: "number", minimum: 0.5, maximum: 5 },
@@ -403,6 +404,19 @@ export const paragraphMarkSchema: JsonSchema = {
       additionalProperties: false,
       properties: definitions.textBoxStyle!.properties as JsonSchema,
     },
+  },
+  $defs: definitions,
+};
+
+/** A native row and its validated underline, with no duplicated text or font inputs. */
+export const nativeTextMarkSchema: JsonSchema = {
+  type: "object",
+  required: ["kind", "id", "underline"],
+  additionalProperties: false,
+  properties: {
+    kind: { const: "text" },
+    id: { $ref: "#/$defs/target" },
+    underline: { const: true },
   },
   $defs: definitions,
 };

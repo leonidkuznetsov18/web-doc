@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 
 import { createPdfEditHandler } from "../../src/edit/pdf/engine/handler.js";
 import { loadPdfEditEngine } from "../../src/edit/pdf/provider.js";
@@ -51,6 +52,19 @@ export async function pdfSession(
               ),
             ),
           ));
+        const file = new URL(url).pathname.split("/").at(-1);
+        if (
+          options.fallbackFont &&
+          file &&
+          /^LiberationSans-(Regular|Bold|Italic|BoldItalic)\.ttf$/.test(file)
+        )
+          return new Uint8Array(
+            readFileSync(
+              createRequire(import.meta.url).resolve(
+                `pdfjs-dist/standard_fonts/${file}`,
+              ),
+            ),
+          );
         throw new Error(`No font at ${url}`);
       },
       decodeImage: async () => {

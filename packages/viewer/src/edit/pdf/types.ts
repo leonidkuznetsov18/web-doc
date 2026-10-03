@@ -40,6 +40,7 @@ export interface PdfTextStyle {
   readonly fontSize: number;
   readonly bold: boolean;
   readonly italic: boolean;
+  readonly underline?: boolean;
   /** `#RRGGBB`. */
   readonly color: string;
   /** Text boxes only. */
@@ -72,6 +73,7 @@ export interface PdfTextBoxStyle {
   readonly fontSize?: number;
   readonly bold?: boolean;
   readonly italic?: boolean;
+  readonly underline?: boolean;
   /** `#RRGGBB`, default "#000000". */
   readonly color?: string;
   readonly align?: PdfTextAlign;

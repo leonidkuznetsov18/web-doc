@@ -407,7 +407,7 @@ Every method takes the operation's fields and the usual `ApplyOptions`
 | `insertTextBox`        | `pageIndex`, `rect`, `text` (1–20 000 chars), `style?: PdfTextBoxStyle`                                                    | Wraps the text inside `rect`; the new element's id is `createdIds[0]`.                                                                                                                                                                                                                                                                         |
 | `replaceText`          | `target` (a `text`, `textBox` or canonical `paragraph`), `text`, `range?: TextRange` inside the target                     | A text box is laid out again; a canonical paragraph uses `replaceParagraphText`; a text object keeps its font, size, colour and baseline. With `range` only that part changes: a text object is split around it when only a fallback font can draw the new text, the first part keeping the id (`invalid-range` for a range outside the text). |
 | `replaceParagraphText` | `target` (a canonical `paragraph` id), `text` (up to 20 000 chars, empty clears), `range?: TextRange` inside the paragraph | Reflows the complete logical paragraph as one atomic Undo entry; overlap with neighboring content or the page edge is refused.                                                                                                                                                                                                                 |
-| `setTextStyle`         | `target` (a `text`, `textBox` or `paragraph`), `style: PdfTextBoxStyle`                                                    | Fields left out keep their value. Existing text objects accept `color` and `fontSize` only.                                                                                                                                                                                                                                                    |
+| `setTextStyle`         | `target` (a `text`, `textBox` or `paragraph`), `style: PdfTextBoxStyle`                                                    | Fields left out keep their value. Existing text objects and paragraphs accept `color`, `fontSize`, `bold`, `italic` and `underline`; they do not accept font-family, alignment or leading changes.                                                                                                                                                                                                                                                    |
 | `insertImage`          | `pageIndex`, `rect`, `data: BinaryData`, `mimeType: "image/png" \| "image/jpeg"`                                           | JPEG bytes are embedded as they are; PNG is decoded and stored losslessly with its alpha channel.                                                                                                                                                                                                                                              |
 | `insertShape`          | `pageIndex`, `shape: "rectangle" \| "ellipse"` with `rect`, or `shape: "line"` with `from` and `to`; `stroke?`, `fill?`    | A rectangle or ellipse needs a stroke, a fill or both; a line needs a stroke.                                                                                                                                                                                                                                                                  |
 | `setShapeStyle`        | `target` (a `shape`), `stroke?: PdfStroke \| null`, `fill?: PdfFill \| null`                                               | `null` removes; absent keeps. A shape keeps at least one of the two.                                                                                                                                                                                                                                                                           |
@@ -440,6 +440,7 @@ interface PdfTextBoxStyle {
   fontSize?: number; // 1–500 pt, default 12
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean; // native PDF paths, whole element only
   color?: string; // "#RRGGBB", default "#000000"
   align?: "left" | "center" | "right"; // default "left"
   lineHeight?: number; // multiple of the font size, 0.5–5, default 1.2
@@ -482,6 +483,7 @@ interface PdfTextStyle {
   fontSize: number; // points
   bold: boolean;
   italic: boolean;
+  underline?: boolean; // web-doc-owned native decoration
   color: string;
 }
 ```
@@ -492,7 +494,7 @@ interface PdfTextStyle {
 | `image`     | An image object                                                                                                 | `moveElement`, `resizeElement`, `deleteElement`                                         |
 | `shape`     | A path object                                                                                                   | `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement`                        |
 | `textBox`   | A box created by `insertTextBox`; its lines are listed as one element                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`          |
-| `paragraph` | A confidently recognized homogeneous imported paragraph; native rows become one persisted element when reflowed | `replaceText`, `replaceParagraphText`, `setTextStyle` (color/fontSize), `deleteElement` |
+| `paragraph` | A confidently recognized homogeneous imported paragraph; native rows become one persisted element when reflowed | `replaceText`, `replaceParagraphText`, `setTextStyle` (color/fontSize/bold/italic/underline), `deleteElement` |
 | `table`     | A table created by `insertTable`; `text` joins cells by tab and newline                                         | `setTableCell`, `moveElement`, `deleteElement`                                          |
 | `other`     | Shadings, form XObjects and anything else                                                                       | `moveElement`, `resizeElement`, `deleteElement`                                         |
 
@@ -538,10 +540,10 @@ adjustments are accepted only when default pairs outnumber adjusted pairs
 and both each adjustment and cumulative drift stay within 0.1 em. Systematic
 tracking, custom word spacing and larger unexplained positioning remain
 per-object. Text and font-size reflow recompute default advances; accepted
-source pair positioning is not preserved. Color-only changes preserve it.
+source pair positioning is not preserved. Color-only and underline-only changes preserve it.
 
 An unwritable source font, including embedded CFF or a subset without a mapped
-space glyph, can still provide a full paragraph read and native color-only
+space glyph, can still provide a full paragraph read and native color-only and underline-only
 changes; replacement uses an explicit `font-substitution` warning. That
 substitution also changes wrapping and spacing. It is not a promise of native
 font fidelity. Paragraph font sizes are canonicalized to the engine's
@@ -586,9 +588,30 @@ Fonts are chosen in this order:
 2. A TrueType or OpenType font registered through `ViewerClientOptions.fonts`
    whose family matches `fontFamily` (case-insensitively) and whose `cmap`
    covers the text. The font file is embedded whole; subsetting is not done.
-3. The bundled Noto Sans Latin/Cyrillic fallback, fetched the first time it is
-   needed. Using it, or a registered family without the requested bold or
-   italic face, adds a `font-substitution` warning.
+3. For a regular request, the bundled Noto Sans Latin/Cyrillic fallback,
+   fetched the first time it is needed. For bold or italic, a covering real
+   Liberation Sans variant from the existing PDF.js font assets is used when
+   the requested family has no matching face. Substitution adds an explicit
+   `font-substitution` warning and persists the actual family for subsequent
+   typing and reopening. Registered face metadata and native font flags must
+   agree; regular bytes are never silently used for a bold or italic request.
+
+Whole-element bold and italic select real font faces and may change glyph
+widths. Imported paragraphs reflow atomically within their existing frame and
+reject overlap or overflow; imported single rows keep their native text matrix
+and baseline. An unavailable covering styled face is rejected atomically.
+
+Underline-only changes retain the original text objects, embedded font, glyph
+positions, text matrix and fill opacity. Owned native filled line paths follow
+the actual glyph baselines and travel with move, resize, hide and deletion;
+Undo/Redo and Save/reopen preserve their ownership. Removing underline removes
+only those validated paths. This supports axis-aligned and quarter-turned text
+matrices; arbitrary rotations/skew are rejected because their native advance
+boxes cannot provide faithful line geometry. The new B/I/U styles require filled
+text: invisible OCR, stroked or clipping text is refused rather than changing
+its visibility. There is no range-style API. Empty imported paragraphs remain
+editable; the existing `replaceText` nonempty constraint for single rows and
+textboxes is unchanged.
 
 An unknown `fontFamily` is an issue coded `unknown-font`; text no available
 font covers is `font-unavailable`; right-to-left and complex-script text is
