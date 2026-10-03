@@ -503,7 +503,11 @@ elements an operation created. A file saved by an earlier session already
 carries such ids, so a new element whose id one of them has takes the first
 free `~n` after it, as in `p0:n2.0.0~1`. They are stable for the whole session —
 across undo, redo and page moves — and the same history always yields the
-same ids. Text boxes and tables are parametric: their objects carry a
+same ids. Changed pages also persist each Form drawing's object identity tree,
+so removing or splitting a child does not renumber its siblings when a saved
+checkpoint is restored. Invalid, oversized or structurally stale identity
+metadata falls back to native path discovery; it cannot borrow another object’s
+id on the page. Text boxes and tables are parametric: their objects carry a
 `WebDoc` marked-content tag holding the inputs they were drawn from, so they
 are listed as one element again after `save()` and a later `edit()` of the
 saved file, in this or another session. A tag that fails validation leaves its

@@ -4,6 +4,9 @@ import { objectMatrix, OBJECT_FORM } from "./elements.js";
 import { concat, invert, type Matrix } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
 
+/** One depth contract for native object discovery and saved identity trees. */
+export const MAX_FORM_DEPTH = 16;
+
 /*
  * Objects inside Form XObjects. PDFium parses a form's objects but never
  * writes changes to them back: only the page's own content is regenerated.

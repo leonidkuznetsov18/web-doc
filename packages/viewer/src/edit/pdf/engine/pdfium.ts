@@ -388,6 +388,13 @@ export interface PdfiumRuntime {
   readonly wasmExports: {
     malloc(size: number): number;
     free(pointer: number): void;
+    FPDFPageObjMark_SetStringParam(
+      document: number,
+      object: number,
+      mark: number,
+      key: number,
+      value: number,
+    ): number;
   };
   UTF16ToString(pointer: number, maxBytesToRead?: number): string;
   stringToUTF16(
@@ -477,6 +484,34 @@ export class Pdfium {
     return this.#runtime.HEAPU8.slice(pointer, pointer + length);
   }
 
+  /** Heap buffers keep large metadata out of Emscripten's small call stack. */
+  setMarkString(
+    document: number,
+    object: number,
+    mark: number,
+    key: string,
+    value: string,
+  ): boolean {
+    const encoder = new TextEncoder();
+    const keyPointer = this.writeBytes(encoder.encode(`${key}\0`));
+    try {
+      const valuePointer = this.writeBytes(encoder.encode(`${value}\0`));
+      try {
+        return !!this.#runtime.wasmExports.FPDFPageObjMark_SetStringParam(
+          document,
+          object,
+          mark,
+          keyPointer,
+          valuePointer,
+        );
+      } finally {
+        this.free(valuePointer);
+      }
+    } finally {
+      this.free(keyPointer);
+    }
+  }
+
   /** Writes a NUL-terminated UTF-16LE string; the caller frees the pointer. */
   writeWideString(text: string): number {
     const bytes = (text.length + 1) * 2;
@@ -512,12 +547,13 @@ export class Pdfium {
    */
   readWideStringOut(
     read: (buffer: number, bytes: number, outBytes: number) => boolean,
+    maxBytes = Infinity,
   ): string {
     const outBytes = this.malloc(4);
     try {
       if (!read(0, 0, outBytes)) return "";
       const bytes = this.#runtime.getValue(outBytes, "i32");
-      if (bytes <= 2) return "";
+      if (bytes <= 2 || bytes > maxBytes) return "";
       const pointer = this.malloc(bytes);
       try {
         if (!read(pointer, bytes, outBytes)) return "";

@@ -48,10 +48,12 @@ import {
   formChildren,
   formsMatrix,
   graphicsStatesResolve,
+  MAX_FORM_DEPTH,
   objectAt,
   rewriteForms,
 } from "./forms.js";
 import { FontLibrary, TextMeasurer } from "./fonts.js";
+import { readFormIds, writeFormIds } from "./form-ids.js";
 import { textFaceOf, type TextFace } from "./text-font.js";
 import { fontRequestsOf } from "./text-box.js";
 import {
@@ -120,8 +122,6 @@ export type DocumentFeature = "docmdp" | "tagged" | "pdfa";
  */
 /** FPDFBitmap_CreateEx pixel format with alpha. */
 const BITMAP_BGRA = 4;
-/** Forms nested deeper are kept whole; PDFium itself stops parsing around here. */
-const MAX_FORM_DEPTH = 16;
 /** Size of the renders that check a form rewrite. */
 const FAITHFUL_RENDER_PIXELS = 2_000_000;
 /** A channel may differ by this much before a pixel counts as changed. */
@@ -1215,6 +1215,16 @@ export class PdfEditDocument {
     for (const [pageIndex, page] of written) {
       written.delete(pageIndex);
       try {
+        const records = this.#pages[pageIndex]!.objects ?? [];
+        records.forEach((record, index) => {
+          if (record.children)
+            writeFormIds(
+              this.#pdfium,
+              this.#document.handle,
+              lib.FPDFPage_GetObject(page, index),
+              record,
+            );
+        });
         if (!lib.FPDFPage_GenerateContent(page))
           throw new ViewerError(
             "edit-failed",
@@ -1329,7 +1339,7 @@ export class PdfEditDocument {
         lib.FPDFText_ClosePage(textPage);
       }
     }
-    record.objects = objects.map((object, index) =>
+    const normalized = objects.map((object, index) =>
       object.mark && stale.has(object.id)
         ? {
             id: `${record.key}:o${index}`,
@@ -1338,6 +1348,32 @@ export class PdfEditDocument {
           }
         : object,
     );
+    // Checkpoint bytes must retain the live identities even after siblings
+    // were removed or split. A tree cannot borrow another page object's id.
+    const owners = new Map<string, Set<number>>();
+    eachObject(normalized, [], (record, path) => {
+      const indexes = owners.get(record.id) ?? new Set<number>();
+      indexes.add(path[0]!);
+      owners.set(record.id, indexes);
+    });
+    normalized.forEach((object, index) => {
+      if (!object.children) return;
+      const saved = readFormIds(
+        this.#pdfium,
+        lib.FPDFPage_GetObject(page, index),
+        this.#pages[pageIndex]!.key,
+        (id) => [...(owners.get(id) ?? [])].some((owner) => owner !== index),
+      );
+      if (!saved) return;
+      eachObject([object], [], (old) => owners.get(old.id)?.delete(index));
+      eachObject([saved], [], (next) => {
+        const indexes = owners.get(next.id) ?? new Set<number>();
+        indexes.add(index);
+        owners.set(next.id, indexes);
+      });
+      normalized[index] = saved;
+    });
+    record.objects = normalized;
     return record.objects;
   }
 
