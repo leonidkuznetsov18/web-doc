@@ -6,6 +6,7 @@ import {
   textBoxMarkSchema,
   paragraphMarkSchema,
   nativeTextMarkSchema,
+  emptyTextMarkSchema,
 } from "../schemas.js";
 import type { PdfElement, PdfShapeStyle, PdfTextStyle } from "../types.js";
 import {
@@ -30,12 +31,31 @@ export const OBJECT_IMAGE = 3;
 /** Marked-content tag and parameter that carry web-doc's own elements. */
 export const MARK_NAME = "WebDoc";
 export const MARK_PARAM = "webdoc";
+const EMPTY_FRAME_PRECISION = 0.002;
 
 /** What a `WebDoc` mark says about the objects it tags. */
 export interface MarkParams {
   readonly kind: "textBox" | "table" | "paragraph" | "text";
   readonly id: string;
   readonly [key: string]: unknown;
+}
+
+export interface EmptyTextMark extends MarkParams {
+  readonly kind: "text";
+  readonly empty: {
+    readonly style: PdfTextStyle;
+    /** Intrinsic PDF font size, before the path's retained text matrix. */
+    readonly fontSize: number;
+    readonly opacity: number;
+  };
+}
+
+export function emptyTextMarkOf(
+  mark: MarkParams | undefined,
+): EmptyTextMark | undefined {
+  return mark && validateSchema(mark, emptyTextMarkSchema, 0).length === 0
+    ? (mark as EmptyTextMark)
+    : undefined;
 }
 
 export function paragraphSpecOf(mark: unknown): ParagraphSpec | undefined {
@@ -212,6 +232,25 @@ export function markIsFresh(
   const paths = objects.filter(
     (object) => lib.FPDFPageObj_GetType(object) === OBJECT_PATH,
   );
+  if (emptyTextMarkOf(mark) || (mark.kind === "textBox" && mark.text === "")) {
+    if (objects.length !== 1 || paths.length !== 1) return false;
+    const object = objects[0]!;
+    const mode = pdfium.readNumbers(2, "i32", ([fill, stroke]) =>
+      lib.FPDFPath_GetDrawMode(object, fill!, stroke!),
+    );
+    const color = pdfium.readNumbers(4, "i32", ([r, g, b, a]) =>
+      lib.FPDFPageObj_GetFillColor(object, r!, g!, b!, a!),
+    );
+    if (mode?.[0] !== 1 || mode[1] !== 0 || color?.[3] !== 0) return false;
+    if (mark.kind === "textBox") {
+      const rect = mark.rect as PageRect;
+      return (["x", "y", "width", "height"] as const).every(
+        (field) =>
+          Math.abs(union[field] - rect[field]) <= EMPTY_FRAME_PRECISION,
+      );
+    }
+    return true;
+  }
   const styled =
     typeof mark.style === "object" &&
     mark.style !== null &&
@@ -359,6 +398,22 @@ function plainElement(
     bounds,
     ...(rotation === 0 ? {} : { rotation }),
   };
+  const empty = emptyTextMarkOf(record.mark);
+  if (empty) {
+    const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
+      pdfium.lib.FPDFPageObj_GetMatrix(object, pointer!),
+    );
+    return {
+      ...base,
+      kind: "text",
+      text: "",
+      textStyle: {
+        ...empty.empty.style,
+        fontSize: round(empty.empty.fontSize * textScale(matrix)),
+      },
+      operations: TEXT_OPERATIONS,
+    };
+  }
   switch (record.type) {
     case OBJECT_TEXT:
       return {
@@ -399,7 +454,7 @@ function compositeElement(
       return {
         ...text,
         bounds,
-        ...(text.textStyle
+        ...(text.textStyle && !emptyTextMarkOf(mark)
           ? { textStyle: { ...text.textStyle, underline: true } }
           : {}),
       };
@@ -446,7 +501,18 @@ function compositeElement(
             "deleteElement",
           ],
     };
-  const style = members.find((member) => member.textStyle)?.textStyle;
+  const stored = mark.text === "" ? (mark.style as PdfTextStyle) : undefined;
+  const style =
+    members.find((member) => member.textStyle)?.textStyle ??
+    (stored
+      ? {
+          fontFamily: stored.fontFamily,
+          fontSize: stored.fontSize,
+          bold: stored.bold,
+          italic: stored.italic,
+          color: stored.color,
+        }
+      : undefined);
   return {
     id: mark.id,
     kind: "textBox",

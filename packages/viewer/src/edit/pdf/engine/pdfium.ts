@@ -85,6 +85,8 @@ export interface PdfiumFunctions {
   ): boolean;
   /** Six floats a, b, c, d, e, f. */
   FPDFPageObj_GetMatrix(object: number, matrix: number): boolean;
+  /** Eight floats: the native transformed rectangle's four x/y corners. */
+  FPDFPageObj_GetRotatedBounds(object: number, quadrilateral: number): boolean;
   FPDFPageObj_GetFillColor(
     object: number,
     r: number,

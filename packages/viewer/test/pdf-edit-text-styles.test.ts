@@ -151,7 +151,7 @@ describe("native PDF basic text styles", () => {
     }
   });
 
-  it("refuses new face and underline changes on non-filled native text atomically", async () => {
+  it("refuses face, underline and full-clear changes on non-filled native text atomically", async () => {
     const pdfium = await fixturePdfium();
     for (const mode of [1, 3]) {
       const document = pdfium.openDocument(await buildPdf(["Native mode"]));
@@ -186,35 +186,16 @@ describe("native PDF basic text styles", () => {
           assert.equal(await raster(session), pixels);
           assert.equal(session.state.canUndo, false);
         }
+        await assert.rejects(
+          session.replaceText({ target: "p0:o0", text: "" }),
+          /filled text/,
+        );
+        assert.deepEqual((await session.save()).bytes, bytes);
+        assert.equal(await raster(session), pixels);
+        assert.equal(session.state.canUndo, false);
       } finally {
         await end();
       }
-    }
-  });
-
-  it("preserves the existing empty-row rejection without dropping underline or history", async () => {
-    const { session, end } = await pdfSession(await buildPdf(["Clear this"]));
-    try {
-      await underline(session, "p0:o0");
-      const before = (await session.save()).bytes;
-      const pixels = await raster(session);
-      await assert.rejects(
-        session.replaceText({ target: "p0:o0", text: "" }),
-        /at least 1/,
-      );
-      assert.deepEqual((await session.save()).bytes, before);
-      assert.equal(await raster(session), pixels);
-      assert.equal(
-        (await session.getElement("p0:o0")).item?.textStyle?.underline,
-        true,
-      );
-      await session.undo();
-      assert.equal(
-        (await session.getElement("p0:o0")).item?.textStyle?.underline,
-        undefined,
-      );
-    } finally {
-      await end();
     }
   });
 

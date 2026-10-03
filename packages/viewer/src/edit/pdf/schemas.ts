@@ -152,7 +152,7 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       "replaceText",
       {
         target: { $ref: "#/$defs/target" },
-        text: { type: "string", minLength: 1, maxLength: 20000 },
+        text: { type: "string", maxLength: 20000 },
         range: { $ref: "#/$defs/textRange" },
       },
       ["target", "text"],
@@ -356,7 +356,7 @@ export const textBoxMarkSchema: JsonSchema = {
     kind: { const: "textBox" },
     id: { $ref: "#/$defs/target" },
     rect: { $ref: "#/$defs/rect" },
-    text: { type: "string", minLength: 1, maxLength: 20000 },
+    text: { type: "string", maxLength: 20000 },
     style: {
       type: "object",
       required: [
@@ -409,7 +409,7 @@ export const paragraphMarkSchema: JsonSchema = {
 };
 
 /** A native row and its validated underline, with no duplicated text or font inputs. */
-export const nativeTextMarkSchema: JsonSchema = {
+const underlinedTextMarkSchema: JsonSchema = {
   type: "object",
   required: ["kind", "id", "underline"],
   additionalProperties: false,
@@ -418,5 +418,44 @@ export const nativeTextMarkSchema: JsonSchema = {
     id: { $ref: "#/$defs/target" },
     underline: { const: true },
   },
+  $defs: definitions,
+};
+
+/** A cleared native row has no glyph object; its path retains the native matrix. */
+export const emptyTextMarkSchema: JsonSchema = {
+  type: "object",
+  required: ["kind", "id", "empty"],
+  additionalProperties: false,
+  properties: {
+    kind: { const: "text" },
+    id: { $ref: "#/$defs/target" },
+    empty: {
+      type: "object",
+      required: ["style", "fontSize", "opacity"],
+      additionalProperties: false,
+      properties: {
+        fontSize: { type: "number", exclusiveMinimum: 0 },
+        opacity: { type: "integer", minimum: 0, maximum: 255 },
+        style: {
+          type: "object",
+          required: ["fontFamily", "fontSize", "bold", "italic", "color"],
+          additionalProperties: false,
+          properties: {
+            fontFamily: { type: "string", minLength: 1 },
+            fontSize: { type: "number", exclusiveMinimum: 0 },
+            bold: { type: "boolean" },
+            italic: { type: "boolean" },
+            underline: { type: "boolean" },
+            color: { $ref: "#/$defs/color" },
+          },
+        },
+      },
+    },
+  },
+  $defs: definitions,
+};
+
+export const nativeTextMarkSchema: JsonSchema = {
+  oneOf: [underlinedTextMarkSchema, emptyTextMarkSchema],
   $defs: definitions,
 };

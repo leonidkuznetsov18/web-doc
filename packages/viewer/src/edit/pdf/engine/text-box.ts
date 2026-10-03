@@ -91,6 +91,7 @@ export const textBoxReplaceText: OperationHandler<ReplaceTextOperation> = {
   validate(operation, context, issue) {
     const target = textBoxTarget(operation.target, context, issue);
     if (!target) return;
+    if (operation.text === "") return;
     validateFont(
       fontRequest(target.spec.style, operation.text),
       context,
@@ -144,6 +145,44 @@ export function drawTextBox(
 ): DrawnTextBox {
   const { pdfium, measurer } = context;
   const { lib } = pdfium;
+  if (spec.text === "") {
+    const geometry = context.geometry(pageIndex);
+    const { rect } = spec;
+    const corners = [
+      pageToUser(geometry, rect.x, rect.y),
+      pageToUser(geometry, rect.x + rect.width, rect.y),
+      pageToUser(geometry, rect.x + rect.width, rect.y + rect.height),
+      pageToUser(geometry, rect.x, rect.y + rect.height),
+    ];
+    context.withPage(pageIndex, (page) => {
+      const object = lib.FPDFPageObj_CreateNewPath(
+        corners[0]!.x,
+        corners[0]!.y,
+      );
+      if (!object)
+        throw new ViewerError(
+          "edit-failed",
+          "PDFium could not retain the empty text box",
+        );
+      for (const corner of corners.slice(1))
+        lib.FPDFPath_LineTo(object, corner.x, corner.y);
+      lib.FPDFPath_Close(object);
+      // Empty text objects are discarded on reopening; this marked zero-alpha
+      // frame survives without painting or exporting a placeholder glyph.
+      lib.FPDFPageObj_SetFillColor(object, 0, 0, 0, 0);
+      lib.FPDFPath_SetDrawMode(object, 1, false);
+      writeWebDocMark(pdfium, context.document, object, spec);
+      const records = [{ id: spec.id, type: OBJECT_PATH, mark: spec }];
+      if (insertAt === undefined) {
+        lib.FPDFPage_InsertObject(page, object);
+        context.appendObjects(pageIndex, records);
+      } else {
+        lib.FPDFPage_InsertObjectAtIndex(page, object, insertAt);
+        context.spliceObjects(pageIndex, insertAt, 0, records);
+      }
+    });
+    return { overflow: false };
+  }
   const request = fontRequest(spec.style, spec.text);
   const font =
     request.bold || request.italic
@@ -352,11 +391,20 @@ export function fontRequestsOf(
       case "replaceParagraphText":
       case "replaceText": {
         const box = spec(operation.target);
+        const element = elementOf(operation.target);
+        const previous = box?.text ?? element?.text ?? "";
+        if (
+          element?.kind !== "paragraph" &&
+          operation.text === "" &&
+          (!operation.range ||
+            (operation.range.start.offset === 0 &&
+              operation.range.end.offset === previous.length))
+        )
+          break;
         if (box) {
           requests.push(fontPreparation(box.style, operation.text));
           break;
         }
-        const element = elementOf(operation.target);
         if (element?.kind === "text" || element?.kind === "paragraph")
           requests.push(
             fontPreparation(
