@@ -685,6 +685,11 @@ reads describe the deck: `getSlides()` lists the slides in order with a key
 that survives reordering (`"sld3"`, the slide part's number) and their
 layout; `getLayouts()` lists every layout of every master with its id
 (`"layout2"`), name and type, for `insertSlide`.
+`getTextStyle({ target, range? })` reads the text style a range of a
+shape's text shows: each property every run it covers shares, one they
+differ on left out, so a host can toggle bold over a range that is partly
+bold. Without a range it reads the whole text; a collapsed range reads the
+run before it, whose style text typed there takes.
 
 ### Methods
 
@@ -893,6 +898,7 @@ sizes and spacing are points.
 | `insertTable({ before \| after, rows, columnWidths? })`  | Adds a table next to a paragraph or table of the body (not inside a cell): a grid over the section's content width from the relative `columnWidths` (equal when omitted), the `TableGrid` style when the document defines it or single borders otherwise, one paragraph per cell with the cell's text (newlines become line breaks), and an empty paragraph after the table when the next block would be a table or the end of the body. `createdIds` names the table, then every cell paragraph, then that trailing paragraph. 1–100 rows, 1–20 columns. |
 | `setTableCell({ target, row, column, text })`            | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                                                                                                                                                                                                                              |
 | `getRevisions(elementId, options?)`                      | A read: the tracked changes a paragraph holds, in document order (`ins`, `del`, `moveFrom`, `moveTo`, `rPrChange`, `pPrChange` with `id`, `author`, `date`, `scope` and the text they cover); empty for other elements.                                                                                                                                                                                                                                                                                                                                   |
+| `getTextStyle({ target, range? }, options?)`             | A read: the style a range of a paragraph shows, each property every run it covers shares and one they differ on left out; the whole paragraph without a range, the run before a collapsed range, the paragraph mark for an empty paragraph. `undefined` past the text or for other elements.                                                                                                                                                                                                                                                              |
 
 A table is named after its first paragraph, so an insertion, a move or a
 deletion that changes which paragraph comes first in its first cell

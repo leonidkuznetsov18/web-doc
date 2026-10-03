@@ -13,9 +13,15 @@ import type {
   ElementQuery,
   PagePoint,
 } from "../types.js";
+import type { TextSpan } from "../range-style.js";
 import { PptxEditEngine } from "./engine.js";
 
 type OoxmlEngine = PptxEditEngine | DocxEditEngine;
+
+interface TextStylePayload {
+  readonly id: string;
+  readonly span?: TextSpan;
+}
 
 /**
  * Serves the edit worker protocol for one OOXML document. It runs inside
@@ -158,6 +164,14 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
           (payload as { readonly id: string }).id,
           signal,
         );
+      case "edit-docx-text-style": {
+        const { id, span } = payload as TextStylePayload;
+        return docx().textStyle(id, span, signal);
+      }
+      case "edit-pptx-text-style": {
+        const { id, span } = payload as TextStylePayload;
+        return pptx().textStyle(id, span, signal);
+      }
       case "edit-dispose":
         await state?.dispose();
         state = undefined;

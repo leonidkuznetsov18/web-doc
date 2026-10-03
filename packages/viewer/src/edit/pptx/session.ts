@@ -31,9 +31,11 @@ import type {
   ReadOptions,
   ReadResult,
   SavedDocument,
+  TextRange,
   TextTarget,
 } from "../types.js";
 import type { PptxEngineReads } from "./engine.js";
+import { spanOnTarget } from "../range-style.js";
 import type {
   PptxDeleteElementOperation,
   PptxDeleteSlideOperation,
@@ -56,6 +58,7 @@ import type {
   PptxSetTableCellOperation,
   PptxSetTextStyleOperation,
   PptxSlideInfo,
+  PptxTextStyle,
 } from "./types.js";
 
 /**
@@ -209,6 +212,16 @@ export class PptxSession implements PptxEditSession {
     );
   }
 
+  async getTextStyle(
+    fields: { readonly target: string; readonly range?: TextRange },
+    options?: ReadOptions,
+  ): Promise<ReadItem<Partial<PptxTextStyle>>> {
+    const span = spanOnTarget(fields.target, fields.range);
+    return this.#core.readItem(options, (engine, signal) =>
+      pptxReads(engine).textStyle(fields.target, span, signal),
+    );
+  }
+
   replaceText(
     fields: PptxFields<PptxReplaceTextOperation>,
     options?: ApplyOptions,
@@ -313,7 +326,8 @@ function pptxReads(engine: EditEngine): PptxEngineReads {
   const candidate = engine as Partial<PptxEngineReads>;
   if (
     typeof candidate.slides !== "function" ||
-    typeof candidate.layouts !== "function"
+    typeof candidate.layouts !== "function" ||
+    typeof candidate.textStyle !== "function"
   )
     throw new ViewerError(
       "edit-unsupported",

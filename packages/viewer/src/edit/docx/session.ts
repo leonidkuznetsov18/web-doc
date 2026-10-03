@@ -22,6 +22,7 @@ import type {
   EditSessionCore,
 } from "../engine.js";
 import type { DocxEngineReads } from "./engine.js";
+import { spanOnTarget } from "../range-style.js";
 import type {
   ApplyOptions,
   AssetOptions,
@@ -39,6 +40,7 @@ import type {
   ReadOptions,
   ReadResult,
   SavedDocument,
+  TextRange,
   TextTarget,
 } from "../types.js";
 import type {
@@ -57,6 +59,7 @@ import type {
   DocxSetParagraphStyleOperation,
   DocxSetTableCellOperation,
   DocxSetTextStyleOperation,
+  DocxTextStyle,
 } from "./types.js";
 
 /*
@@ -280,6 +283,16 @@ export class DocxSession implements DocxEditSession {
   ): Promise<ReadResult<DocxRevision>> {
     return this.#core.readItems(options, (engine, signal) =>
       docxReads(engine).revisions(elementId, signal),
+    );
+  }
+
+  async getTextStyle(
+    fields: { readonly target: string; readonly range?: TextRange },
+    options?: ReadOptions,
+  ): Promise<ReadItem<Partial<DocxTextStyle>>> {
+    const span = spanOnTarget(fields.target, fields.range);
+    return this.#core.readItem(options, (engine, signal) =>
+      docxReads(engine).textStyle(fields.target, span, signal),
     );
   }
 
@@ -710,7 +723,10 @@ function matchesQuery(element: DocxElement, query: ElementQuery): boolean {
 
 function docxReads(engine: EditEngine): DocxEngineReads {
   const candidate = engine as Partial<DocxEngineReads>;
-  if (typeof candidate.revisions !== "function")
+  if (
+    typeof candidate.revisions !== "function" ||
+    typeof candidate.textStyle !== "function"
+  )
     throw new ViewerError(
       "edit-unsupported",
       "The engine does not provide the DOCX reads",
