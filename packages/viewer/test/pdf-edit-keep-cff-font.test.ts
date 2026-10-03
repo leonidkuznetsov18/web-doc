@@ -70,3 +70,115 @@ describe("editing text in an embedded CFF subset", () => {
     });
   }
 });
+
+describe("CFF text beside another text object", () => {
+  for (const text of ["BA", "B A", "BA "]) {
+    it(`keeps the original font and rendered glyphs for ${JSON.stringify(text)} through save/reopen`, async () => {
+      const original = cffInkTextPdf(
+        `BT /F1 24 Tf 72 700 Td (AB) Tj ET
+BT /F1 24 Tf 140 700 Td (AB) Tj ET
+BT /F1 24 Tf 72 650 Td (${text}) Tj ET
+BT /F1 24 Tf 140 650 Td (AB) Tj ET`,
+      );
+      const { session, end } = await pdfSession(original, {
+        fallbackFont: true,
+      });
+      try {
+        const font = (await session.getTextFont("p0:o0")).item;
+        assert.ok(font);
+        // PDFium's reading-order extraction appends the gap before the next
+        // object, although the source object's string contains only "AB".
+        assert.equal((await session.getElement("p0:o0")).item?.text, "AB ");
+        const before = (await session.renderPageWithout(0, [])).item;
+        assert.ok(before);
+        const reference = band(before, 650);
+        assert.ok(inked(reference));
+
+        const receipt = await session.replaceText({ target: "p0:o0", text });
+        assert.deepEqual(receipt.warnings, []);
+        assert.equal((await session.getTextFont("p0:o0")).item?.key, font.key);
+        const layout = (await session.getTextLayout("p0:o0")).item;
+        assert.ok(layout);
+        assert.equal(
+          layout.lines[0]?.text,
+          text,
+          "authored spaces survive; the generated gap is not a source glyph",
+        );
+        const edited = (await session.renderPageWithout(0, [])).item;
+        assert.ok(edited);
+        assert.deepEqual(band(edited, 700), reference);
+
+        const reopened = await pdfSession((await session.save()).bytes);
+        try {
+          assert.equal(
+            (await reopened.session.getTextFont("p0:o0")).item?.key,
+            font.key,
+          );
+          assert.equal(
+            (await reopened.session.getElement("p0:o0")).item?.text,
+            text.endsWith(" ") ? text : `${text} `,
+          );
+          assert.equal(
+            (await reopened.session.getTextLayout("p0:o0")).item?.lines[0]
+              ?.text,
+            text,
+          );
+          const saved = (await reopened.session.renderPageWithout(0, [])).item;
+          assert.ok(saved);
+          assert.deepEqual(band(saved, 700), reference);
+        } finally {
+          await reopened.end();
+        }
+        await session.undo();
+        assert.equal((await session.getElement("p0:o0")).item?.text, "AB ");
+        assert.equal((await session.getTextFont("p0:o0")).item?.key, font.key);
+        assert.deepEqual(
+          (await session.renderPageWithout(0, [])).item?.data,
+          before.data,
+        );
+        await session.redo();
+        assert.equal((await session.getTextFont("p0:o0")).item?.key, font.key);
+        assert.deepEqual((await session.getTextLayout("p0:o0")).item, layout);
+        assert.deepEqual(
+          (await session.renderPageWithout(0, [])).item?.data,
+          edited.data,
+        );
+      } finally {
+        await end();
+      }
+    });
+  }
+
+  it("does not ignore deliberate trailing spaces lost by native text extraction", async () => {
+    const { session, end } = await pdfSession(
+      cffInkTextPdf(
+        "BT /F1 24 Tf 72 700 Td (AB) Tj ET\nBT /F1 24 Tf 140 700 Td (AB) Tj ET",
+      ),
+      { fallbackFont: true },
+    );
+    try {
+      const font = (await session.getTextFont("p0:o0")).item;
+      assert.ok(font);
+      // PDFium collapses these two authored spaces to one in its read-back.
+      // That mismatch must still take the existing font fallback path.
+      const receipt = await session.replaceText({
+        target: "p0:o0",
+        text: "BA  ",
+      });
+      assert.equal(receipt.warnings[0]?.code, "font-substitution");
+      assert.notEqual((await session.getTextFont("p0:o0")).item?.key, font.key);
+      assert.equal((await session.getElement("p0:o0")).item?.text, "BA ");
+      const reopened = await pdfSession((await session.save()).bytes);
+      try {
+        assert.notEqual(
+          (await reopened.session.getTextFont("p0:o0")).item?.key,
+          font.key,
+        );
+      } finally {
+        await reopened.end();
+      }
+    } finally {
+      await end();
+    }
+  });
+});

@@ -56,9 +56,11 @@ export function cffTextPdf(): Uint8Array {
  * Three lines in an inked CFF subset: "AB", "BA" and "A B". The PDF gives
  * widths to the space, "0", "A" and "B"; the program has glyphs for the
  * space, "A", "B" and "a". So "0" has a width and no glyph, and "a" a glyph
- * and no width.
+ * and no width. Pass a content stream to arrange other strings in the same font.
  */
-export function cffInkTextPdf(): Uint8Array {
+export function cffInkTextPdf(
+  content = "BT /F1 24 Tf 72 700 Td (AB) Tj ET\nBT /F1 24 Tf 72 650 Td (BA) Tj ET\nBT /F1 24 Tf 72 600 Td (A B) Tj ET",
+): Uint8Array {
   const program = cffFont({
     name: "ABCDEF+InkFace",
     glyphs: [
@@ -86,11 +88,7 @@ export function cffInkTextPdf(): Uint8Array {
     `<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+InkFace /FirstChar 32 /LastChar 66 /Widths [${widths.join(" ")}] /Encoding /WinAnsiEncoding /FontDescriptor 5 0 R >>`,
     descriptor("ABCDEF+InkFace"),
     stream(program, "/Subtype /Type1C"),
-    stream(
-      latin1(
-        "BT /F1 24 Tf 72 700 Td (AB) Tj ET\nBT /F1 24 Tf 72 650 Td (BA) Tj ET\nBT /F1 24 Tf 72 600 Td (A B) Tj ET",
-      ),
-    ),
+    stream(latin1(content)),
   ]);
 }
 
