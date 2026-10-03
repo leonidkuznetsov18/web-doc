@@ -971,11 +971,18 @@ Elements inside the fallback branch of `mc:AlternateContent` are listed with
 no operations. Only the slide's own shapes are listed: what the renderer
 composes from the layout or master is not editable here.
 
-`elementsAt()` lists the elements under a point top-most first, groups after
-their children. In a viewer it also lists, before them, a shape whose text
-is painted under the point past the shape's frame, as text wrapped below a
-short box is: the viewer's text runs name the frame they were laid out in
-(`TextRun.shapeOrigin`). `findText()` searches the text of every shape and table and
+`elementsAt()` lists the drawn elements under a point top-most first, groups
+after their children. A hidden shape, or a shape in a hidden group, is never
+hit, though `getElements()` and `getElement()` list it and operations can name
+it. In a viewer the list also holds a shape whose text is painted under the
+point past the shape's frame, as text wrapped below a short box is, in its
+place in the drawing order. Native runs identify their source shape with
+`TextRun.shapeId` and `shapeSource`; only a unique slide-owned ID can become
+an editable overflow target. Layout/master text and unknown or duplicate IDs
+never fall back to a coincident frame. Older providers that report only
+`TextRun.shapeOrigin` can identify overflow when exactly one visible text
+shape has that origin; ambiguous origins retain frame-only hits.
+`findText()` searches the text of every shape and table and
 returns the shape's bounds as the match rectangle: the engine has no glyph
 geometry, so the viewer's `search()` remains the source of word rectangles.
 

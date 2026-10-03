@@ -105,6 +105,8 @@ interface DocxBackend {
 }
 
 interface PptxRun {
+  readonly shapeId?: string;
+  readonly origin?: TextRun["shapeSource"];
   readonly text: string;
   readonly inShapeX: number;
   readonly inShapeY: number;
@@ -658,6 +660,8 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
         width: run.w,
         height: run.h,
         shapeOrigin: { x: run.shapeX, y: run.shapeY },
+        ...(run.shapeId === undefined ? {} : { shapeId: run.shapeId }),
+        ...(run.origin === undefined ? {} : { shapeSource: run.origin }),
         ...safeHyperlink(run.hyperlink, (ref) =>
           handle.backend.resolveInternalTarget?.(ref, pageIndex),
         ),

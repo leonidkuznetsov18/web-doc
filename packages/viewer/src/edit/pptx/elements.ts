@@ -292,7 +292,8 @@ function readRecord(
   walk.counts.set(cNvPrId, seen);
   const id = `${slide.key}:${cNvPrId}${seen > 1 ? `#${seen}` : ""}`;
   const name = part.attribute(cNvPr, "name") ?? "";
-  const hidden = part.attribute(cNvPr, "hidden") === "1";
+  const hiddenAttribute = part.attribute(cNvPr, "hidden");
+  const hidden = hiddenAttribute === "1" || hiddenAttribute === "true";
   const placeholder = placeholderOf(part, node);
 
   let kind: PptxElementKind;

@@ -7,7 +7,12 @@ import {
   parseZip,
 } from "../../packages/viewer/src/edit/ooxml/zip.js";
 import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
-import { syntheticDeck } from "../../packages/viewer/test/fixtures/pptx-builder.js";
+import {
+  buildDeck,
+  syntheticDeck,
+  textShape,
+} from "../../packages/viewer/test/fixtures/pptx-builder.js";
+import type { Viewer } from "../../packages/viewer/src/viewer.js";
 
 /*
  * PPTX editing through the public API against the real adapter: the
@@ -72,6 +77,133 @@ async function loadDeck(
     { data: Array.from(bytes), fileName },
   );
 }
+
+test("keeps visible paint order for renderer-produced overflow hits", async ({
+  page,
+}) => {
+  const unit = 9525;
+  const original = buildDeck({
+    slides: [
+      {
+        shapes: [
+          textShape({
+            id: 2,
+            x: 40 * unit,
+            y: 100 * unit,
+            cx: 220 * unit,
+            cy: 24 * unit,
+            paragraphs: [
+              [
+                {
+                  text: "Overflow text continues beneath the foreground shape on several lines",
+                  rPr: 'sz="2400"',
+                },
+              ],
+            ],
+          }),
+          textShape({
+            id: 3,
+            x: 20 * unit,
+            y: 130 * unit,
+            cx: 500 * unit,
+            cy: 300 * unit,
+            paragraphs: [[]],
+            fill: '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>',
+          }),
+          textShape({
+            id: 4,
+            x: 40 * unit,
+            y: 100 * unit,
+            cx: 100 * unit,
+            cy: 20 * unit,
+            paragraphs: [[{ text: "Top", rPr: 'sz="1200"' }]],
+          }),
+        ],
+      },
+    ],
+  });
+  await loadDeck(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as typeof window & { __viewer: Viewer }).__viewer;
+    const session = await viewer.edit();
+    if (session.format !== "pptx") throw new Error("Expected a PPTX session");
+    const selection = await viewer.selectText({
+      startPageIndex: 0,
+      endPageIndex: 0,
+      startOffset: 0,
+      endOffset: 1000,
+    });
+    const back = (await session.getElement("sld1:2")).item;
+    if (!back) throw new Error("Expected the background text shape");
+    const overflow = selection.runs.find(
+      (run) =>
+        run.shapeOrigin?.x === 40 &&
+        run.shapeOrigin.y === 100 &&
+        run.y > back.bounds.y + back.bounds.height,
+    );
+    if (!overflow)
+      throw new Error(
+        "The real renderer must produce a run below the back text frame",
+      );
+    const point = {
+      x: overflow.x + overflow.width / 2,
+      y: overflow.y + overflow.height / 2,
+    };
+    const covered = (await session.elementsAt(0, point)).items.map(
+      (element) => element.id,
+    );
+    // The foreground covers the real run. Moving it away must reveal ink,
+    // not merely change API metadata for an empty region.
+    const canvas = document.createElement("canvas");
+    await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Expected the rendered slide canvas");
+    const ink = () => {
+      const pixels = context.getImageData(
+        Math.ceil(overflow.x),
+        Math.ceil(overflow.y),
+        Math.floor(overflow.width),
+        Math.floor(overflow.height),
+      ).data;
+      let count = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index]! + pixels[index + 1]! + pixels[index + 2]! < 600)
+          count += 1;
+      }
+      return count;
+    };
+    const coveredInk = ink();
+    await session.moveElement({ target: "sld1:3", by: { dx: 500, dy: 0 } });
+    const uncovered = (await session.elementsAt(0, point)).items.map(
+      (element) => element.id,
+    );
+    await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+    const uncoveredInk = ink();
+    await session.replaceText({
+      target: "sld1:2",
+      text: "Edited visible text",
+    });
+    const saved = await session.save();
+    await viewer.load(saved.bytes, { fileName: "edited.pptx" });
+    const reopened = await viewer.edit();
+    return {
+      covered,
+      uncovered,
+      coveredInk,
+      uncoveredInk,
+      text: (await reopened.getElement("sld1:2")).item?.text,
+      foregroundX: (await reopened.getElement("sld1:3")).item?.bounds.x,
+      untouched: (await reopened.getElement("sld1:4")).item?.text,
+    };
+  });
+  expect(result.covered).toEqual(["sld1:3", "sld1:2"]);
+  expect(result.uncovered).toEqual(["sld1:2"]);
+  expect(result.coveredInk).toBe(0);
+  expect(result.uncoveredInk).toBeGreaterThan(10);
+  expect(result.text).toBe("Edited visible text");
+  expect(result.foregroundX).toBe(520);
+  expect(result.untouched).toBe("Top");
+});
 
 test("starts the OOXML worker only on edit() and lists every shape with the renderer's geometry", async ({
   page,
