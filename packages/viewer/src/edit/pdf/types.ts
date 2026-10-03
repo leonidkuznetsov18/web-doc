@@ -328,6 +328,43 @@ export interface TextLayoutLine {
   readonly color: string;
 }
 
+/**
+ * The font a PDF text element is drawn in, as a browser can load it: a host
+ * typing over the element shows the text in the document's own glyphs and
+ * metrics. Exactly one of `face` and `missing` is set.
+ */
+export interface TextFont {
+  readonly elementId: string;
+  /** The same for every element drawn in this font, so a host loads each face once. */
+  readonly key: string;
+  /** The family the file declares, as `textStyle.fontFamily` reports it. */
+  readonly family: string;
+  /**
+   * An OpenType or TrueType file for `FontFace`: a TrueType program with
+   * the OS/2, name and post tables a subset left out added, or a CFF program
+   * wrapped as OpenType with a Unicode cmap built from its glyph names (Adobe
+   * Glyph List names, `uniXXXX` and `uXXXX`). The program's own glyphs and
+   * widths are kept. Subset fonts hold only the glyphs the file uses, often
+   * not even a space, which the file places by positioning instead; a browser
+   * draws other characters in a fallback face. The file declares a
+   * regular face: its glyphs already carry the weight and slant, so load it
+   * with the default descriptors and do not ask the browser for bold or
+   * italic on top.
+   */
+  readonly face?: {
+    readonly data: Uint8Array;
+    readonly format: "opentype" | "truetype";
+  };
+  /**
+   * Why there is no face: the font is not embedded (a host shows it by name,
+   * as PDF readers do), or it is embedded in a form no browser loads: a
+   * CID-keyed CFF font, a Type 1 or Type 3 font, a font whose glyphs have no
+   * code points, or a program this reader cannot read.
+   */
+  readonly missing?:
+    "not-embedded" | "cid-keyed" | "type1" | "no-unicode" | "unreadable";
+}
+
 /** The drawn geometry of a `text`, `textBox` or `table` element. */
 export interface TextLayout {
   readonly elementId: string;
@@ -389,6 +426,14 @@ export interface PdfEditSession extends EditSessionBase<
     elementId: string,
     options?: ReadOptions,
   ): Promise<ReadItem<TextLayout>>;
+  /**
+   * The font a `text`, `textBox` or `paragraph` element is drawn in, as a browser loads it,
+   * or why it cannot be loaded; see `TextFont`.
+   */
+  getTextFont(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextFont>>;
   /** The text position nearest to a page-space point; none on a page without text. */
   positionAt(
     pageIndex: number,

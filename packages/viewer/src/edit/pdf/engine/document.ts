@@ -23,6 +23,7 @@ import type {
   PdfElement,
   PdfOperation,
   PdfTextParagraph,
+  TextFont,
   TextLayout,
 } from "../types.js";
 import type { EditWorkerBitmap } from "../../../worker-protocol.js";
@@ -35,12 +36,14 @@ import {
 } from "./layout.js";
 import {
   markIsFresh,
+  OBJECT_TEXT,
   readMark,
   scanPage,
   type MarkParams,
   type ObjectRecord,
 } from "./elements.js";
 import { FontLibrary, TextMeasurer } from "./fonts.js";
+import { textFaceOf, type TextFace } from "./text-font.js";
 import { fontRequestsOf } from "./text-box.js";
 import {
   issueCollector,
@@ -226,6 +229,8 @@ export class PdfEditDocument {
   #measurer: TextMeasurer;
   #pages: PageRecord[];
   #batches = 0;
+  /** Browser faces of the document's fonts, by font program; see `textFont`. */
+  readonly #faces = new Map<string, TextFace>();
 
   constructor(
     pdfium: Pdfium,
@@ -614,6 +619,31 @@ export class PdfEditDocument {
               })),
           }
         : layout;
+    });
+  }
+
+  /** The browser face of the font a text or text box element is drawn in, see `TextFont`. */
+  textFont(elementId: string): TextFont | undefined {
+    const location = this.#locate(elementId);
+    if (!location) return undefined;
+    // A paragraph not yet edited is not listed among the elements; its id
+    // still locates its rows.
+    const kind =
+      this.getElement(elementId)?.kind ??
+      (this.#paragraphOf(elementId)?.paragraph.id === elementId
+        ? "paragraph"
+        : undefined);
+    if (kind !== "text" && kind !== "textBox" && kind !== "paragraph")
+      return undefined;
+    const { lib } = this.#pdfium;
+    return this.#withPage(location.pageIndex, (page) => {
+      // A text box's lines and a paragraph's rows share their font; the first answers.
+      const object = location.indexes
+        .map((index) => lib.FPDFPage_GetObject(page, index))
+        .find((entry) => lib.FPDFPageObj_GetType(entry) === OBJECT_TEXT);
+      return object === undefined
+        ? undefined
+        : { elementId, ...textFaceOf(this.#pdfium, object, this.#faces) };
     });
   }
 
