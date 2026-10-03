@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { before, describe, it } from "node:test";
 
@@ -60,6 +61,18 @@ async function engineFor(
     fetchBytes: async (url) => {
       fetched.push(url);
       if (url === FALLBACK_URL) return ttf;
+      const file = new URL(url).pathname.split("/").at(-1);
+      if (
+        file &&
+        /^LiberationSans-(Regular|Bold|Italic|BoldItalic)\.ttf$/.test(file)
+      )
+        return new Uint8Array(
+          readFileSync(
+            createRequire(import.meta.url).resolve(
+              `pdfjs-dist/standard_fonts/${file}`,
+            ),
+          ),
+        );
       throw new Error(`No font at ${url}`);
     },
   });
@@ -125,20 +138,32 @@ describe("fonts for inserted PDF text", () => {
         "Noto Sans",
       );
 
-      // Bold is asked for but the fallback has one face: drawn regular, with a note.
+      // A styled request uses a real covering face, without changing regular fallback.
       const bold = await applyOne(engine, textBox("Жирний", { bold: true }));
       assert.equal(bold.change?.warnings.length, 1);
-      assert.deepEqual(fetched, [FALLBACK_URL], "fetched once");
+      assert.equal(
+        fetched.filter((url: string) => url === FALLBACK_URL).length,
+        1,
+      );
+      assert.equal(
+        fetched.filter((url: string) =>
+          url.endsWith("/LiberationSans-Bold.ttf"),
+        ).length,
+        1,
+      );
 
       const cjk = await applyOne(engine, textBox("日本語"));
       assert.deepEqual(codes(cjk.issues), ["/text:font-unavailable"]);
-      const unknown = await applyOne(
-        engine,
-        textBox("x", { fontFamily: "Comic" }),
-      );
-      assert.deepEqual(codes(unknown.issues), [
-        "/style/fontFamily:unknown-font",
-      ]);
+      const unknownFamily = textBox("x", { fontFamily: "Comic" });
+      for (const bold of [false, true]) {
+        const unknown = await applyOne(engine, {
+          ...unknownFamily,
+          style: { fontFamily: "Comic", bold },
+        });
+        assert.deepEqual(codes(unknown.issues), [
+          "/style/fontFamily:unknown-font",
+        ]);
+      }
     } finally {
       await engine.dispose();
     }

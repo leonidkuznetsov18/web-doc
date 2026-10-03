@@ -121,6 +121,11 @@ export interface PdfiumFunctions {
     width: number,
     height: number,
   ): number;
+  FPDFPath_CountSegments(path: number): number;
+  FPDFPath_GetPathSegment(path: number, index: number): number;
+  FPDFPathSegment_GetPoint(segment: number, x: number, y: number): boolean;
+  FPDFPathSegment_GetType(segment: number): number;
+  FPDFPageObj_RemoveMark(object: number, mark: number): boolean;
   FPDFPath_GetDrawMode(path: number, fillMode: number, stroke: number): boolean;
   FPDFPageObj_CreateNewPath(x: number, y: number): number;
   FPDFPath_MoveTo(path: number, x: number, y: number): boolean;
@@ -149,6 +154,7 @@ export interface PdfiumFunctions {
   ): number;
   FPDFTextObj_GetFontSize(textObject: number, size: number): boolean;
   FPDFTextObj_GetTextRenderMode(textObject: number): number;
+  FPDFTextObj_SetTextRenderMode(textObject: number, mode: number): boolean;
   FPDFTextObj_GetFont(textObject: number): number;
   FPDFFont_GetFamilyName(font: number, buffer: number, bytes: number): number;
   FPDFFont_GetBaseFontName(font: number, buffer: number, bytes: number): number;

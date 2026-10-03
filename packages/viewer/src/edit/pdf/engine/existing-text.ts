@@ -1,6 +1,8 @@
+import { ViewerError } from "../../../errors.js";
 import type { TextRange } from "../../types.js";
 import type {
   PdfElement,
+  PdfTextStyle,
   ReplaceTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
@@ -8,8 +10,16 @@ import {
   paragraphSetTextStyle,
   replaceParagraphText,
 } from "./paragraph-edit.js";
-import { objectBounds, OBJECT_TEXT, textScale } from "./elements.js";
-import { fontCanRewrite, validateScript } from "./fonts.js";
+import {
+  objectBounds,
+  OBJECT_TEXT,
+  OBJECT_PATH,
+  textScale,
+  clearWebDocMark,
+  writeWebDocMark,
+  type MarkParams,
+} from "./elements.js";
+import { fontCanRewrite, validateScript, type ResolvedFont } from "./fonts.js";
 import type {
   ElementLocation,
   Issue,
@@ -18,6 +28,7 @@ import type {
   OperationResult,
 } from "./operations.js";
 import { pageToUser } from "./geometry.js";
+import { createUnderline } from "./text-decoration.js";
 import type { Pdfium } from "./pdfium.js";
 import {
   parseColor,
@@ -64,6 +75,15 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
       italic: target.element.textStyle?.italic ?? false,
       text: operation.text,
     };
+    if (request.bold || request.italic) {
+      const font = context.fonts.resolveStyle(
+        context.pdfium,
+        context.document,
+        request,
+      );
+      if ("code" in font) issue(font.path, font.code, font.message);
+      return;
+    }
     // The file's own family is only a hint: what matters is whether some
     // available font can draw the new text.
     let problem = context.fonts.problem(request);
@@ -84,23 +104,37 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
         context,
       );
     const target = textTarget(operation.target, context)!;
-    const previous = target.element.text ?? "";
-    const whole = splice(previous, operation)!;
-    if (canKeepFont(context, target, whole)) {
-      const kept = replaceInPlace(context, target, whole);
-      if (kept) return result(target.location);
-    }
-    const span = spanOf(operation, previous);
-    const before = previous.slice(0, span.start);
-    const after = previous.slice(span.end);
-    if (!before && !after)
-      return replaceWithFallback(context, target, operation.text);
-    return (
-      splitAround(context, target, before, operation.text, after) ??
-      replaceWithFallback(context, target, whole)
-    );
+    const underlined = target.element.textStyle?.underline === true;
+    if (underlined) removeUnderline(context, target);
+    const changed = replaceNativeText(operation, context, target);
+    if (underlined)
+      for (const id of [operation.target, ...changed.createdIds])
+        addUnderline(context, id);
+    return changed;
   },
 };
+
+function replaceNativeText(
+  operation: ReplaceTextOperation,
+  context: OperationContext,
+  target: TextTarget,
+): OperationResult {
+  const previous = target.element.text ?? "";
+  const whole = splice(previous, operation)!;
+  if (canKeepFont(context, target, whole)) {
+    const kept = replaceInPlace(context, target, whole);
+    if (kept) return result(target.location);
+  }
+  const span = spanOf(operation, previous);
+  const before = previous.slice(0, span.start);
+  const after = previous.slice(span.end);
+  if (!before && !after)
+    return replaceWithFallback(context, target, operation.text);
+  return (
+    splitAround(context, target, before, operation.text, after) ??
+    replaceWithFallback(context, target, whole)
+  );
+}
 
 /** The same operation as a whole-text replacement with `text`. */
 function wholeTextOperation(
@@ -157,20 +191,51 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
       return paragraphSetTextStyle.validate(operation, context, issue);
     if (textBoxTarget(operation.target, context))
       return textBoxSetTextStyle.validate(operation, context, issue);
-    if (!textTarget(operation.target, context, issue)) return;
-    for (const field of [
-      "fontFamily",
-      "bold",
-      "italic",
-      "align",
-      "lineHeight",
-    ] as const)
+    const target = textTarget(operation.target, context, issue);
+    if (!target) return;
+    for (const field of ["fontFamily", "align", "lineHeight"] as const)
       if (operation.style[field] !== undefined)
         issue(
           `/style/${field}`,
           "unsupported-style",
-          `Only color and fontSize can change on existing text; ${field} cannot`,
+          `Existing text accepts color, fontSize, bold, italic and underline; ${field} cannot`,
         );
+    const style = target.element.textStyle;
+    if (
+      style &&
+      (faceChanges(style, operation) || operation.style.underline === true)
+    ) {
+      const filled = context.readPage(target.location.pageIndex, (page) => {
+        const index = target.location.indexes[0];
+        return (
+          index !== undefined &&
+          context.pdfium.lib.FPDFTextObj_GetTextRenderMode(
+            context.pdfium.lib.FPDFPage_GetObject(page, index),
+          ) === 0
+        );
+      });
+      if (!filled) {
+        issue(
+          "/style",
+          "unsupported-style",
+          "Bold, italic and underline require filled text",
+        );
+        return;
+      }
+    }
+    if (style && faceChanges(style, operation)) {
+      const font = context.fonts.resolveStyle(
+        context.pdfium,
+        context.document,
+        {
+          family: style.fontFamily,
+          text: target.element.text ?? "",
+          bold: operation.style.bold ?? style.bold,
+          italic: operation.style.italic ?? style.italic,
+        },
+      );
+      if ("code" in font) issue(font.path, font.code, font.message);
+    }
   },
   apply(operation, context) {
     if (context.paragraph(operation.target)?.paragraph.id === operation.target)
@@ -180,6 +245,36 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
     const target = textTarget(operation.target, context)!;
     const { lib } = context.pdfium;
     const { location } = target;
+    const underlined =
+      operation.style.underline ?? target.element.textStyle?.underline ?? false;
+    if (target.element.textStyle?.underline) removeUnderline(context, target);
+    let changedFont: OperationResult | undefined;
+    const style = target.element.textStyle;
+    if (style && faceChanges(style, operation)) {
+      const next = {
+        ...style,
+        bold: operation.style.bold ?? style.bold,
+        italic: operation.style.italic ?? style.italic,
+      };
+      const font = context.fonts.resolveStyle(
+        context.pdfium,
+        context.document,
+        {
+          family: next.fontFamily,
+          text: target.element.text ?? "",
+          bold: next.bold,
+          italic: next.italic,
+        },
+      );
+      if ("code" in font)
+        throw new ViewerError("invalid-operation", font.message);
+      changedFont = replaceWithFallback(
+        context,
+        target,
+        target.element.text ?? "",
+        { font, style: next },
+      );
+    }
     if (operation.style.color !== undefined) {
       const [r, g, b] = parseColor(operation.style.color);
       context.withPage(location.pageIndex, (page) => {
@@ -194,9 +289,78 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
     }
     if (operation.style.fontSize !== undefined)
       resize(context, target, operation.style.fontSize);
-    return result(location);
+    if (underlined) addUnderline(context, operation.target);
+    return changedFont ?? result(location);
   },
 };
+
+function removeUnderline(context: OperationContext, target: TextTarget): void {
+  if (target.location.record.mark?.kind !== "text") return;
+  const { pdfium } = context;
+  const { lib } = pdfium;
+  const { pageIndex, indexes } = target.location;
+  const [first] = indexes;
+  if (first === undefined) return;
+  context.withPage(pageIndex, (page) => {
+    for (const index of indexes.slice(1).reverse()) {
+      const path = lib.FPDFPage_GetObject(page, index);
+      lib.FPDFPage_RemoveObject(page, path);
+      lib.FPDFPageObj_Destroy(path);
+      context.spliceObjects(pageIndex, index, 1, []);
+    }
+    clearWebDocMark(pdfium, lib.FPDFPage_GetObject(page, first));
+    context.spliceObjects(pageIndex, first, 1, [
+      { id: target.element.id, type: OBJECT_TEXT },
+    ]);
+  });
+}
+
+function addUnderline(context: OperationContext, id: string): void {
+  const location = context.locate(id);
+  const first = location?.indexes[0];
+  if (!location || first === undefined)
+    throw new ViewerError(
+      "edit-failed",
+      "The text to underline no longer exists",
+    );
+  const { pdfium } = context;
+  const { lib } = pdfium;
+  context.withPage(location.pageIndex, (page) => {
+    const object = lib.FPDFPage_GetObject(page, first);
+    const textPage = lib.FPDFText_LoadPage(page);
+    let path: number | undefined;
+    try {
+      path = createUnderline(pdfium, object, textPage);
+    } finally {
+      lib.FPDFText_ClosePage(textPage);
+    }
+    if (!path)
+      throw new ViewerError(
+        "invalid-operation",
+        "This text has no drawable underline geometry",
+      );
+    const mark: MarkParams = { kind: "text", id, underline: true };
+    writeWebDocMark(pdfium, context.document, object, mark);
+    writeWebDocMark(pdfium, context.document, path, mark);
+    lib.FPDFPage_InsertObjectAtIndex(page, path, first + 1);
+    context.spliceObjects(location.pageIndex, first, 1, [
+      { id, type: OBJECT_TEXT, mark },
+      { id, type: OBJECT_PATH, mark },
+    ]);
+  });
+}
+
+function faceChanges(
+  style: PdfTextStyle,
+  operation: SetTextStyleOperation,
+): boolean {
+  return (
+    (operation.style.bold !== undefined &&
+      operation.style.bold !== style.bold) ||
+    (operation.style.italic !== undefined &&
+      operation.style.italic !== style.italic)
+  );
+}
 
 interface TextTarget {
   readonly location: ElementLocation;
@@ -316,12 +480,7 @@ function splitAround(
   const { location, element } = target;
   const style = element.textStyle!;
   const index = location.indexes[0]!;
-  const fallback = context.fonts.resolve(pdfium, context.document, {
-    family: style.fontFamily,
-    bold: style.bold,
-    italic: style.italic,
-    text: middle,
-  });
+  const fallback = replacementFont(context, style, middle);
   const createdIds: string[] = [];
   const written = context.withPage(location.pageIndex, (page) => {
     const old = lib.FPDFPage_GetObject(page, index);
@@ -429,23 +588,41 @@ function splitAround(
   };
 }
 
+function replacementFont(
+  context: OperationContext,
+  style: PdfTextStyle,
+  text: string,
+): ResolvedFont {
+  const request = {
+    family: style.fontFamily,
+    bold: style.bold,
+    italic: style.italic,
+    text,
+  };
+  if (!style.bold && !style.italic)
+    return context.fonts.resolve(context.pdfium, context.document, request);
+  const font = context.fonts.resolveStyle(
+    context.pdfium,
+    context.document,
+    request,
+  );
+  if ("code" in font) throw new ViewerError("invalid-operation", font.message);
+  return font;
+}
+
 /** Replaces the object with one in a covering font at the same place, size and colour. */
 function replaceWithFallback(
   context: OperationContext,
   target: TextTarget,
   text: string,
+  change?: { readonly font: ResolvedFont; readonly style: PdfTextStyle },
 ): OperationResult {
   const { pdfium } = context;
   const { lib } = pdfium;
   const { location, element } = target;
-  const style = element.textStyle!;
+  const style = change?.style ?? element.textStyle!;
   const index = location.indexes[0]!;
-  const font = context.fonts.resolve(pdfium, context.document, {
-    family: style.fontFamily,
-    bold: style.bold,
-    italic: style.italic,
-    text,
-  });
+  const font = change?.font ?? replacementFont(context, style, text);
   context.withPage(location.pageIndex, (page) => {
     const old = lib.FPDFPage_GetObject(page, index);
     const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
@@ -462,7 +639,18 @@ function replaceWithFallback(
     );
     setText(pdfium, object, text);
     const [r, g, b] = parseColor(style.color);
-    lib.FPDFPageObj_SetFillColor(object, r, g, b, 255);
+    const alpha =
+      pdfium.readNumbers(
+        4,
+        "i32",
+        ([red, green, blue, opacity]) =>
+          red !== undefined &&
+          green !== undefined &&
+          blue !== undefined &&
+          opacity !== undefined &&
+          lib.FPDFPageObj_GetFillColor(old, red, green, blue, opacity),
+      )?.[3] ?? 255;
+    lib.FPDFPageObj_SetFillColor(object, r, g, b, alpha);
     const [a, bb, c, d, e, f] = matrix as [
       number,
       number,
@@ -482,15 +670,18 @@ function replaceWithFallback(
   return {
     createdIds: [],
     changedPages: [location.pageIndex],
-    warnings: [
-      {
-        code: "font-substitution",
-        message:
-          font.substitution ??
-          `${style.fontFamily} cannot draw the new text; ${font.family} is used`,
-        details: { elementId: location.record.id },
-      },
-    ],
+    warnings:
+      change && !font.substitution
+        ? []
+        : [
+            {
+              code: "font-substitution",
+              message:
+                font.substitution ??
+                `${style.fontFamily} cannot draw the new text; ${font.family} is used`,
+              details: { elementId: location.record.id },
+            },
+          ],
   };
 }
 

@@ -5,6 +5,7 @@ import {
   tableMemberMarkSchema,
   textBoxMarkSchema,
   paragraphMarkSchema,
+  nativeTextMarkSchema,
 } from "../schemas.js";
 import type { PdfElement, PdfShapeStyle, PdfTextStyle } from "../types.js";
 import {
@@ -16,6 +17,8 @@ import {
   type PageGeometry,
 } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
+import { isUnderlinePath } from "./text-decoration.js";
+import { nativeFontFace } from "./fonts.js";
 import type { TableSpec } from "./tables.js";
 import type { ParagraphSpec } from "./paragraph.js";
 
@@ -28,13 +31,9 @@ export const OBJECT_IMAGE = 3;
 export const MARK_NAME = "WebDoc";
 export const MARK_PARAM = "webdoc";
 
-/** Font descriptor flag bits (PDF 32000-1 table 123). */
-const FLAG_ITALIC = 1 << 6;
-const FLAG_FORCE_BOLD = 1 << 18;
-
 /** What a `WebDoc` mark says about the objects it tags. */
 export interface MarkParams {
-  readonly kind: "textBox" | "table" | "paragraph";
+  readonly kind: "textBox" | "table" | "paragraph" | "text";
   readonly id: string;
   readonly [key: string]: unknown;
 }
@@ -163,6 +162,8 @@ export function readMark(
 
 function isValidMark(params: object): boolean {
   switch ((params as MarkParams).kind) {
+    case "text":
+      return validateSchema(params, nativeTextMarkSchema, 0).length === 0;
     case "textBox":
       return validateSchema(params, textBoxMarkSchema, 0).length === 0;
     case "paragraph":
@@ -205,12 +206,40 @@ export function markIsFresh(
       .join(" "),
   );
   const tolerance = 2;
+  const texts = objects.filter(
+    (object) => lib.FPDFPageObj_GetType(object) === OBJECT_TEXT,
+  );
+  const paths = objects.filter(
+    (object) => lib.FPDFPageObj_GetType(object) === OBJECT_PATH,
+  );
+  const styled =
+    typeof mark.style === "object" &&
+    mark.style !== null &&
+    "underline" in mark.style &&
+    mark.style.underline === true;
+  const underlined = mark.kind === "text" || styled;
+  if (
+    underlined &&
+    texts.length > 0 &&
+    (texts.length !== paths.length ||
+      objects.length !== texts.length + paths.length ||
+      texts.some(
+        (text, index) =>
+          paths[index] === undefined ||
+          !isUnderlinePath(pdfium, text, paths[index], textPage),
+      ))
+  )
+    return false;
+  if (mark.kind === "text")
+    return texts.length === 1 && objects[0] === texts[0];
   if (mark.kind === "paragraph") {
     const spec = paragraphSpecOf(mark);
     if (
       !spec ||
       objects.some((object) => {
         if (lib.FPDFPageObj_GetType(object) !== OBJECT_TEXT) {
+          if (underlined && texts.length > 0 && paths.includes(object))
+            return false;
           if (
             spec.text.trim().length !== 0 ||
             lib.FPDFPageObj_GetType(object) !== OBJECT_PATH
@@ -364,6 +393,17 @@ function compositeElement(
     .filter((member) => member.kind === "text" && member.text)
     .map((member) => member.text)
     .join("\n");
+  if (mark.kind === "text") {
+    const text = members.find((member) => member.kind === "text");
+    if (text)
+      return {
+        ...text,
+        bounds,
+        ...(text.textStyle
+          ? { textStyle: { ...text.textStyle, underline: true } }
+          : {}),
+      };
+  }
   if (mark.kind === "table") {
     // The head mark comes first in drawing order and carries the inputs.
     const spec = mark as unknown as TableSpec;
@@ -413,7 +453,18 @@ function compositeElement(
     pageIndex,
     bounds,
     text: typeof mark.text === "string" ? mark.text : text,
-    ...(style ? { textStyle: style } : {}),
+    ...(style
+      ? {
+          textStyle: {
+            ...style,
+            ...(typeof mark.style === "object" &&
+            mark.style !== null &&
+            "underline" in mark.style
+              ? { underline: mark.style.underline === true }
+              : {}),
+          },
+        }
+      : {}),
     operations: TEXT_BOX_OPERATIONS,
   };
 }
@@ -470,8 +521,6 @@ export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
         lib.FPDFFont_GetFamilyName(font, buffer, bytes),
       ) || declaredFamily(baseName)
     : declaredFamily(baseName);
-  const flags = lib.FPDFFont_GetFlags(font);
-  const weight = lib.FPDFFont_GetWeight(font);
   const size =
     pdfium.readNumbers(1, "float", ([pointer]) =>
       lib.FPDFTextObj_GetFontSize(object, pointer!),
@@ -482,11 +531,7 @@ export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
   return {
     fontFamily: family,
     fontSize: round(size * textScale(matrix)),
-    bold:
-      weight >= 600 ||
-      (flags & FLAG_FORCE_BOLD) !== 0 ||
-      /bold|black|heavy/i.test(baseName),
-    italic: (flags & FLAG_ITALIC) !== 0 || /italic|oblique/i.test(baseName),
+    ...nativeFontFace(pdfium, font),
     color: fillColor(pdfium, object) ?? "#000000",
   };
 }
@@ -568,4 +613,37 @@ function objectRotation(
   const degrees = (-Math.atan2(b, a) * 180) / Math.PI + geometry.rotation * 90;
   const normalized = ((Math.round(degrees) % 360) + 360) % 360;
   return normalized;
+}
+
+/** Replace this engine's mark only; unrelated marked-content metadata is retained. */
+export function clearWebDocMark(pdfium: Pdfium, object: number): void {
+  const { lib } = pdfium;
+  for (
+    let index = lib.FPDFPageObj_CountMarks(object) - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const mark = lib.FPDFPageObj_GetMark(object, index);
+    const name = pdfium.readWideStringOut((buffer, bytes, out) =>
+      lib.FPDFPageObjMark_GetName(mark, buffer, bytes, out),
+    );
+    if (name === MARK_NAME) lib.FPDFPageObj_RemoveMark(object, mark);
+  }
+}
+
+export function writeWebDocMark(
+  pdfium: Pdfium,
+  document: number,
+  object: number,
+  spec: MarkParams,
+): void {
+  clearWebDocMark(pdfium, object);
+  const mark = pdfium.lib.FPDFPageObj_AddMark(object, MARK_NAME);
+  pdfium.lib.FPDFPageObjMark_SetStringParam(
+    document,
+    object,
+    mark,
+    MARK_PARAM,
+    JSON.stringify(spec),
+  );
 }

@@ -14,6 +14,143 @@ const EDIT_ASSETS = [
   "/assets/pdfium/pdfium.wasm",
 ];
 
+test("exports true native bold italic and underline through the PDF worker", async ({
+  page,
+}) => {
+  const original = await buildPdf([
+    {
+      texts: [
+        { text: "Native title", x: 72, y: 740, fontSize: 18 },
+        ...[
+          "Native paragraphs preserve their identity",
+          "across source lines and worker messages",
+          "and remain editable after saving.",
+        ].map((text, index) => ({
+          text,
+          x: 72,
+          y: 650 - index * 20,
+          fontSize: 11,
+        })),
+      ],
+    },
+  ]);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  const result = await page.evaluate(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "800px", height: "900px" });
+    document.body.replaceChildren(host);
+    const viewer = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href).href,
+    }).createViewer({ container: host, initialZoom: 1 });
+    const paint = async () => {
+      const canvas = document.createElement("canvas");
+      await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("No canvas context");
+      const pixels = context.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      ).data;
+      let ink = 0;
+      for (let index = 0; index < pixels.length; index += 4)
+        if (
+          pixels[index] < 180 &&
+          pixels[index + 1] < 180 &&
+          pixels[index + 2] < 180
+        )
+          ink += 1;
+      return { image: canvas.toDataURL(), ink };
+    };
+    try {
+      await viewer.load(new Uint8Array(data), { fileName: "styles.pdf" });
+      const session = await viewer.edit();
+      if (session.format !== "pdf") throw new Error("Expected PDF");
+      const before = await paint();
+      const paragraph = (await session.getTextParagraph("p0:o1")).item;
+      if (!paragraph) throw new Error("Missing native paragraph");
+      await session.setTextStyle({
+        target: "p0:o0",
+        style: { bold: true, italic: true, underline: true },
+      });
+      await session.setTextStyle({
+        target: paragraph.id,
+        style: { bold: true, underline: true },
+      });
+      const receipt = await session.insertTextBox({
+        pageIndex: 0,
+        rect: { x: 72, y: 260, width: 250, height: 70 },
+        text: "Привіт світе",
+        style: { bold: true, italic: true, underline: true },
+      });
+      const box = receipt.createdIds[0];
+      if (!box) throw new Error("Missing inserted textbox");
+      const ids = ["p0:o0", paragraph.id, box];
+      const styles = await Promise.all(
+        ids.map(async (id) => (await session.getElement(id)).item?.textStyle),
+      );
+      const styled = await paint();
+      const saved = await session.save();
+      await viewer.load(saved.bytes, { fileName: "saved-styles.pdf" });
+      const reopened = await viewer.edit();
+      if (reopened.format !== "pdf") throw new Error("Expected reopened PDF");
+      const roundtrip = await paint();
+      const reopenedStyles = await Promise.all(
+        ids.map(async (id) => (await reopened.getElement(id)).item?.textStyle),
+      );
+      await reopened.replaceText({ target: box, text: "Привіт знову" });
+      const typed = (await reopened.getElement(box)).item;
+      await reopened.undo();
+      const undo = await paint();
+      await reopened.redo();
+      const redo = (await reopened.getElement(box)).item;
+      return {
+        changed: before.image !== styled.image,
+        ink: styled.ink,
+        roundtrip: roundtrip.image === styled.image,
+        undo: undo.image === styled.image,
+        styles,
+        reopenedStyles,
+        typed,
+        redo,
+        warnings: receipt.warnings.map((warning) => warning.code),
+      };
+    } finally {
+      await viewer.close();
+      host.remove();
+    }
+  }, Array.from(original));
+  expect(result.changed).toBe(true);
+  expect(result.ink).toBeGreaterThan(1000);
+  expect(result.roundtrip).toBe(true);
+  expect(result.undo).toBe(true);
+  expect(result.styles[0]).toMatchObject({
+    bold: true,
+    italic: true,
+    underline: true,
+  });
+  expect(result.styles[1]).toMatchObject({ bold: true, underline: true });
+  expect(result.styles[2]).toMatchObject({
+    bold: true,
+    italic: true,
+    underline: true,
+    fontFamily: "Liberation Sans",
+  });
+  expect(result.reopenedStyles).toEqual(result.styles);
+  expect(result.typed).toMatchObject({
+    text: "Привіт знову",
+    textStyle: { bold: true, italic: true, underline: true },
+  });
+  expect(result.redo).toEqual(result.typed);
+  expect(result.warnings).toContain("font-substitution");
+  expect(errors).toEqual([]);
+});
+
 test("edits an imported paragraph through the native worker and reopens its stable target", async ({
   page,
 }) => {

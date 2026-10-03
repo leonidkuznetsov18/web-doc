@@ -37,6 +37,30 @@ const WIN_ANSI_EXTRAS = new Set(
 const FONT_TRUETYPE = 1;
 
 export const FALLBACK_FAMILY = "Noto Sans";
+export const STYLE_FALLBACK_FAMILY = "Liberation Sans";
+
+export interface FontPreparation {
+  readonly family: string;
+  readonly text: string;
+  /** A formatting change needs the actual requested face, not a closest match. */
+  readonly face?: { readonly bold: boolean; readonly italic: boolean };
+}
+
+/** The face the native font actually paints, independent of registration metadata. */
+export function nativeFontFace(pdfium: Pdfium, font: number) {
+  const { lib } = pdfium;
+  const name = pdfium.readUtf8String((buffer, bytes) =>
+    lib.FPDFFont_GetBaseFontName(font, buffer, bytes),
+  );
+  const flags = lib.FPDFFont_GetFlags(font);
+  return {
+    bold:
+      lib.FPDFFont_GetWeight(font) >= 600 ||
+      (flags & (1 << 18)) !== 0 ||
+      /bold|black|heavy/i.test(name),
+    italic: (flags & (1 << 6)) !== 0 || /italic|oblique/i.test(name),
+  };
+}
 
 export function isStandardFamily(family: string): boolean {
   return family.toLowerCase() in STANDARD_FAMILIES;
@@ -127,9 +151,7 @@ export class FontLibrary {
    * Fetches whatever the given texts and families may need, so that
    * validation and drawing can run synchronously afterwards.
    */
-  async prepare(
-    requests: readonly { family: string; text: string }[],
-  ): Promise<void> {
+  async prepare(requests: readonly FontPreparation[]): Promise<void> {
     const families = new Set(
       requests.map((request) => request.family.toLowerCase()),
     );
@@ -137,9 +159,32 @@ export class FontLibrary {
       families.has(font.family.toLowerCase()),
     );
     for (const font of fonts) await this.#bytesOf(font);
+    for (const request of requests) {
+      if (
+        !request.face ||
+        (isStandardFamily(request.family) &&
+          firstNonWinAnsi(request.text) === undefined)
+      )
+        continue;
+      const exact = this.#coveringRegistered({ ...request, ...request.face });
+      if (
+        exact &&
+        isBold(exact.font) === request.face.bold &&
+        isItalic(exact.font) === request.face.italic
+      )
+        continue;
+      const fallback = this.#registered.filter(
+        (font) =>
+          sameFamily(font.family, STYLE_FALLBACK_FAMILY) &&
+          isBold(font) === request.face?.bold &&
+          isItalic(font) === request.face?.italic,
+      );
+      for (const font of fallback) await this.#bytesOf(font);
+    }
     // The fallback is only worth fetching for text no registered font covers.
     const needsFallback = requests.some(
       (request) =>
+        !request.face &&
         // Text the standard fonts cannot encode, or a family only the
         // fallback can stand in for (an embedded font that lost a glyph).
         (firstNonWinAnsi(request.text) !== undefined ||
@@ -232,6 +277,47 @@ export class FontLibrary {
     if (!handles) return;
     for (const handle of handles.values()) pdfium.lib.FPDFFont_Close(handle);
     this.#handles.delete(document);
+  }
+
+  /** Exact native face for a formatting change, with an explicit covering substitute. */
+  resolveStyle(
+    pdfium: Pdfium,
+    document: number,
+    request: FontRequest,
+  ): ResolvedFont | FontProblem {
+    if (
+      isStandardFamily(request.family) &&
+      firstNonWinAnsi(request.text) === undefined
+    )
+      return this.resolve(pdfium, document, request);
+    for (const family of [request.family, STYLE_FALLBACK_FAMILY]) {
+      const candidate = this.#coveringRegistered({ ...request, family });
+      if (
+        !candidate ||
+        isBold(candidate.font) !== request.bold ||
+        isItalic(candidate.font) !== request.italic
+      )
+        continue;
+      const handle = this.#load(pdfium, document, candidate.bytes);
+      const face = nativeFontFace(pdfium, handle);
+      if (face.bold !== request.bold || face.italic !== request.italic)
+        continue;
+      return {
+        handle,
+        family: candidate.font.family,
+        ...(sameFamily(family, request.family)
+          ? {}
+          : {
+              substitution: `${request.family} has no covering requested face; ${family} is used`,
+            }),
+      };
+    }
+    return {
+      path: "/style",
+      code: "font-unavailable",
+      message:
+        "No available font can paint the requested bold and italic face for this text",
+    };
   }
 
   covers(bytes: Uint8Array, text: string): boolean {
