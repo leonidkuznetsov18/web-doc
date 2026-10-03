@@ -140,6 +140,17 @@ frame: `layoutchange` says when the view-geometry helpers describe the new
 revision. Search results and the selection are cleared, with `searchchange`
 and `selectionchange` set to `null`.
 
+While an edited page is rendering, its last completed bitmap and text layers
+stay visible. The new bitmap and matching text/highlight layers are published
+together after rendering succeeds; failed, cancelled or obsolete paints do
+not clear or overwrite the last completed frame. Loading a different document
+still clears the previous document's pages.
+
+If text extraction or text-layer construction fails but the raster succeeds,
+the current raster is still published. Its text and highlight layers are
+cleared so old geometry cannot select or highlight the new pixels. The page
+retains `data-render-error` until a later complete render succeeds.
+
 The reopen has two phases. Opening the edited bytes next to the current
 document may fail or be aborted, and then nothing changes; the swap itself is
 synchronous and cannot fail, so once it ran the call completes even if its
