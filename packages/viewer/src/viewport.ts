@@ -301,6 +301,8 @@ export class ViewerViewport {
     revision?: number,
   ): void {
     const previous = this.#info;
+    const painted = this.#painted.get(this.#contentRevision);
+    this.#painted.clear();
     this.#info = info;
     this.#contentRevision = revision ?? this.#contentRevision + 1;
     // Only pages whose content or size changed get a new render key; the
@@ -319,9 +321,14 @@ export class ViewerViewport {
       const before = previous?.pageSizes?.[pageIndex];
       const resized =
         size?.width !== before?.width || size?.height !== before?.height;
-      if (pageIndex >= from || changed.has(pageIndex) || resized)
+      if (pageIndex >= from || changed.has(pageIndex) || resized) {
         this.#pageRevisions[pageIndex] =
           (this.#pageRevisions[pageIndex] ?? 0) + 1;
+      } else if (painted?.has(pageIndex) && this.#slots.has(pageIndex)) {
+        // A completed, retained page is still current. Carry its queued
+        // notification forward instead of losing it at the next frame.
+        this.#markPainted(pageIndex, this.#contentRevision);
+      }
     }
     // Slots stay mounted and repaint in place; the browser clamps the scroll
     // position itself once the spacer takes the new document's height.
@@ -548,6 +555,7 @@ export class ViewerViewport {
         slot.controller?.abort();
         slot.root.remove();
         this.#slots.delete(pageIndex);
+        for (const pages of this.#painted.values()) pages.delete(pageIndex);
       }
     for (let pageIndex = range.start; pageIndex < range.end; pageIndex += 1) {
       const slot = this.#slots.get(pageIndex) ?? this.#createSlot(pageIndex);
@@ -1126,6 +1134,7 @@ export class ViewerViewport {
   }
 
   #clearSlots(): void {
+    this.#painted.clear();
     for (const slot of this.#slots.values()) {
       slot.controller?.abort();
       slot.root.remove();

@@ -769,3 +769,329 @@ for (const pages of [100, 500]) {
     expect(timings.second).toBeLessThan(10_000);
   });
 }
+
+for (const transition of [
+  "unchanged",
+  "changed",
+  "resized",
+  "shifted",
+  "unmounted",
+  "replaced",
+] as const) {
+  test(`keeps a queued paint notification truthful when its page is ${transition}`, async ({
+    page,
+  }) => {
+    const bytes = await buildPdf(["Original page A", "Original page B"]);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/");
+    const fixture = await page.evaluateHandle(
+      async ({ data, transition }) => {
+        const { ViewerClient } =
+          (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+        const container = document.createElement("div");
+        Object.assign(container.style, {
+          position: "fixed",
+          inset: "0",
+          height: "1800px",
+          overflow: "hidden",
+        });
+        document.body.append(container);
+        const client = ViewerClient.create({
+          assetBaseUrl: new URL("/", location.href).href,
+        });
+        const adapter = client.registry.resolve("pdf");
+        const nativeRender = adapter.render.bind(adapter);
+        const renders = [0, 0];
+        adapter.render = (handle, target, viewport, signal) => {
+          renders[viewport.pageIndex] = (renders[viewport.pageIndex] ?? 0) + 1;
+          return nativeRender(handle, target, viewport, signal);
+        };
+        const viewer = client.createViewer({
+          container,
+          ui: false,
+          initialZoom: 1,
+          layout: transition === "unmounted" ? "single" : "continuous",
+        });
+        const snapshotPage = (pageIndex: number) => {
+          const slot = container.querySelector<HTMLElement>(
+            `[data-page-index="${pageIndex}"]`,
+          );
+          const canvas = slot?.querySelector("canvas");
+          const pixels = canvas
+            ?.getContext("2d")
+            ?.getImageData(0, 0, canvas.width, canvas.height).data;
+          let hash = 2166136261;
+          let ink = 0;
+          if (pixels)
+            for (let at = 0; at < pixels.length; at += 4) {
+              hash = Math.imul(hash ^ (pixels[at] ?? 0), 16777619) >>> 0;
+              if ((pixels[at + 3] ?? 0) > 0 && (pixels[at] ?? 255) < 128)
+                ink += 1;
+            }
+          return {
+            mounted: Boolean(slot),
+            width: canvas?.width,
+            height: canvas?.height,
+            hash,
+            ink,
+            text:
+              slot?.querySelector('[data-zrimo-layer="text"]')?.textContent ??
+              "",
+            error: slot?.dataset.renderError ?? "",
+          };
+        };
+        const layouts: {
+          sessionId: string;
+          revision: number;
+          pages: readonly number[];
+          a: ReturnType<typeof snapshotPage>;
+        }[] = [];
+        viewer.on("layoutchange", (event) =>
+          layouts.push({
+            sessionId: event.sessionId,
+            revision: event.revision,
+            pages: [...event.pages],
+            a: snapshotPage(0),
+          }),
+        );
+        const requestFrame = window.requestAnimationFrame.bind(window);
+        const cancelFrame = window.cancelAnimationFrame.bind(window);
+        const frames = new Map<number, FrameRequestCallback>();
+        let frameId = 0;
+        let armed = false;
+        let originalHash = 0;
+        const releaseFrames = () => {
+          armed = false;
+          window.requestAnimationFrame = requestFrame;
+          window.cancelAnimationFrame = cancelFrame;
+          for (const callback of frames.values()) requestFrame(callback);
+          frames.clear();
+        };
+        await viewer.load(new Uint8Array(data), {
+          fileName: "late-paint-notification.pdf",
+        });
+        const session = await viewer.edit();
+        if (session.format !== "pdf")
+          throw new Error("Expected native PDF editing");
+        const a = (await session.getElements({ pageIndex: 0 })).items[0];
+        const b = (await session.getElements({ pageIndex: 1 })).items[0];
+        if (!a || !b)
+          throw new Error("Both native page text objects are required");
+        return {
+          dpr: Math.max(1, window.devicePixelRatio || 1),
+          async editA() {
+            originalHash = snapshotPage(0).hash;
+            armed = true;
+            window.requestAnimationFrame = (callback) => {
+              const pageA = snapshotPage(0);
+              // Hold the notification frame only after real native raster and
+              // matching text have published. Raster operations remain native.
+              if (
+                armed &&
+                pageA.text === "Updated page A" &&
+                pageA.hash !== originalHash
+              ) {
+                const id = --frameId;
+                frames.set(id, callback);
+                return id;
+              }
+              return requestFrame(callback);
+            };
+            window.cancelAnimationFrame = (id) => {
+              if (!frames.delete(id)) cancelFrame(id);
+            };
+            return session.replaceText({
+              target: a.id,
+              text: "Updated page A",
+            });
+          },
+          async transition() {
+            switch (transition) {
+              case "unchanged":
+                return session.replaceText({
+                  target: b.id,
+                  text: "Updated page B",
+                });
+              case "changed":
+                return session.replaceText({
+                  target: a.id,
+                  text: "Final page A",
+                });
+              case "resized":
+                return session.rotatePage({ pageIndex: 0, by: 90 });
+              case "shifted":
+                return session.deletePage({ pageIndex: 0 });
+              case "replaced":
+                await viewer.load(new Uint8Array(data), {
+                  fileName: "replacement.pdf",
+                });
+                await viewer.edit();
+                return undefined;
+              case "unmounted": {
+                viewer.goToPage(1);
+                // The first held callback is the completed paint notification.
+                // Run the later navigation frame first to retire its actual slot.
+                const later = [...frames.entries()].slice(1);
+                for (const [id] of later) frames.delete(id);
+                await new Promise<void>((resolve) =>
+                  requestFrame((time) => {
+                    for (const [, callback] of later) callback(time);
+                    resolve();
+                  }),
+                );
+                if (snapshotPage(0).mounted)
+                  throw new Error("Navigation did not unmount page A");
+                return undefined;
+              }
+            }
+          },
+          releaseFrames,
+          snapshot() {
+            return {
+              a: snapshotPage(0),
+              b: snapshotPage(1),
+              layouts,
+              renders: [...renders],
+              held: frames.size,
+            };
+          },
+          settle: () =>
+            new Promise<void>((resolve) =>
+              requestFrame(() => requestFrame(() => resolve())),
+            ),
+          async close() {
+            releaseFrames();
+            await viewer.destroy();
+            await client.destroy();
+            container.remove();
+          },
+        };
+      },
+      { data: Array.from(bytes), transition },
+    );
+    try {
+      await expect
+        .poll(() => fixture.evaluate((f) => f.snapshot().a))
+        .toMatchObject({ text: "Original page A", error: "" });
+      if (transition !== "unmounted")
+        await expect
+          .poll(() => fixture.evaluate((f) => f.snapshot().b.text))
+          .toBe("Original page B");
+      const before = await fixture.evaluate((f) => f.snapshot());
+      const receiptA = await fixture.evaluate((f) => f.editA());
+      await expect
+        .poll(() => fixture.evaluate((f) => f.snapshot().held))
+        .toBeGreaterThan(0);
+      const publishedA = await fixture.evaluate((f) => f.snapshot());
+      expect(publishedA.a.hash).not.toBe(before.a.hash);
+      expect(publishedA.a.ink).toBeGreaterThan(50);
+      expect(publishedA.a.text).toBe("Updated page A");
+      expect(
+        publishedA.layouts.some(
+          (event) =>
+            event.revision >= receiptA.revision && event.pages.includes(0),
+        ),
+      ).toBe(false);
+      const receiptB = await fixture.evaluate((f) => f.transition());
+      await fixture.evaluate((f) => f.releaseFrames());
+      const targetPage =
+        transition === "unchanged" || transition === "unmounted" ? "b" : "a";
+      const text =
+        transition === "changed"
+          ? "Final page A"
+          : transition === "shifted" || transition === "unmounted"
+            ? "Original page B"
+            : transition === "replaced"
+              ? "Original page A"
+              : transition === "unchanged"
+                ? "Updated page B"
+                : "Updated page A";
+      await expect
+        .poll(() =>
+          fixture.evaluate(
+            (f, targetPage) => f.snapshot()[targetPage].text,
+            targetPage,
+          ),
+        )
+        .toBe(text);
+      // Rotation retains the text, so its old text layer is not a readiness
+      // signal. Wait for the requested page's actual public paint event.
+      await expect
+        .poll(() =>
+          fixture.evaluate(
+            (f, expected) =>
+              f
+                .snapshot()
+                .layouts.some(
+                  (event) =>
+                    event.revision === expected.revision &&
+                    event.pages.includes(expected.pageIndex),
+                ),
+            {
+              revision:
+                receiptB?.revision ??
+                (transition === "unmounted" ? receiptA.revision : 0),
+              pageIndex: targetPage === "a" ? 0 : 1,
+            },
+          ),
+        )
+        .toBe(true);
+      if (transition === "unchanged") {
+        await expect
+          .poll(() =>
+            fixture.evaluate(
+              (f, revision) =>
+                f
+                  .snapshot()
+                  .layouts.some(
+                    (event) =>
+                      event.revision >= revision && event.pages.includes(0),
+                  ),
+              receiptA.revision,
+            ),
+          )
+          .toBe(true);
+        const after = await fixture.evaluate((f) => f.snapshot());
+        expect(after.a.hash).toBe(publishedA.a.hash);
+        expect(after.renders[0]).toBe(publishedA.renders[0]);
+      }
+      await fixture.evaluate((f) => f.settle());
+      const result = await fixture.evaluate((f) => f.snapshot());
+      const announcements = result.layouts.filter(
+        (event) =>
+          event.pages.includes(0) && event.revision >= receiptA.revision,
+      );
+      if (transition === "unmounted" || transition === "replaced") {
+        expect(announcements).toEqual([]);
+      } else {
+        expect(receiptB?.revision).toBe(receiptA.revision + 1);
+        expect(announcements).toHaveLength(1);
+        expect(announcements[0]?.revision).toBe(receiptB?.revision);
+        const expectedText =
+          transition === "unchanged" || transition === "resized"
+            ? "Updated page A"
+            : text;
+        expect(announcements[0]?.a.text).toBe(expectedText);
+        expect(announcements[0]?.a.error).toBe("");
+        expect(announcements[0]?.a.ink).toBeGreaterThan(50);
+        if (transition === "changed" || transition === "shifted") {
+          expect(announcements[0]?.a.hash).not.toBe(publishedA.a.hash);
+        } else if (transition === "unchanged") {
+          expect(announcements[0]?.a.hash).toBe(publishedA.a.hash);
+        }
+        if (transition === "resized") {
+          const dpr = await fixture.evaluate((f) => f.dpr);
+          expect(announcements[0]?.a).toMatchObject({
+            width: Math.ceil(792 * dpr),
+            height: Math.ceil(612 * dpr),
+          });
+        }
+      }
+    } finally {
+      await fixture.evaluate((f) => f.close());
+      await fixture.dispose();
+    }
+    expect(errors).toEqual([]);
+  });
+}
