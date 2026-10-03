@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.13.1...v0.14.0) (2026-10-03)
+
+### Features
+
+* **viewer:** lay out docx text for inline fields ([4319dbb](https://github.com/leonidkuznetsov18/web-doc/commit/4319dbb1cc7956ea436c37f27cf4f947b66c21e0))
+* **viewer:** support native pdf bold italic and underline ([14ee4b5](https://github.com/leonidkuznetsov18/web-doc/commit/14ee4b519f99d8e961e6625d11f1976cd168baed))
+
+### Bug fixes
+
+* **viewer:** bind pptx overflow hits to native shape owners ([5effa5c](https://github.com/leonidkuznetsov18/web-doc/commit/5effa5cd86be92c4b0e5109c8a6ade7a604eb135))
+* **viewer:** paint docx pages that hold an undecodable picture ([0d8c668](https://github.com/leonidkuznetsov18/web-doc/commit/0d8c6683658dc5ac4e6b1db9bfd9c41bcca2c122))
+* **viewer:** preserve pdf utf-16 caret and search offsets ([543ee2a](https://github.com/leonidkuznetsov18/web-doc/commit/543ee2a03cf131324b190a10e2f43feee072509a))
+* **viewer:** restore visible pptx pointer hit order ([de7edf2](https://github.com/leonidkuznetsov18/web-doc/commit/de7edf21318763f246c226dd12f1d44740306198))
+* **viewer:** support native pdf text deletion ([5814f15](https://github.com/leonidkuznetsov18/web-doc/commit/5814f15c045e4d90c12dfa3c8b7c6deda9d3631a))
+
 ## [0.13.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.13.0...v0.13.1) (2026-10-03)
 
 ### Bug fixes
