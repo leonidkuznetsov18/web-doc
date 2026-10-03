@@ -16,6 +16,7 @@ import {
   paragraph,
   sectPr,
 } from "./fixtures/docx-builder.js";
+import { pngChecksumsHold, samplePng } from "./fixtures/png.js";
 
 /*
  * Task 51 of the DOCX engine upgrade: the display pre-pass scales
@@ -28,6 +29,11 @@ import {
 const PACKAGE_DIR = pathToFileURL(`${process.cwd()}/`);
 const FIXTURE = new URL(
   "../../tests/fixtures/docx/oversized-inline-image.docx",
+  PACKAGE_DIR,
+);
+/** The QA file whose page stayed blank: its one picture is a corrupt PNG. */
+const EVERYTHING = new URL(
+  "../../tests/fixtures/docx/everything.docx",
   PACKAGE_DIR,
 );
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
@@ -222,5 +228,82 @@ describe("DOCX display pre-pass (docx-engine-upgrade)", () => {
       ),
       xml.slice(0, 300),
     );
+  });
+
+  it("leaves out the pictures the browser cannot decode, asking only about those the renderer hands it", async () => {
+    const good = samplePng(2, 2);
+    const emf = new Uint8Array(44);
+    new DataView(emf.buffer).setUint32(0, 1, true);
+    new DataView(emf.buffer).setUint32(40, 0x464d4520, true);
+    const wmf = new Uint8Array(22);
+    new DataView(wmf.buffer).setUint32(0, 0x9ac6cdd7, true);
+    const tiff = Uint8Array.of(0x49, 0x49, 42, 0, 8, 0, 0, 0);
+    const svg = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+    );
+    const bytes = buildDocx({
+      media: [
+        { name: "word/media/image1.png", data: good },
+        { name: "word/media/image2.png", data: PNG },
+        { name: "word/media/image3.emf", data: emf },
+        { name: "word/media/image4.wmf", data: wmf },
+        { name: "word/media/image5.tif", data: tiff },
+        {
+          name: "word/media/image6.svg",
+          data: svg,
+          contentType: "image/svg+xml",
+        },
+      ],
+      body: `<w:p>${inlinePicture(914400, 914400)}</w:p>${sectPr()}`,
+    });
+    const asked: number[] = [];
+    const result = await prepareDocxForDisplay(bytes, limits, undefined, {
+      decodable: async (picture) => {
+        asked.push(picture.length);
+        return pngChecksumsHold(picture);
+      },
+    });
+    assert.deepEqual(result.droppedPictures, ["/word/media/image2.png"]);
+    // Metafiles, TIFF and SVG are drawn by the renderer, not the browser.
+    assert.deepEqual(asked.sort(), [good.length, PNG.length].sort());
+    const display = await OoxmlPackage.open(result.bytes, { limits });
+    assert.ok(!display.has("/word/media/image2.png"));
+    for (const kept of [1, 3, 4, 5, 6])
+      assert.ok(
+        display.currentPartNames.some((name) =>
+          name.startsWith(`/word/media/image${kept}.`),
+        ),
+        `image${kept} stays`,
+      );
+    // The reference stays: the renderer leaves a missing picture's box empty.
+    assert.ok(
+      (await partXml(result.bytes, "/word/_rels/document.xml.rels")).includes(
+        'Target="media/image2.png"',
+      ),
+    );
+    // Without a decoder nothing is decoded or left out.
+    const plain = await prepareDocxForDisplay(bytes, limits);
+    assert.deepEqual(plain.droppedPictures, []);
+    assert.ok(
+      (await OoxmlPackage.open(plain.bytes, { limits })).has(
+        "/word/media/image2.png",
+      ),
+    );
+  });
+
+  it("leaves out the undecodable picture of the everything.docx QA file", async (t) => {
+    if (!existsSync(EVERYTHING)) {
+      t.skip("fixture missing");
+      return;
+    }
+    const bytes = new Uint8Array(readFileSync(EVERYTHING));
+    const result = await prepareDocxForDisplay(bytes, limits, undefined, {
+      decodable: async (picture) => pngChecksumsHold(picture),
+    });
+    assert.deepEqual(result.droppedPictures, ["/word/media/image1.png"]);
+    assert.equal(result.markedParagraphs, 16);
+    const display = await OoxmlPackage.open(result.bytes, { limits });
+    assert.ok(!display.has("/word/media/image1.png"));
+    assert.ok(display.has("/word/document.xml"));
   });
 });

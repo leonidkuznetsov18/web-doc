@@ -5,6 +5,7 @@ import type {
   DocumentInfo,
   HyperlinkTarget,
   RenderViewport,
+  ResourceLimits,
   SpreadsheetSheetInfo,
   TextRun,
   ViewerWarning,
@@ -253,10 +254,23 @@ export interface OfficeAdapterOptions {
 interface DocumentHandle {
   readonly kind: "document";
   readonly format: DocumentFormat;
-  readonly backend: DocxBackend;
+  /** Replaced once if a page fails on an undecodable picture. */
+  backend: DocxBackend;
   readonly warnings: readonly ViewerWarning[];
   /** Maps a run's source to the id of its `w:p` (cached per paragraph). */
   readonly paragraphIdOf: DocxParagraphIdResolver;
+  /** What the engine was opened from, to open it again without pictures. */
+  readonly opened: {
+    readonly bytes: Uint8Array;
+    readonly limits: ResourceLimits;
+    readonly engineOptions: EngineLoadOptions;
+    readonly reportWarning: (warning: ViewerWarning) => void;
+  };
+  /** Set by the first page that fails on a picture; every page awaits it. */
+  pictureRecovery?: Promise<void>;
+  /** Engines a recovery replaced; pages may still be painting on them. */
+  readonly retired: DocxBackend[];
+  closed: boolean;
 }
 
 interface PresentationHandle {
@@ -402,6 +416,14 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
           backend,
           warnings,
           paragraphIdOf: createDocxParagraphIdResolver(docxModelOf(backend)),
+          opened: {
+            bytes: data,
+            limits: context.limits,
+            engineOptions,
+            reportWarning: context.reportWarning,
+          },
+          retired: [],
+          closed: false,
         };
       }
       const buffer = exactArrayBuffer(data);
@@ -517,11 +539,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
     assertUnitIndex(viewport.pageIndex, await this.getInfo(handle));
     try {
       if (handle.kind === "document") {
-        const page = handle.backend.pageSize(viewport.pageIndex);
-        await handle.backend.renderPage(target, viewport.pageIndex, {
-          width: (page.widthPt * 96 * viewport.zoom) / 72,
-          dpr: viewport.devicePixelRatio,
-        });
+        await this.#renderDocumentPage(handle, target, viewport);
       } else if (handle.kind === "presentation") {
         await handle.backend.renderSlide(target, viewport.pageIndex, {
           width: (handle.backend.slideWidth / 9525) * viewport.zoom,
@@ -691,7 +709,72 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
   }
 
   close(handle: OfficeHandle): void {
+    if (handle.kind === "document") {
+      handle.closed = true;
+      for (const backend of handle.retired) backend.destroy();
+    }
     handle.backend.destroy();
+  }
+
+  /**
+   * `@silurus/ooxml` 0.88 fails a whole page when the browser cannot decode
+   * one of its pictures (its page preload rethrows every decode error but a
+   * missing TIFF codec), so the page would stay blank. The first page that
+   * fails that way reopens the engine, once for the document, on a display
+   * copy without the pictures the browser rejects: the engine leaves a
+   * missing picture's box empty and paints the rest. Any other failure, or
+   * one no picture explains, is the page's error.
+   */
+  async #renderDocumentPage(
+    handle: DocumentHandle,
+    target: HTMLCanvasElement | OffscreenCanvas,
+    viewport: RenderViewport,
+  ): Promise<void> {
+    const paint = (backend: DocxBackend): Promise<void> => {
+      const page = backend.pageSize(viewport.pageIndex);
+      return backend.renderPage(target, viewport.pageIndex, {
+        width: (page.widthPt * 96 * viewport.zoom) / 72,
+        dpr: viewport.devicePixelRatio,
+      });
+    };
+    const backend = handle.backend;
+    try {
+      await paint(backend);
+    } catch (error) {
+      if (!isUndecodableImage(error)) throw error;
+      handle.pictureRecovery ??= this.#reopenWithoutUndecodablePictures(handle);
+      await handle.pictureRecovery;
+      if (handle.backend === backend) throw error;
+      await paint(handle.backend);
+    }
+  }
+
+  async #reopenWithoutUndecodablePictures(
+    handle: DocumentHandle,
+  ): Promise<void> {
+    const { bytes, limits, engineOptions, reportWarning } = handle.opened;
+    const display = await prepareDocxForDisplay(bytes, limits, undefined, {
+      decodable: decodesInBrowser,
+    });
+    const parts = display.droppedPictures;
+    if (parts.length === 0) return;
+    const backend = await this.#loadDocx(
+      exactArrayBuffer(display.bytes),
+      engineOptions,
+    );
+    // Without the pictures the layout is the same; the viewer keeps the
+    // page count it read at open.
+    if (handle.closed || backend.pageCount !== handle.backend.pageCount) {
+      backend.destroy();
+      return;
+    }
+    handle.retired.push(handle.backend);
+    handle.backend = backend;
+    reportWarning({
+      code: "fidelity-degraded",
+      message: `${parts.length} picture(s) could not be decoded and are not shown`,
+      details: { feature: "image-decode", parts },
+    });
   }
 
   async #convertLegacy(
@@ -761,6 +844,26 @@ export function createOfficeAdapter(
   options: OfficeAdapterOptions = {},
 ): OfficeDocumentAdapter {
   return new OfficeDocumentAdapter(options);
+}
+
+/** Whether the decoder the engine paints pictures with reads the bytes. */
+async function decodesInBrowser(
+  bytes: Uint8Array,
+  contentType: string,
+): Promise<boolean> {
+  try {
+    const blob = new Blob([bytes.slice()], { type: contentType });
+    (await createImageBitmap(blob)).close();
+    return true;
+  } catch (error) {
+    if (isUndecodableImage(error)) return false;
+    throw error;
+  }
+}
+
+/** How `createImageBitmap` rejects bytes it cannot decode, per the HTML standard. */
+function isUndecodableImage(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "InvalidStateError";
 }
 
 /** The engine's model when it is reachable; a worker-mode getter throws. */

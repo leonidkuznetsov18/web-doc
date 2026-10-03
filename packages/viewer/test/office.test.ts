@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { after, before, describe, it } from "node:test";
+import { existsSync, readFileSync } from "node:fs";
+import { after, before, describe, it, type TestContext } from "node:test";
+import { pathToFileURL } from "node:url";
 
 import type {
   AdapterOpenContext,
   DocumentFormat,
+  OfficeEngineLoaders,
   ResourceLimits,
+  ViewerWarning,
 } from "../src/index.js";
 import {
   OfficeDocumentAdapter,
@@ -15,6 +19,7 @@ import {
 } from "../src/index.js";
 import { OoxmlPackage } from "../src/edit/ooxml/package.js";
 import { buildDocx, inlinePicture, sectPr } from "./fixtures/docx-builder.js";
+import { pngChecksumsHold, samplePng } from "./fixtures/png.js";
 
 const previousOffscreenCanvas = globalThis.OffscreenCanvas;
 
@@ -236,6 +241,100 @@ describe("OfficeDocumentAdapter", () => {
     assert.ok(xml.includes('<wp:extent cx="5943600" cy="1485900"/>'), xml);
     assert.match(xml, /<w:bookmarkStart w:id="\d+" w:name="_wd[0-9A-F]{8}"\/>/);
     assert.deepEqual(source, original);
+  });
+
+  it("paints the everything.docx page without the picture the browser cannot decode, and says so", async (t) => {
+    if (!existsSync(EVERYTHING)) {
+      t.skip("fixture missing");
+      return;
+    }
+    installImageDecoder(t);
+    const loads: string[][] = [];
+    let painted = 0;
+    let destroyed = 0;
+    const adapter = new OfficeDocumentAdapter({
+      engines: {
+        docx: decodingEngine(
+          loads,
+          () => (painted += 1),
+          () => (destroyed += 1),
+        ),
+      },
+    });
+    const warnings: ViewerWarning[] = [];
+    const handle = await adapter.open(
+      new Uint8Array(readFileSync(EVERYTHING)),
+      {
+        ...context("docx"),
+        reportWarning: (warning) => warnings.push(warning),
+      },
+    );
+    const viewport = { pageIndex: 0, zoom: 1, devicePixelRatio: 1 };
+    await adapter.render(handle, new OffscreenCanvas(1, 1), viewport);
+    assert.equal(painted, 1);
+    // Reopened once, from a display copy without the undecodable picture.
+    assert.deepEqual(loads, [["/word/media/image1.png"], []]);
+    assert.deepEqual(
+      warnings.map((warning) => [warning.code, warning.details]),
+      [
+        [
+          "fidelity-degraded",
+          { feature: "image-decode", parts: ["/word/media/image1.png"] },
+        ],
+      ],
+    );
+    // Later pages paint on the reopened engine without probing again.
+    await adapter.render(handle, new OffscreenCanvas(1, 1), viewport);
+    assert.deepEqual([painted, loads.length, warnings.length], [2, 2, 1]);
+    await adapter.close(handle);
+    assert.equal(destroyed, 2);
+  });
+
+  it("keeps the render error of a page that fails while every picture decodes", async (t) => {
+    installImageDecoder(t);
+    const loads: string[][] = [];
+    const adapter = new OfficeDocumentAdapter({
+      engines: {
+        docx: async (data, options) => ({
+          ...(await decodingEngine(
+            loads,
+            () => {},
+            () => {},
+          )(data, options)),
+          renderPage: async () => {
+            throw new DOMException(
+              "The canvas is detached.",
+              "InvalidStateError",
+            );
+          },
+        }),
+      },
+    });
+    const warnings: ViewerWarning[] = [];
+    const handle = await adapter.open(
+      buildDocx({
+        media: [{ name: "word/media/image1.png", data: samplePng(2, 2) }],
+        body: `<w:p>${inlinePicture(914400, 914400)}</w:p>${sectPr()}`,
+      }),
+      {
+        ...context("docx"),
+        reportWarning: (warning) => warnings.push(warning),
+      },
+    );
+    await assert.rejects(
+      adapter.render(handle, new OffscreenCanvas(1, 1), {
+        pageIndex: 0,
+        zoom: 1,
+        devicePixelRatio: 1,
+      }),
+      (error: unknown) =>
+        isCode("render-failed")(error) &&
+        error instanceof ViewerError &&
+        error.cause instanceof DOMException &&
+        error.cause.message === "The canvas is detached.",
+    );
+    assert.equal(loads.length, 1);
+    assert.deepEqual(warnings, []);
   });
 
   it("normalizes presentations and resolves internal slide links", async () => {
@@ -616,4 +715,76 @@ function centralDirectory(sizes: readonly number[]): Uint8Array {
     view.setUint32(offset + 24, size, true);
   });
   return bytes;
+}
+
+/** The QA file whose page stayed blank: its one picture is a corrupt PNG. */
+const EVERYTHING = new URL(
+  "../../tests/fixtures/docx/everything.docx",
+  pathToFileURL(`${process.cwd()}/`),
+);
+
+/**
+ * A browser decoder for Node: `createImageBitmap` rejects a PNG whose
+ * checksums fail with the "InvalidStateError" the HTML standard prescribes,
+ * as Chromium does for the picture of everything.docx.
+ */
+function installImageDecoder(t: TestContext): void {
+  const previous = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "createImageBitmap",
+  );
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: async (source: Blob) => {
+      if (!pngChecksumsHold(new Uint8Array(await source.arrayBuffer())))
+        throw new DOMException(
+          "The source image could not be decoded.",
+          "InvalidStateError",
+        );
+      return { width: 2, height: 2, close: () => {} };
+    },
+  });
+  t.after(() => {
+    if (previous)
+      Object.defineProperty(globalThis, "createImageBitmap", previous);
+    else
+      delete (globalThis as { createImageBitmap?: unknown }).createImageBitmap;
+  });
+}
+
+/**
+ * A DOCX engine that paints like @silurus/ooxml 0.88: every picture of the
+ * page goes through `createImageBitmap`, and one rejection fails the page.
+ * `loads` records the picture parts of each package it is opened on.
+ */
+function decodingEngine(
+  loads: string[][],
+  painted: () => void,
+  destroyed: () => void,
+): NonNullable<OfficeEngineLoaders["docx"]> {
+  return async (data) => {
+    const pkg = await OoxmlPackage.open(new Uint8Array(data), {
+      limits: defaultResourceLimits,
+    });
+    const pictures = pkg.currentPartNames.filter((name) =>
+      name.startsWith("/word/media/"),
+    );
+    loads.push(pictures);
+    return {
+      pageCount: 1,
+      pageSize: () => ({ widthPt: 612, heightPt: 792 }),
+      renderPage: async () => {
+        for (const name of pictures) {
+          const blob = new Blob([(await pkg.part(name)).slice()], {
+            type: "image/png",
+          });
+          (await createImageBitmap(blob)).close();
+        }
+        painted();
+      },
+      collectPageRuns: async () => [],
+      destroy: destroyed,
+    };
+  };
 }
