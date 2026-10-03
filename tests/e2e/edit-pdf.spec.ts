@@ -14,6 +14,149 @@ const EDIT_ASSETS = [
   "/assets/pdfium/pdfium.wasm",
 ];
 
+test("finishes the mounted PDF raster when its parallel text layer fails", async ({
+  page,
+}) => {
+  const original = await buildPdf(["The PDF raster remains visible"]);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto("/");
+  const fixture = await page.evaluateHandle(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const container = document.createElement("div");
+    Object.assign(container.style, {
+      position: "fixed",
+      inset: "0",
+      overflow: "hidden",
+    });
+    document.body.append(container);
+    const client = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href).href,
+    });
+    const adapter = client.registry.resolve("pdf");
+    const render = adapter.render.bind(adapter);
+    const getTextMap = adapter.getTextMap?.bind(adapter);
+    if (!getTextMap)
+      throw new Error("The native PDF adapter must expose text maps");
+    const failText = Promise.withResolvers<void>();
+    let textReads = 0;
+    adapter.getTextMap = async (handle, pageIndex, signal) => {
+      textReads += 1;
+      // The render-side read succeeds through the real adapter. The separate
+      // viewport text read fails only once the native raster is in progress.
+      if (textReads === 2) {
+        await failText.promise;
+        throw new Error("Text layer extraction failed");
+      }
+      return getTextMap(handle, pageIndex, signal);
+    };
+    let targetCanvas: HTMLCanvasElement | OffscreenCanvas | undefined;
+    let renderOutcome = "pending";
+    adapter.render = async (handle, target, viewport, signal) => {
+      targetCanvas = target;
+      try {
+        await render(handle, target, viewport, signal);
+        renderOutcome = "completed";
+      } catch (error) {
+        renderOutcome =
+          error instanceof Error && "code" in error
+            ? String(error.code)
+            : String(error);
+        throw error;
+      }
+    };
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    const cancelFrame = window.cancelAnimationFrame.bind(window);
+    const held = Promise.withResolvers<void>();
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    window.requestAnimationFrame = (callback) => {
+      if (targetCanvas?.width !== Math.ceil(612 * dpr))
+        return requestFrame(callback);
+      const id = --frameId;
+      frames.set(id, callback);
+      held.resolve();
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (!frames.delete(id)) cancelFrame(id);
+    };
+    const restore = () => {
+      window.requestAnimationFrame = requestFrame;
+      window.cancelAnimationFrame = cancelFrame;
+      for (const callback of frames.values()) requestFrame(callback);
+      frames.clear();
+    };
+    const viewer = client.createViewer({
+      container,
+      ui: false,
+      initialZoom: 1,
+    });
+    await viewer.load(new Uint8Array(data), { fileName: "text-failure.pdf" });
+    return {
+      dpr,
+      async failTextLayer() {
+        await held.promise;
+        failText.resolve();
+      },
+      resumeRaster: restore,
+      snapshot() {
+        const slot = container.querySelector<HTMLElement>(
+          '[data-page-index="0"]',
+        );
+        const canvas = slot?.querySelector("canvas");
+        const pixels = canvas
+          ?.getContext("2d")
+          ?.getImageData(0, 0, canvas.width, canvas.height).data;
+        let ink = 0;
+        if (pixels)
+          for (let at = 0; at < pixels.length; at += 4)
+            if ((pixels[at + 3] ?? 0) > 0 && (pixels[at] ?? 255) < 128)
+              ink += 1;
+        return {
+          renderOutcome,
+          ink,
+          width: canvas?.width,
+          height: canvas?.height,
+          error: slot?.dataset.renderError ?? "",
+        };
+      },
+      async close() {
+        failText.resolve();
+        restore();
+        await viewer.destroy();
+        container.remove();
+      },
+    };
+  }, Array.from(original));
+  try {
+    const dpr = await fixture.evaluate((f) => f.dpr);
+    await fixture.evaluate((f) => f.failTextLayer());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot().error))
+      .toBe("Text layer extraction failed");
+    await fixture.evaluate((f) => f.resumeRaster());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot()))
+      .toMatchObject({
+        renderOutcome: "completed",
+        width: Math.ceil(612 * dpr),
+        height: Math.ceil(792 * dpr),
+        error: "Text layer extraction failed",
+      });
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot().ink))
+      .toBeGreaterThan(50 * dpr * dpr);
+  } finally {
+    await fixture.evaluate((f) => f.close());
+    await fixture.dispose();
+  }
+  await expect.poll(() => page.workers().length).toBe(0);
+  expect(pageErrors).toEqual([]);
+});
+
 test("repaints an unchanged mounted page when an edit retires its pending zoom render", async ({
   page,
 }) => {

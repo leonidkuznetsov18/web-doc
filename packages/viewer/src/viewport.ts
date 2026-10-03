@@ -638,9 +638,10 @@ export class ViewerViewport {
     const generation = ++slot.generation;
     const zoom = this.#host.state.zoom;
     const contentRevision = this.#contentRevision;
+    let rendering: Promise<void> | undefined;
     try {
       let renderError: unknown;
-      const rendering = this.#host
+      rendering = this.#host
         .renderPage(pageIndex, slot.canvas, {
           zoom,
           devicePixelRatio: window.devicePixelRatio || 1,
@@ -675,8 +676,9 @@ export class ViewerViewport {
         slot.root.dataset.renderError =
           error instanceof Error ? error.message : String(error);
       }
-      // A text-layer failure may occur while the raster is still rendering.
-      controller.abort();
+      // Text extraction can fail while the native raster remains usable.
+      // Keep its controller owned until the swallowed render promise settles.
+      await rendering;
     } finally {
       if (slot.controller === controller) delete slot.controller;
     }
