@@ -4,9 +4,11 @@ import {
   tableMarkSchema,
   tableMemberMarkSchema,
   textBoxMarkSchema,
+  paragraphMarkSchema,
 } from "../schemas.js";
 import type { PdfElement, PdfShapeStyle, PdfTextStyle } from "../types.js";
 import {
+  pageToUser,
   round,
   roundRect,
   unionRects,
@@ -15,6 +17,7 @@ import {
 } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
 import type { TableSpec } from "./tables.js";
+import type { ParagraphSpec } from "./paragraph.js";
 
 /** FPDFPageObj_GetType values. */
 export const OBJECT_TEXT = 1;
@@ -31,9 +34,31 @@ const FLAG_FORCE_BOLD = 1 << 18;
 
 /** What a `WebDoc` mark says about the objects it tags. */
 export interface MarkParams {
-  readonly kind: "textBox" | "table";
+  readonly kind: "textBox" | "table" | "paragraph";
   readonly id: string;
   readonly [key: string]: unknown;
+}
+
+export function paragraphSpecOf(mark: unknown): ParagraphSpec | undefined {
+  return validateSchema(mark, paragraphMarkSchema, 0).length === 0
+    ? (mark as ParagraphSpec)
+    : undefined;
+}
+
+/** Paragraph marks store the upright frame; the page may subsequently rotate. */
+export function paragraphBounds(
+  spec: ParagraphSpec,
+  geometry: PageGeometry,
+): PageRect {
+  if (geometry.rotation === 0) return spec.rect;
+  const upright = { ...geometry, rotation: 0 };
+  const top = pageToUser(upright, spec.rect.x, spec.rect.y);
+  const bottom = pageToUser(
+    upright,
+    spec.rect.x + spec.rect.width,
+    spec.rect.y + spec.rect.height,
+  );
+  return roundRect(userRectToPage(geometry, top.x, bottom.y, bottom.x, top.y));
 }
 
 /** One PDFium page object with what the model knows about it. */
@@ -96,7 +121,7 @@ export function scanPage(
       const record =
         members && records.find((entry) => entry.id === element.id);
       return members && record?.mark
-        ? compositeElement(record.mark, members, pageIndex)
+        ? compositeElement(record.mark, members, pageIndex, geometry)
         : element;
     }),
     byObject,
@@ -140,6 +165,8 @@ function isValidMark(params: object): boolean {
   switch ((params as MarkParams).kind) {
     case "textBox":
       return validateSchema(params, textBoxMarkSchema, 0).length === 0;
+    case "paragraph":
+      return validateSchema(params, paragraphMarkSchema, 0).length === 0;
     case "table":
       return (
         validateSchema(params, tableMarkSchema, 0).length === 0 ||
@@ -178,7 +205,68 @@ export function markIsFresh(
       .join(" "),
   );
   const tolerance = 2;
-  if (mark.kind === "textBox") {
+  if (mark.kind === "paragraph") {
+    const spec = paragraphSpecOf(mark);
+    if (
+      !spec ||
+      objects.some((object) => {
+        if (lib.FPDFPageObj_GetType(object) !== OBJECT_TEXT) {
+          if (
+            spec.text.trim().length !== 0 ||
+            lib.FPDFPageObj_GetType(object) !== OBJECT_PATH
+          )
+            return true;
+          const mode = pdfium.readNumbers(2, "i32", ([fill, stroke]) =>
+            lib.FPDFPath_GetDrawMode(object, fill!, stroke!),
+          );
+          const color = pdfium.readNumbers(4, "i32", ([r, g, b, a]) =>
+            lib.FPDFPageObj_GetFillColor(object, r!, g!, b!, a!),
+          );
+          return mode?.[0] !== 1 || mode[1] !== 0 || color?.[3] !== 0;
+        }
+        const current = textStyle(pdfium, object);
+        return (
+          current.fontSize !== round(spec.style.fontSize) ||
+          current.color !== spec.style.color ||
+          current.bold !== spec.style.bold ||
+          current.italic !== spec.style.italic
+        );
+      })
+    )
+      return false;
+    const frame = paragraphBounds(spec, geometry);
+    if (union.y + union.height > frame.y + frame.height + tolerance)
+      return false;
+    const nativeLines = objects
+      .filter((object) => lib.FPDFPageObj_GetType(object) === OBJECT_TEXT)
+      .map((object) => textOf(pdfium, object, textPage).trimEnd());
+    if (
+      nativeLines.length !== spec.lines.length ||
+      nativeLines.some((line, index) => line !== spec.lines[index])
+    )
+      return false;
+    // Native wrapping may split at whitespace or inside a long word, but it
+    // cannot invent, reorder or omit any non-whitespace logical character.
+    let cursor = 0;
+    for (const line of nativeLines) {
+      while (
+        !spec.text.startsWith(line, cursor) &&
+        cursor < spec.text.length &&
+        /\s/u.test(spec.text[cursor]!)
+      )
+        cursor += 1;
+      if (!spec.text.startsWith(line, cursor)) return false;
+      cursor += line.length;
+    }
+    if (spec.text.slice(cursor).trim()) return false;
+    if (geometry.rotation !== 0)
+      return (
+        union.x >= frame.x - tolerance &&
+        union.y >= frame.y - tolerance &&
+        union.x + union.width <= frame.x + frame.width + tolerance
+      );
+  }
+  if (mark.kind === "textBox" || mark.kind === "paragraph") {
     const rect = mark.rect as PageRect;
     const text = mark.text as string;
     const style = mark.style as {
@@ -186,7 +274,7 @@ export function markIsFresh(
       readonly lineHeight: number;
     };
     return (
-      drawn === normalizeText(text) &&
+      (mark.kind === "paragraph" || drawn === normalizeText(text)) &&
       union.x >= rect.x - tolerance &&
       union.x + union.width <= rect.x + rect.width + tolerance &&
       // The first line's ink starts inside the box's first line band; the
@@ -269,6 +357,7 @@ function compositeElement(
   mark: MarkParams,
   members: readonly PdfElement[],
   pageIndex: number,
+  geometry: PageGeometry,
 ): PdfElement {
   const bounds = roundRect(unionRects(members.map((member) => member.bounds)));
   const text = members
@@ -298,6 +387,25 @@ function compositeElement(
       operations: TABLE_OPERATIONS,
     };
   }
+  const paragraph = paragraphSpecOf(mark);
+  if (paragraph)
+    return {
+      id: mark.id,
+      kind: "paragraph",
+      pageIndex,
+      bounds: paragraphBounds(paragraph, geometry),
+      text: paragraph.text,
+      textStyle: paragraph.style,
+      ...(geometry.rotation ? { rotation: geometry.rotation * 90 } : {}),
+      operations: geometry.rotation
+        ? ["deleteElement"]
+        : [
+            "replaceText",
+            "replaceParagraphText",
+            "setTextStyle",
+            "deleteElement",
+          ],
+    };
   const style = members.find((member) => member.textStyle)?.textStyle;
   return {
     id: mark.id,

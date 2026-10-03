@@ -180,6 +180,7 @@ interface EditReceipt {
   readonly createdIds: readonly string[]; // elements the batch created, in operation order
   readonly removedIds: readonly string[]; // ids that no longer exist, including those of a deleted page
   readonly remappedIds?: Readonly<Record<string, string>>; // old id → new id, formats that rename only
+  readonly textAnchorMigrations?: readonly TextAnchorMigration[]; // source rows incorporated into a logical paragraph
   readonly changedPages: readonly number[]; // may over-approximate; a superset of the changed pages
   readonly pageCount: number;
   readonly warnings: readonly ViewerWarning[];
@@ -397,23 +398,24 @@ Every method takes the operation's fields and the usual `ApplyOptions`
 (`expectedRevision`, `dryRun`, `label`, `signal`) and resolves with an
 `EditReceipt`.
 
-| Method          | Fields                                                                                                                  | Notes                                                                                                                                                                                                                                                                                       |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `insertTextBox` | `pageIndex`, `rect`, `text` (1–20 000 chars), `style?: PdfTextBoxStyle`                                                 | Wraps the text inside `rect`; the new element's id is `createdIds[0]`.                                                                                                                                                                                                                      |
-| `replaceText`   | `target` (a `text` or `textBox`), `text`, `range?: TextRange` inside the target                                         | A text box is laid out again; a text object keeps its font, size, colour and baseline. With `range` only that part changes: a text object is split around it when only a fallback font can draw the new text, the first part keeping the id (`invalid-range` for a range outside the text). |
-| `setTextStyle`  | `target` (a `text` or `textBox`), `style: PdfTextBoxStyle`                                                              | Fields left out keep their value. Existing text objects accept `color` and `fontSize` only.                                                                                                                                                                                                 |
-| `insertImage`   | `pageIndex`, `rect`, `data: BinaryData`, `mimeType: "image/png" \| "image/jpeg"`                                        | JPEG bytes are embedded as they are; PNG is decoded and stored losslessly with its alpha channel.                                                                                                                                                                                           |
-| `insertShape`   | `pageIndex`, `shape: "rectangle" \| "ellipse"` with `rect`, or `shape: "line"` with `from` and `to`; `stroke?`, `fill?` | A rectangle or ellipse needs a stroke, a fill or both; a line needs a stroke.                                                                                                                                                                                                               |
-| `setShapeStyle` | `target` (a `shape`), `stroke?: PdfStroke \| null`, `fill?: PdfFill \| null`                                            | `null` removes; absent keeps. A shape keeps at least one of the two.                                                                                                                                                                                                                        |
-| `insertTable`   | `pageIndex`, `at`, `width`, `rows: string[][]`, `columnWidths?: number[]`, `style?: PdfTableStyle`                      | 1–100 rows, 1–20 columns, every row the same length; `columnWidths` are relative weights.                                                                                                                                                                                                   |
-| `setTableCell`  | `target` (a `table`), `row`, `column`, `text` (up to 2 000 chars, empty clears)                                         | The table is laid out again from its stored inputs.                                                                                                                                                                                                                                         |
-| `moveElement`   | `target`, exactly one of `to: PagePoint` (new top-left of the bounds) or `by: { dx, dy }`                               | Any element.                                                                                                                                                                                                                                                                                |
-| `resizeElement` | `target`, `rect`                                                                                                        | Text boxes reflow inside `rect`; images, shapes and text objects stretch; tables cannot be resized.                                                                                                                                                                                         |
-| `deleteElement` | `target`                                                                                                                | Removes the element and, for text boxes and tables, every object in it.                                                                                                                                                                                                                     |
-| `insertPage`    | `index` (0 to the page count), `size?: { width, height }` (3–14 400 pt)                                                 | A blank page; the size defaults to the page before, else after, the position.                                                                                                                                                                                                               |
-| `deletePage`    | `pageIndex`                                                                                                             | The last page cannot be deleted (issue code `last-page`). Annotations on the page go with it.                                                                                                                                                                                               |
-| `movePage`      | `from`, `to` (the page's index after the move)                                                                          |                                                                                                                                                                                                                                                                                             |
-| `rotatePage`    | `pageIndex`, `rotation: 0 \| 90 \| 180 \| 270` or `by: 90 \| 180 \| 270`                                                | `rotation` sets the clockwise angle; `by` turns from the page's current angle, the one the file was saved with included. Exactly one of the two. Page space turns with the page.                                                                                                            |
+| Method                 | Fields                                                                                                                     | Notes                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `insertTextBox`        | `pageIndex`, `rect`, `text` (1–20 000 chars), `style?: PdfTextBoxStyle`                                                    | Wraps the text inside `rect`; the new element's id is `createdIds[0]`.                                                                                                                                                                                                                                                                         |
+| `replaceText`          | `target` (a `text`, `textBox` or canonical `paragraph`), `text`, `range?: TextRange` inside the target                     | A text box is laid out again; a canonical paragraph uses `replaceParagraphText`; a text object keeps its font, size, colour and baseline. With `range` only that part changes: a text object is split around it when only a fallback font can draw the new text, the first part keeping the id (`invalid-range` for a range outside the text). |
+| `replaceParagraphText` | `target` (a canonical `paragraph` id), `text` (up to 20 000 chars, empty clears), `range?: TextRange` inside the paragraph | Reflows the complete logical paragraph as one atomic Undo entry; overlap with neighboring content or the page edge is refused.                                                                                                                                                                                                                 |
+| `setTextStyle`         | `target` (a `text`, `textBox` or `paragraph`), `style: PdfTextBoxStyle`                                                    | Fields left out keep their value. Existing text objects accept `color` and `fontSize` only.                                                                                                                                                                                                                                                    |
+| `insertImage`          | `pageIndex`, `rect`, `data: BinaryData`, `mimeType: "image/png" \| "image/jpeg"`                                           | JPEG bytes are embedded as they are; PNG is decoded and stored losslessly with its alpha channel.                                                                                                                                                                                                                                              |
+| `insertShape`          | `pageIndex`, `shape: "rectangle" \| "ellipse"` with `rect`, or `shape: "line"` with `from` and `to`; `stroke?`, `fill?`    | A rectangle or ellipse needs a stroke, a fill or both; a line needs a stroke.                                                                                                                                                                                                                                                                  |
+| `setShapeStyle`        | `target` (a `shape`), `stroke?: PdfStroke \| null`, `fill?: PdfFill \| null`                                               | `null` removes; absent keeps. A shape keeps at least one of the two.                                                                                                                                                                                                                                                                           |
+| `insertTable`          | `pageIndex`, `at`, `width`, `rows: string[][]`, `columnWidths?: number[]`, `style?: PdfTableStyle`                         | 1–100 rows, 1–20 columns, every row the same length; `columnWidths` are relative weights.                                                                                                                                                                                                                                                      |
+| `setTableCell`         | `target` (a `table`), `row`, `column`, `text` (up to 2 000 chars, empty clears)                                            | The table is laid out again from its stored inputs.                                                                                                                                                                                                                                                                                            |
+| `moveElement`          | `target`, exactly one of `to: PagePoint` (new top-left of the bounds) or `by: { dx, dy }`                                  | Any element except imported paragraphs.                                                                                                                                                                                                                                                                                                        |
+| `resizeElement`        | `target`, `rect`                                                                                                           | Text boxes reflow inside `rect`; images, shapes and text objects stretch; tables and imported paragraphs cannot be resized.                                                                                                                                                                                                                    |
+| `deleteElement`        | `target`                                                                                                                   | Removes the element and, for text boxes, tables and paragraphs, every object in it.                                                                                                                                                                                                                                                            |
+| `insertPage`           | `index` (0 to the page count), `size?: { width, height }` (3–14 400 pt)                                                    | A blank page; the size defaults to the page before, else after, the position.                                                                                                                                                                                                                                                                  |
+| `deletePage`           | `pageIndex`                                                                                                                | The last page cannot be deleted (issue code `last-page`). Annotations on the page go with it.                                                                                                                                                                                                                                                  |
+| `movePage`             | `from`, `to` (the page's index after the move)                                                                             |                                                                                                                                                                                                                                                                                                                                                |
+| `rotatePage`           | `pageIndex`, `rotation: 0 \| 90 \| 180 \| 270` or `by: 90 \| 180 \| 270`                                                   | `rotation` sets the clockwise angle; `by` turns from the page's current angle, the one the file was saved with included. Exactly one of the two. Page space turns with the page.                                                                                                                                                               |
 
 ```ts
 interface PdfTextBoxStyle {
@@ -467,14 +469,15 @@ interface PdfTextStyle {
 }
 ```
 
-| Kind      | What it is                                                              | Accepts                                                                        |
-| --------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `text`    | One text object as stored in the file — often a word, a line or a run   | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement` |
-| `image`   | An image object                                                         | `moveElement`, `resizeElement`, `deleteElement`                                |
-| `shape`   | A path object                                                           | `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement`               |
-| `textBox` | A box created by `insertTextBox`; its lines are listed as one element   | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement` |
-| `table`   | A table created by `insertTable`; `text` joins cells by tab and newline | `setTableCell`, `moveElement`, `deleteElement`                                 |
-| `other`   | Shadings, form XObjects and anything else                               | `moveElement`, `resizeElement`, `deleteElement`                                |
+| Kind        | What it is                                                                                                      | Accepts                                                                                 |
+| ----------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `text`      | One text object as stored in the file — often a word, a line or a run                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`          |
+| `image`     | An image object                                                                                                 | `moveElement`, `resizeElement`, `deleteElement`                                         |
+| `shape`     | A path object                                                                                                   | `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement`                        |
+| `textBox`   | A box created by `insertTextBox`; its lines are listed as one element                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`          |
+| `paragraph` | A confidently recognized homogeneous imported paragraph; native rows become one persisted element when reflowed | `replaceText`, `replaceParagraphText`, `setTextStyle` (color/fontSize), `deleteElement` |
+| `table`     | A table created by `insertTable`; `text` joins cells by tab and newline                                         | `setTableCell`, `moveElement`, `deleteElement`                                          |
+| `other`     | Shadings, form XObjects and anything else                                                                       | `moveElement`, `resizeElement`, `deleteElement`                                         |
 
 Ids look like `p0:o3` for objects of the original file and `p0:n2.0.0` for
 elements an operation created. A file saved by an earlier session already
@@ -488,6 +491,55 @@ saved file, in this or another session. A tag that fails validation leaves its
 objects as plain `text` and `shape` elements, and so does a tag whose objects
 no longer match its inputs — a box or table that another tool moved, resized
 or retyped is never rebuilt from stale inputs.
+
+Imported paragraph discovery requires matching typography, a common left edge,
+regular leading and physical word-wrap evidence. A non-final row must reach
+at least 90% of the paragraph width, or the next row's first word plus a space
+must not fit in its remaining width. The latter uses observed native glyph
+origins where available; a font measurement is used only when the source font
+can encode the measured characters.
+
+Upright neighboring text blocks discovery when its baseline is within one
+quarter of the candidate's font size and its horizontal gap is at most three
+times that size. This refuses adjacent table cells and separate list labels
+without letting a large numeral widen the body-text exclusion radius. Distant
+columns and rotated side labels do not block discovery merely by sharing a
+vertical band; actual overlapping bounds still do. In-object list markers,
+pure numeric/date values, indented or excluded continuations, mixed styles,
+line-end hyphens (including PDFium's U+0002 extraction), and Form objects are
+not promoted. Unsupported content keeps its original identity; the engine
+does not expose just the remaining tail of an excluded connected paragraph.
+
+These are conservative geometric rules, not semantic paragraph recognition.
+Equal-width multiword values or consecutive full-width prose can remain
+indistinguishable from physical wraps when the PDF supplies no structure.
+
+For writable source fonts, native glyph origins are checked against the same
+font's default advances. Baseline and whitespace-adjacent differences must
+stay within 0.001 point of geometry precision. Sparse within-word pair
+adjustments are accepted only when default pairs outnumber adjusted pairs
+and both each adjustment and cumulative drift stay within 0.1 em. Systematic
+tracking, custom word spacing and larger unexplained positioning remain
+per-object. Text and font-size reflow recompute default advances; accepted
+source pair positioning is not preserved. Color-only changes preserve it.
+
+An unwritable source font, including embedded CFF or a subset without a mapped
+space glyph, can still provide a full paragraph read and native color-only
+changes; replacement uses an explicit `font-substitution` warning. That
+substitution also changes wrapping and spacing. It is not a promise of native
+font fidelity. Paragraph font sizes are canonicalized to the engine's
+three-decimal geometry precision before persistence.
+
+A `findText()` range naming a canonical paragraph can be passed directly to
+`replaceText()`. When reflow first incorporates original rows, the receipt's
+optional `textAnchorMigrations` records each row's original UTF-16 length and
+start in the paragraph, together with its operation index in the batch.
+`mapRange()` follows those mappings before applying text offsets, including
+Undo, Redo and Reset; failed batches and dry runs do not alter history.
+Replacing or first promoting an already readable canonical paragraph reports
+`createdIds: []`: its logical identity already exists and remains unchanged.
+Removed source-row identities are reported in `removedIds` and, when their
+text is incorporated into the paragraph, `textAnchorMigrations`.
 
 `elementsAt()` lists the elements under a point top-most first. Bounds of
 stroked shapes include the stroke, as PDFium reports them.
@@ -526,11 +578,16 @@ font covers is `font-unavailable`; right-to-left and complex-script text is
 `unsupported-script`. Text is horizontal and left-to-right.
 
 `replaceText` on an existing text object keeps its font when that font can
-draw the new text — a standard font for WinAnsi text, or an embedded TrueType
+draw the new text — a standard font for WinAnsi text, an embedded TrueType
 font whose `cmap` maps every character to a glyph with outline data (a subset
-font can keep the entry for a glyph it emptied) — and otherwise redraws the
+font can keep the entry for a glyph it emptied), or a bare embedded CFF
+program (`/Type1C`) with a glyph named for every character — and the PDF
+gives every character a width, which a subset lists only for the codes it
+used. Otherwise it redraws the
 text at the same baseline, size and colour in a covering font with a
-`font-substitution` warning. The reported
+`font-substitution` warning. A CID-keyed CFF font names no glyphs, so it is
+always substituted. Paragraph reflow keeps to the narrower rule above, so an
+embedded CFF paragraph is still substituted. The reported
 `fontFamily` of existing text is the family the file declares, not the face
 PDFium substitutes for a font that is not embedded.
 
@@ -555,7 +612,7 @@ PDFium substitutes for a font that is not embedded.
 Annotations — links, highlights, comments, form fields — are separate from
 page content and are not edited: a link stays where it was when the text under
 it moves, and deleting a page removes its annotations. Existing text is edited
-one object at a time; paragraphs are not reflowed. Encrypted PDFs cannot be
+one object at a time unless the native paragraph resolver confidently groups it (see below). Encrypted PDFs cannot be
 opened by the viewer and so cannot be edited.
 
 ### Saving and signatures
@@ -621,7 +678,55 @@ reports `unknown-target`, `unsupported-target`, `unsupported-style`,
 `unknown-font`, `font-unavailable`, `unsupported-script`, `range` (geometry
 outside the page, a bad row or column, ragged rows, too few or too many rows),
 `invalid-data`, `required` (a shape without stroke and fill, a line without
-`from`/`to`), `last-page` and `unknown-operation`.
+`from`/`to`), `last-page`, `paragraph-overflow` and `unknown-operation`.
+
+### Imported paragraphs
+
+`getTextParagraph(elementId, options?)` returns `ReadItem<PdfTextParagraph>`.
+It accepts an eligible imported row id or its canonical paragraph id. The
+item contains `id`, `pageIndex`, full logical `text`, aggregate `bounds`,
+homogeneous `textStyle` (including inferred `lineHeight`), `memberIds`, and
+`members: { elementId, start, end }[]` with half-open UTF-16 offsets into that
+logical text. Physical line wraps join with one space; explicit replacement
+newlines remain hard breaks. No dehyphenation is inferred.
+
+Recognition is deliberately bounded: whole left-aligned horizontal rows,
+uniform upright text scaling, the same font program/style, and regular
+leading with physical wrap evidence as described above. Adjacent cells, list
+items, numeric/date values, larger paragraph gaps and overlapping text are not
+combined. Distant columns can each form their own paragraph. Rotated, skewed,
+Form XObject, mixed-style and ambiguous text stays independently editable;
+absence of a paragraph item is normal.
+
+Eligible source elements expose the optional `textEditingTarget` hint. Their
+original ids and kinds remain unchanged. Hosts can follow the hint using
+`getElement(hint)` to obtain the complete `paragraph` before starting an
+inline input. The canonical id resolves before the first edit and survives
+shortening, Undo/Redo, and save/reopen after a mutation. Do not parse its
+spelling. `renderPageWithout(pageIndex, [canonicalId])` suppresses every
+member before or after promotion, preserving the rest of the native page.
+
+`replaceParagraphText` removes/replaces all source rows atomically and wraps
+with native font metrics inside the original width. It refuses with
+`paragraph-overflow` if the result would intersect neighboring content or
+leave the page; bytes, revision and history remain unchanged. Original
+embedded fonts are reused only when encoding coverage is proven; otherwise
+the existing explicit `font-substitution` warning applies. This does not
+promise arbitrary embedded CFF font fidelity. Color-only `setTextStyle`
+changes the native glyphs in place without font substitution or reflow;
+font-size changes validate and reflow the whole paragraph. Other imported
+style changes and move/resize are refused.
+
+If an edited paragraph's page is subsequently rotated, its canonical bounds
+and deletion remain available, but text/style editing is unavailable until
+the page returns upright. Rotated native text editing is outside this contract.
+
+A completely empty paragraph retains its frame in a validated non-painting
+PDF path, with no placeholder glyph. It remains addressable for continued
+typing after save/reopen. `deleteElement(canonicalId)` instead deletes the
+entire paragraph, and a single Undo restores it. Persisted `WebDoc` metadata
+is validated against native content so externally changed groups are not
+silently rebuilt from stale inputs.
 
 ### Overlay primitives
 
@@ -630,17 +735,17 @@ element, commits the change with one `apply()` on blur or idle, and puts the
 selection back. These reads serve that flow; each returns the usual envelope
 (`sessionId`, `revision`) and queues behind earlier calls like any read.
 
-| Method                                          | Returns                  | What it gives                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds`, `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells.                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `getTextFont(elementId)`                        | `ReadItem<TextFont>`     | The font a `text` or `textBox` element is drawn in, ready for `FontFace`: `face.data` is the embedded TrueType program (`format: "truetype"`) with the OS/2, name and post tables a subsetting tool left out added and its tables on four-byte boundaries, as browsers require, or an embedded CFF subset wrapped as OpenType (`"opentype"`) with a Unicode cmap built from its glyph names (Adobe Glyph List names, `uniXXXX`, `uXXXX`) and the advance widths of its charstrings, subroutines followed. `key` is the same for every element in one font. Without a face, `missing` says why: `not-embedded` (show `family` by name, as PDF readers do), `cid-keyed`, `type1`, `no-unicode` or `unreadable` (Type 3 fonts among them). |
-| `getPageLayout(pageIndex)`                      | `ReadItem<PageLayout>`   | Every text element's layout of a page plus the page's displayed `width` and `height`, in one read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `positionAt(pageIndex, point)`                  | `ReadItem<TextPosition>` | The caret position nearest to a page-space point; past a glyph's middle in reading direction the caret goes after it. `undefined` on a page without text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `rangeRects(range)`                             | `ReadResult<PageRect>`   | The rectangles a range covers, one per line fragment, for drawing a selection; empty for a range across pages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `renderPageWithout(pageIndex, ids, { scale? })` | `ReadItem<PageBitmap>`   | The page as PDFium draws it with those elements left out: RGBA pixels over white at `scale` device pixels per point (default 1, bounded by `maxDecodedPixels`). Nothing is reopened and the bytes do not change; unknown ids are ignored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `elementsForSelection(selection)`               | `ReadResult<TextRange>`  | The viewer's `TextSelection` as element ranges: a layout line whose box the selected run covers by half, else the one line that contains the run, else a line whose NFKC-folded text contains the run's; the run's text decides the offsets. Merged per element, in reading order.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `mapRange(range, fromRevision)`                 | `ReadItem<TextRange>`    | Where a range taken at `fromRevision` is now: ranged `replaceText` calls shift it, a deleted element makes it `undefined`, an undo brings it back, renamed ids are followed, and the element's current text bounds it. `undefined` when the session no longer remembers that revision.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `elementsAtSync(pageIndex, point)`              | `ReadResult<PdfElement>` | `elementsAt` from a main-thread cache of the last `getElements({ pageIndex })` result, without waiting behind a queued `apply()`; the revision is the cached one. `cachedPages` lists the pages it holds; changed pages are refreshed after every commit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Method                                          | Returns                  | What it gives                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox`, `paragraph` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds`, `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `getTextFont(elementId)`                        | `ReadItem<TextFont>`     | The font a `text`, `textBox` or `paragraph` element is drawn in (a paragraph's from its first row), ready for `FontFace`: `face.data` is the embedded TrueType program (`format: "truetype"`) with the OS/2, name and post tables a subsetting tool left out added and its tables on four-byte boundaries, as browsers require, or an embedded CFF subset wrapped as OpenType (`"opentype"`) with a Unicode cmap built from its glyph names (Adobe Glyph List names, `uniXXXX`, `uXXXX`) and the advance widths of its charstrings, subroutines followed. `key` is the same for every element in one font. Without a face, `missing` says why: `not-embedded` (show `family` by name, as PDF readers do), `cid-keyed`, `type1`, `no-unicode` or `unreadable` (Type 3 fonts among them). |
+| `getPageLayout(pageIndex)`                      | `ReadItem<PageLayout>`   | Every text element's layout of a page plus the page's displayed `width` and `height`, in one read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `positionAt(pageIndex, point)`                  | `ReadItem<TextPosition>` | The caret position nearest to a page-space point; past a glyph's middle in reading direction the caret goes after it. `undefined` on a page without text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `rangeRects(range)`                             | `ReadResult<PageRect>`   | The rectangles a range covers, one per line fragment, for drawing a selection; empty for a range across pages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `renderPageWithout(pageIndex, ids, { scale? })` | `ReadItem<PageBitmap>`   | The page as PDFium draws it with those elements left out: RGBA pixels over white at `scale` device pixels per point (default 1, bounded by `maxDecodedPixels`). Nothing is reopened and the bytes do not change; unknown ids are ignored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `elementsForSelection(selection)`               | `ReadResult<TextRange>`  | The viewer's `TextSelection` as element ranges: a layout line whose box the selected run covers by half, else the one line that contains the run, else a line whose NFKC-folded text contains the run's; the run's text decides the offsets. Merged per element, in reading order.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `mapRange(range, fromRevision)`                 | `ReadItem<TextRange>`    | Where a range taken at `fromRevision` is now: ranged `replaceText` and `replaceParagraphText` calls shift it, a deleted element makes it `undefined`, an undo brings it back, renamed ids are followed, and the element's current text bounds it. `undefined` when the session no longer remembers that revision.                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `elementsAtSync(pageIndex, point)`              | `ReadResult<PdfElement>` | `elementsAt` from a main-thread cache of the last `getElements({ pageIndex })` result, without waiting behind a queued `apply()`; the revision is the cached one. `cachedPages` lists the pages it holds; changed pages are refreshed after every commit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 `replaceText` takes an optional `range` (see the operations table), so the
 committed change touches only what the user typed over.

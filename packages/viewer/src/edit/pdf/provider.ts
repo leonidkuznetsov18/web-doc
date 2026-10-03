@@ -16,10 +16,20 @@ import {
   WorkerEngineClient,
 } from "../worker-engine.js";
 import { pdfOperationSchemas } from "./schemas.js";
-import type { PageBitmap, PageLayout, TextFont, TextLayout } from "./types.js";
+import type {
+  PageBitmap,
+  PageLayout,
+  PdfTextParagraph,
+  TextFont,
+  TextLayout,
+} from "./types.js";
 
 /** The reads behind the overlay primitives, beyond the core engine interface. */
 export interface PdfEngineReads {
+  textParagraph?(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<PdfTextParagraph | undefined>;
   textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined>;
   textFont(id: string, signal: AbortSignal): Promise<TextFont | undefined>;
   positionAt(
@@ -131,6 +141,13 @@ export class PdfEditEngineClient
           ),
       ],
     );
+  }
+
+  textParagraph(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<PdfTextParagraph | undefined> {
+    return this.request("edit-text-paragraph", { id }, signal);
   }
 
   textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined> {

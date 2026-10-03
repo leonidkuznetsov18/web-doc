@@ -21,6 +21,7 @@ export type PdfElementKind =
   | "image"
   | "shape" // a path object
   | "textBox" // a text box created by insertTextBox
+  | "paragraph" // confidently grouped imported text, retained after editing
   | "table" // a table created by insertTable
   | "other"; // shadings, form XObjects and anything else
 
@@ -36,7 +37,7 @@ export interface PdfTextStyle {
   readonly color: string;
   /** Text boxes only. */
   readonly align?: PdfTextAlign;
-  /** Text boxes only; a multiple of the font size. */
+  /** Text boxes and paragraphs; a multiple of the font size. */
   readonly lineHeight?: number;
 }
 
@@ -47,7 +48,9 @@ export interface PdfShapeStyle {
 
 export interface PdfElement extends EditElement {
   readonly kind: PdfElementKind;
-  /** Present for `text` and `textBox`. */
+  /** Canonical native paragraph target, when this imported row belongs to one. */
+  readonly textEditingTarget?: string;
+  /** Present for `text`, `textBox` and `paragraph`. */
   readonly textStyle?: PdfTextStyle;
   /** Present for `shape` and `table`. */
   readonly shapeStyle?: PdfShapeStyle;
@@ -79,7 +82,7 @@ export interface InsertTextBoxOperation {
 
 export interface ReplaceTextOperation {
   readonly op: "replaceText";
-  /** A `textBox` or `text` element. */
+  /** A `textBox`, `text` or `paragraph` element; supported fields depend on its capabilities. */
   readonly target: string;
   readonly text: string;
   /**
@@ -91,9 +94,33 @@ export interface ReplaceTextOperation {
   readonly range?: TextRange;
 }
 
+/** A confidently resolved homogeneous paragraph of imported horizontal text. */
+export interface PdfTextParagraph {
+  readonly id: string;
+  readonly pageIndex: number;
+  readonly text: string;
+  readonly bounds: PageRect;
+  readonly textStyle: PdfTextStyle & { readonly lineHeight: number };
+  readonly memberIds: readonly string[];
+  /** Half-open UTF-16 spans in the paragraph's logical text. */
+  readonly members: readonly {
+    readonly elementId: string;
+    readonly start: number;
+    readonly end: number;
+  }[];
+}
+
+export interface ReplaceParagraphTextOperation {
+  readonly op: "replaceParagraphText";
+  readonly target: string;
+  readonly text: string;
+  /** Both endpoints name the paragraph id, not an individual visual row. */
+  readonly range?: TextRange;
+}
+
 export interface SetTextStyleOperation {
   readonly op: "setTextStyle";
-  /** A `textBox` or `text` element. */
+  /** A `textBox`, `text`, or `paragraph` element. */
   readonly target: string;
   readonly style: PdfTextBoxStyle;
 }
@@ -251,6 +278,7 @@ export type RotatePageOperation =
 export type PdfOperation =
   | InsertTextBoxOperation
   | ReplaceTextOperation
+  | ReplaceParagraphTextOperation
   | SetTextStyleOperation
   | ResizeElementOperation
   | MoveElementOperation
@@ -383,13 +411,23 @@ export interface PdfEditSession extends EditSessionBase<
 > {
   readonly format: "pdf";
   save(options?: PdfSaveOptions): Promise<SavedDocument>;
-  /** Lines, glyph boxes and styles of a `text`, `textBox` or `table` element. */
+  /** Resolves an imported row or a paragraph id; undefined when grouping is unsafe. */
+  getTextParagraph(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<PdfTextParagraph>>;
+  /** Reflows the complete paragraph as one atomic history change. */
+  replaceParagraphText(
+    fields: Fields<ReplaceParagraphTextOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt>;
+  /** Lines, glyph boxes and styles of a `text`, `textBox`, `paragraph` or `table` element. */
   getTextLayout(
     elementId: string,
     options?: ReadOptions,
   ): Promise<ReadItem<TextLayout>>;
   /**
-   * The font a `text` or `textBox` element is drawn in, as a browser loads it,
+   * The font a `text`, `textBox` or `paragraph` element is drawn in, as a browser loads it,
    * or why it cannot be loaded; see `TextFont`.
    */
   getTextFont(

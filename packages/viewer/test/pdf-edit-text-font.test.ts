@@ -22,7 +22,7 @@ import type { PdfElement, TextFont } from "../src/index.js";
 import { defaultResourceLimits } from "../src/index.js";
 import { cffFont } from "./fixtures/cff-font.js";
 import { loopbackWorker } from "./fixtures/loopback-worker.js";
-import { fixturePdfium } from "./fixtures/pdf-builder.js";
+import { buildPdf, fixturePdfium } from "./fixtures/pdf-builder.js";
 import {
   CFF_TEXT_WIDTHS,
   cffTextPdf,
@@ -509,6 +509,48 @@ describe("the face of a PDF text element", () => {
       assert.equal(await engine.textFont("missing", signal), undefined);
     } finally {
       await engine.dispose();
+    }
+  });
+
+  it("answers for a paragraph by its first row, before and after it is edited", async () => {
+    const lines = [
+      "Since 2013 our independent testing has tracked",
+      "software quality across teams and organisations",
+      "and shared the results with practitioners.",
+    ];
+    const { session, end } = await pdfSession(
+      await buildPdf([
+        {
+          texts: lines.map((text, index) => ({
+            text,
+            x: 72,
+            y: 700 - index * 20,
+            fontSize: 11,
+          })),
+        },
+      ]),
+      { fallbackFont: true },
+    );
+    try {
+      const first = (await session.getElements({ pageIndex: 0 })).items[0]!;
+      const paragraph = (await session.getTextParagraph(first.id)).item!;
+      assert.match(paragraph.id, /:paragraph$/);
+      const row = (await session.getTextFont(first.id)).item!;
+      const virtual = (await session.getTextFont(paragraph.id)).item!;
+      assert.equal(virtual.elementId, paragraph.id);
+      assert.equal(virtual.key, row.key);
+      assert.equal(virtual.missing, "not-embedded");
+      assert.equal(virtual.family, "Helvetica");
+
+      await session.replaceParagraphText({
+        target: paragraph.id,
+        text: "Since 2013 our testing has tracked software quality.",
+      });
+      const edited = (await session.getTextFont(paragraph.id)).item;
+      assert.equal(edited?.elementId, paragraph.id);
+      assert.equal(edited?.family, "Helvetica");
+    } finally {
+      await end();
     }
   });
 

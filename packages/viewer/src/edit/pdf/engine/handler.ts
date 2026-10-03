@@ -150,6 +150,8 @@ export function createPdfEditHandler(
       }
       case "edit-text-layout":
         return engine().textLayout((payload as { readonly id: string }).id);
+      case "edit-text-paragraph":
+        return engine().textParagraph((payload as { readonly id: string }).id);
       case "edit-position-at": {
         const { pageIndex, point } = payload as {
           readonly pageIndex: number;

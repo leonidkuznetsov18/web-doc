@@ -1033,7 +1033,12 @@ export class EditSessionController implements EditSessionCore {
     operationCount: number,
     createdIds: readonly string[],
     change: Pick<EngineChange, "changedPages" | "warnings"> &
-      Partial<Pick<EngineChange, "removedIds" | "remappedIds">> & {
+      Partial<
+        Pick<
+          EngineChange,
+          "removedIds" | "remappedIds" | "textAnchorMigrations"
+        >
+      > & {
         readonly pageCount: number;
       },
   ): EditReceipt {
@@ -1046,6 +1051,15 @@ export class EditSessionController implements EditSessionCore {
       removedIds: Object.freeze([...(change.removedIds ?? [])]),
       ...(change.remappedIds
         ? { remappedIds: Object.freeze({ ...change.remappedIds }) }
+        : {}),
+      ...(change.textAnchorMigrations?.length
+        ? {
+            textAnchorMigrations: Object.freeze(
+              change.textAnchorMigrations.map((migration) =>
+                Object.freeze({ ...migration }),
+              ),
+            ),
+          }
         : {}),
       changedPages: Object.freeze([...change.changedPages]),
       pageCount: change.pageCount,

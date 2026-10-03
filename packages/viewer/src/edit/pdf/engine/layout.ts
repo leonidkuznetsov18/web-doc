@@ -51,7 +51,7 @@ interface Glyph {
 /** How far a point may be from a glyph for `FPDFText_GetCharIndexAtPos`. */
 const HIT_TOLERANCE = 2;
 
-const TEXT_KINDS = new Set(["text", "textBox", "table"]);
+const TEXT_KINDS = new Set(["text", "textBox", "table", "paragraph"]);
 
 /** The layout of one element, or `undefined` when it draws no text. */
 export function layoutOf(

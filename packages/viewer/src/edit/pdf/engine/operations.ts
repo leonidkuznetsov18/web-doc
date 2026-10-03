@@ -1,12 +1,13 @@
 import type { ResourceLimits, ViewerWarning } from "../../../contracts.js";
 import type { AssetSource } from "../../assets.js";
 import type { ImageCache } from "./images.js";
-import type { OperationIssue } from "../../types.js";
+import type { OperationIssue, TextAnchorMigration } from "../../types.js";
 import type { PdfElement, PdfOperation } from "../types.js";
 import type { PageGeometry } from "./geometry.js";
 import type { ObjectRecord } from "./elements.js";
 import type { Pdfium } from "./pdfium.js";
 import type { FontLibrary, TextMeasurer } from "./fonts.js";
+import type { ParagraphTarget } from "./paragraph.js";
 
 /** What an operation sees of the document while validating or applying. */
 export interface OperationContext {
@@ -25,12 +26,16 @@ export interface OperationContext {
   newId(pageIndex: number, suffix?: string): string;
   /** Loads a page for writing; its content is regenerated afterwards. */
   withPage<T>(pageIndex: number, use: (page: number) => T): T;
+  /** Reads native resources without regenerating the content stream. */
+  readPage<T>(pageIndex: number, use: (page: number) => T): T;
   /** Records objects appended to a page by this operation. */
   appendObjects(pageIndex: number, records: readonly ObjectRecord[]): void;
   /** Where an element's objects sit: their page and their indexes in drawing order. */
   locate(id: string): ElementLocation | undefined;
   /** The element as a query would return it. */
   element(id: string): PdfElement | undefined;
+  paragraph(id: string): ParagraphTarget | undefined;
+  pageElements(pageIndex: number): readonly PdfElement[];
   /** Ids of every element on a page, for what a page deletion removes. */
   pageElementIds(pageIndex: number): readonly string[];
   /** Displayed size of a page in points. */
@@ -64,6 +69,10 @@ export interface OperationResult {
   readonly createdIds: readonly string[];
   /** Ids the operation made disappear. */
   readonly removedIds?: readonly string[];
+  readonly textAnchorMigrations?: readonly Omit<
+    TextAnchorMigration,
+    "operationIndex"
+  >[];
   readonly changedPages: readonly number[];
   readonly warnings: readonly ViewerWarning[];
 }

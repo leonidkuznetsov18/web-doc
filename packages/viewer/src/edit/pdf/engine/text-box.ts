@@ -218,9 +218,9 @@ export function removeObjects(
       const object = lib.FPDFPage_GetObject(page, index);
       lib.FPDFPage_RemoveObject(page, object);
       lib.FPDFPageObj_Destroy(object);
+      context.spliceObjects(location.pageIndex, index, 1, []);
     }
   });
-  context.spliceObjects(location.pageIndex, first, location.indexes.length, []);
   return first;
 }
 
@@ -312,6 +312,7 @@ export function fontRequestsOf(
           text: operation.text,
         });
         break;
+      case "replaceParagraphText":
       case "replaceText": {
         const box = spec(operation.target);
         if (box) {
@@ -319,14 +320,29 @@ export function fontRequestsOf(
           break;
         }
         const element = elementOf(operation.target);
-        if (element?.kind === "text")
+        if (element?.kind === "text" || element?.kind === "paragraph")
           requests.push({
             family: element.textStyle?.fontFamily ?? "Helvetica",
-            text: operation.text,
+            text:
+              element.kind === "paragraph" && operation.range
+                ? (element.text ?? "").slice(0, operation.range.start.offset) +
+                  operation.text +
+                  (element.text ?? "").slice(operation.range.end.offset)
+                : operation.text,
           });
         break;
       }
       case "setTextStyle": {
+        const paragraph = elementOf(operation.target);
+        if (
+          paragraph?.kind === "paragraph" &&
+          operation.style.fontSize !== undefined &&
+          operation.style.fontSize !== paragraph.textStyle?.fontSize
+        )
+          requests.push({
+            family: paragraph.textStyle?.fontFamily ?? "Helvetica",
+            text: paragraph.text ?? "",
+          });
         const box = spec(operation.target);
         if (box)
           requests.push({

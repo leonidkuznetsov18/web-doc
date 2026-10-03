@@ -21,6 +21,7 @@ import type {
   ReadOptions,
   ReadResult,
   TextTarget,
+  TextAnchorMigration,
 } from "./types.js";
 
 /*
@@ -123,6 +124,7 @@ export interface EngineChange {
   readonly removedIds: readonly string[];
   /** Old id → new id, when the format had to rename an element. */
   readonly remappedIds?: Readonly<Record<string, string>>;
+  readonly textAnchorMigrations?: readonly TextAnchorMigration[];
   /** A superset of the pages whose content changed. */
   readonly changedPages: readonly number[];
   /**
