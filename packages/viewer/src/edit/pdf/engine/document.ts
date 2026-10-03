@@ -187,6 +187,13 @@ const CREATING_OPERATIONS = new Set<string>([
   "insertTable",
 ]);
 
+/** Operations that change page order, and with it the index a loaded page is kept by. */
+const PAGE_ORDER_OPERATIONS = new Set<string>([
+  "insertPage",
+  "deletePage",
+  "movePage",
+]);
+
 function referenceOf(operation: { readonly op: string }): number | undefined {
   const target = (operation as { readonly target?: unknown }).target;
   return typeof target === "string" ? parseReference(target) : undefined;
@@ -231,6 +238,8 @@ export class PdfEditDocument {
   #batches = 0;
   /** Browser faces of the document's fonts, by font program; see `textFont`. */
   readonly #faces = new Map<string, TextFace>();
+  /** Pages the running batch changed, by index; see `#batch`. */
+  #written: Map<number, number> | undefined;
 
   constructor(
     pdfium: Pdfium,
@@ -334,6 +343,10 @@ export class PdfEditDocument {
    * the next batch number as their state id.
    */
   apply(input: readonly PdfOrUnknownOperation[] | EngineBatch): EngineChange {
+    return this.#batch(() => this.#apply(input));
+  }
+
+  #apply(input: readonly PdfOrUnknownOperation[] | EngineBatch): EngineChange {
     const batch: EngineBatch = Array.isArray(input)
       ? { stateId: this.#batches + 1, operations: input }
       : (input as EngineBatch);
@@ -354,6 +367,7 @@ export class PdfEditDocument {
         details: { signatures: this.#signatures, features: this.#features },
       });
     operations.forEach((raw, operationIndex) => {
+      if (PAGE_ORDER_OPERATIONS.has(raw.op)) this.#writeBack();
       const handler = handlers[raw.op as PdfOperation["op"]];
       if (!handler)
         throw new ViewerError("internal", `Unknown pdf operation ${raw.op}`);
@@ -927,31 +941,77 @@ export class PdfEditDocument {
       : undefined;
   }
 
-  /** Loads a page, lets `use` change it, regenerates its content stream. */
+  /**
+   * Loads a page and lets `use` change it. The page stays loaded until the
+   * batch ends, so what the batch reads next sees the change; see `#batch`.
+   */
   #writePage<T>(pageIndex: number, use: (page: number) => T): T {
-    const { lib } = this.#pdfium;
-    const page = lib.FPDF_LoadPage(this.#document.handle, pageIndex);
-    if (!page)
-      throw new ViewerError("render-failed", "PDFium could not load the page", {
-        details: { pageIndex },
-      });
-    try {
-      // Objects are assigned before the change so appended ones follow them.
-      this.#objectsOf(pageIndex, page);
-      const result = use(page);
-      if (!lib.FPDFPage_GenerateContent(page))
+    if (!this.#written)
+      return this.#batch(() => this.#writePage(pageIndex, use));
+    let page = this.#written.get(pageIndex);
+    if (page === undefined) {
+      page = this.#pdfium.lib.FPDF_LoadPage(this.#document.handle, pageIndex);
+      if (!page)
         throw new ViewerError(
-          "edit-failed",
-          "PDFium could not rewrite the page",
-          {
-            details: { stage: "apply", pageIndex },
-          },
+          "render-failed",
+          "PDFium could not load the page",
+          { details: { pageIndex } },
         );
-      delete this.#pages[pageIndex]!.elements;
-      delete this.#pages[pageIndex]!.paragraphs;
+      this.#written.set(pageIndex, page);
+    }
+    // Objects are assigned before the change so appended ones follow them.
+    this.#objectsOf(pageIndex, page);
+    const result = use(page);
+    delete this.#pages[pageIndex]!.elements;
+    delete this.#pages[pageIndex]!.paragraphs;
+    return result;
+  }
+
+  /**
+   * Runs `run` with the pages it changes kept loaded, then regenerates each
+   * page's content stream once. PDFium rewrites a whole stream however
+   * little changed, which takes seconds on a page of thousands of objects,
+   * and object reads (text, bounds) need no regenerated content. A failing
+   * batch closes its pages unwritten: the caller restores the working copy.
+   */
+  #batch<T>(run: () => T): T {
+    if (this.#written) return run();
+    const written = new Map<number, number>();
+    this.#written = written;
+    try {
+      const result = run();
+      this.#writeBack();
       return result;
     } finally {
-      lib.FPDF_ClosePage(page);
+      this.#written = undefined;
+      for (const [pageIndex, page] of written) {
+        this.#pdfium.lib.FPDF_ClosePage(page);
+        delete this.#pages[pageIndex]?.elements;
+        delete this.#pages[pageIndex]?.paragraphs;
+      }
+    }
+  }
+
+  /** Regenerates and closes the pages the running batch changed. */
+  #writeBack(): void {
+    const written = this.#written;
+    if (!written) return;
+    const { lib } = this.#pdfium;
+    for (const [pageIndex, page] of written) {
+      written.delete(pageIndex);
+      try {
+        if (!lib.FPDFPage_GenerateContent(page))
+          throw new ViewerError(
+            "edit-failed",
+            "PDFium could not rewrite the page",
+            { details: { stage: "apply", pageIndex } },
+          );
+      } finally {
+        lib.FPDF_ClosePage(page);
+      }
+      // Elements are read again from the regenerated content.
+      delete this.#pages[pageIndex]!.elements;
+      delete this.#pages[pageIndex]!.paragraphs;
     }
   }
 
@@ -1175,7 +1235,9 @@ export class PdfEditDocument {
     use: (page: number, textPage: number, geometry: PageGeometry) => T,
   ): T {
     const { lib } = this.#pdfium;
-    const page = lib.FPDF_LoadPage(this.#document.handle, pageIndex);
+    // A page the running batch changed is read as it stands in memory.
+    const written = this.#written?.get(pageIndex);
+    const page = written ?? lib.FPDF_LoadPage(this.#document.handle, pageIndex);
     if (!page)
       throw new ViewerError("render-failed", "PDFium could not load the page", {
         details: { pageIndex },
@@ -1188,7 +1250,7 @@ export class PdfEditDocument {
         lib.FPDFText_ClosePage(textPage);
       }
     } finally {
-      lib.FPDF_ClosePage(page);
+      if (written === undefined) lib.FPDF_ClosePage(page);
     }
   }
 

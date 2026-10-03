@@ -118,6 +118,12 @@ type ChangedPages =
 type FailureStage = "apply" | "materialize" | "reopen";
 
 /**
+ * A state the engine would take at least this long to rebuild by replaying
+ * batches keeps its bytes, so undo, redo and recovery reopen it instead.
+ */
+const SLOW_REPLAY_MS = 1000;
+
+/**
  * The format-independent editing session: validation, history, revisions,
  * saving and the viewer refresh. Format modules wrap it to add typed methods.
  * Calls run one at a time in call order.
@@ -137,6 +143,8 @@ export class EditSessionController implements EditSessionCore {
   /** Materialized bytes of some committed states, by state id, so restores replay less. */
   readonly #checkpoints = new Map<number, Uint8Array>();
   #checkpointBytes = 0;
+  /** Engine time each reachable state took to build from the state before it. */
+  readonly #buildMs = new Map<number, number>();
   /** Named checkpoints by id, in creation order. */
   readonly #named = new Map<string, NamedCheckpoint>();
   /** State ids named checkpoints pin, with how many name each; never evicted. */
@@ -235,13 +243,15 @@ export class EditSessionController implements EditSessionCore {
       }
 
       const before = this.#history.pageCount;
-      const { change, shown } = await this.#transaction(
+      const { change, shown, buildMs } = await this.#transaction(
         signal,
         "apply",
         async () => {
+          const started = performance.now();
           const result = await this.#engine.apply(engineBatch, signal);
           return {
             change: result,
+            buildMs: performance.now() - started,
             shown: await this.#show(
               signal,
               this.#pagesOf(result.changedPages, result.reflowFrom),
@@ -262,7 +272,7 @@ export class EditSessionController implements EditSessionCore {
         pageCountBefore: before,
         pageCountAfter: shown.pageCount,
       });
-      this.#commit("apply", shown.changedPages, shown);
+      this.#commit("apply", shown.changedPages, shown, buildMs);
       return this.#receipt(false, batch.length, change.createdIds, {
         ...change,
         changedPages: shown.changedPages,
@@ -509,8 +519,11 @@ export class EditSessionController implements EditSessionCore {
       if (named.stateId === this.#history.stateId) return this.#noop();
       const before = this.#history.pageCount;
       const changedPages = allPages(Math.max(before, named.pageCount));
+      let buildMs = 0;
       const shown = await this.#transaction(signal, "apply", async () => {
+        const started = performance.now();
         await this.#engine.restore(this.#targetFor(named.entries), signal);
+        buildMs = performance.now() - started;
         return this.#show(signal, changedPages);
       });
       const diff = entryDiff(
@@ -529,7 +542,7 @@ export class EditSessionController implements EditSessionCore {
         },
         named.stateId,
       );
-      this.#commit("restore", shown.changedPages, shown);
+      this.#commit("restore", shown.changedPages, shown, buildMs);
       return this.#receipt(false, 0, diff.created, {
         removedIds: diff.removed,
         changedPages: shown.changedPages,
@@ -786,14 +799,16 @@ export class EditSessionController implements EditSessionCore {
     }
   }
 
+  /** `buildMs`: the engine time the new state took, for an apply or a restore. */
   #commit(
     reason: DocumentChangeReason,
     changedPages: readonly number[],
     shown: Shown,
+    buildMs = 0,
   ): void {
     this.#committedBytes = shown.bytes;
     if (reason === "apply" || reason === "restore")
-      this.#keepCheckpoint(shown.bytes);
+      this.#keepCheckpoint(shown.bytes, buildMs);
     else if (reason === "reset") this.#dropCheckpoints();
     this.#revision += 1;
     this.#state = this.#snapshot();
@@ -884,8 +899,11 @@ export class EditSessionController implements EditSessionCore {
     return Object.freeze(result);
   }
 
-  /** Keeps every stride-th committed state's bytes within the memory budget. */
-  #keepCheckpoint(bytes: Uint8Array): void {
+  /**
+   * Keeps a committed state's bytes, within the memory budget, every
+   * stride-th state and whenever replaying to it would take SLOW_REPLAY_MS.
+   */
+  #keepCheckpoint(bytes: Uint8Array, buildMs: number): void {
     const stride = Math.max(
       1,
       Math.floor(this.#host.limits.maxEditHistory / 4),
@@ -897,13 +915,29 @@ export class EditSessionController implements EditSessionCore {
     for (const [id, kept] of this.#checkpoints)
       if (!reachable.has(id) && !this.#pinned.has(id))
         this.#forgetCheckpoint(id, kept);
-    if (
-      stateId === 0 ||
-      this.#checkpoints.has(stateId) ||
-      stateId % stride !== 0
-    )
-      return;
-    this.#retain(stateId, bytes);
+    for (const id of this.#buildMs.keys())
+      if (!reachable.has(id)) this.#buildMs.delete(id);
+    if (stateId === 0 || this.#checkpoints.has(stateId)) return;
+    this.#buildMs.set(stateId, buildMs);
+    if (stateId % stride === 0 || this.#replayMs() >= SLOW_REPLAY_MS)
+      this.#retain(stateId, bytes);
+  }
+
+  /**
+   * The engine time a restore of the current state would spend replaying:
+   * what its entries took since the newest retained bytes, or since the
+   * original or a restore entry's rebuild.
+   */
+  #replayMs(): number {
+    const entries = this.#history.entriesAt(this.#history.position);
+    let total = 0;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (this.#checkpoints.has(entry.stateId)) break;
+      total += this.#buildMs.get(entry.stateId) ?? 0;
+      if (entry.base) break;
+    }
+    return total;
   }
 
   /** Stores a state's bytes when the budget, less the pinned states, can hold them. */
