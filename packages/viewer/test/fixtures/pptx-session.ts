@@ -1,3 +1,4 @@
+import type { TextRun } from "../../src/contracts.js";
 import { PptxEditEngine } from "../../src/edit/pptx/engine.js";
 import { createOoxmlEditHandler } from "../../src/edit/pptx/handler.js";
 import { loadPptxEditEngine } from "../../src/edit/pptx/provider.js";
@@ -23,10 +24,13 @@ async function slideCountOf(bytes: Uint8Array): Promise<number> {
 
 /**
  * A PPTX session over the loopback worker, with a host that only counts
- * slides by reading the package again, as the renderer would.
+ * slides by reading the package again, as the renderer would. With `runs`,
+ * the session reads those text runs of each slide, as the shown deck
+ * reports them; without, it is headless.
  */
 export async function pptxSession(
   original: Uint8Array,
+  runs?: readonly (readonly TextRun[])[],
 ): Promise<{ session: PptxEditSession; end(): Promise<void> }> {
   const signal = new AbortController().signal;
   const pair = loopbackWorker(createOoxmlEditHandler());
@@ -51,5 +55,9 @@ export async function pptxSession(
     original,
     await slideCountOf(original),
   );
-  return { session: new PptxSession(core), end: () => core.end() };
+  const access = runs && {
+    getTextRuns: async (pageIndex: number) => runs[pageIndex] ?? [],
+    cachedPages: () => runs.map((_, index) => index),
+  };
+  return { session: new PptxSession(core, access), end: () => core.end() };
 }

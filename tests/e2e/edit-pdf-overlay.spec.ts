@@ -1,6 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 import { buildPdf } from "../../packages/viewer/test/fixtures/pdf-builder.js";
+import {
+  CFF_TEXT_WIDTHS,
+  cffTextPdf,
+  strippedTrueType,
+  trueTypeTextPdf,
+} from "../../packages/viewer/test/fixtures/pdf-fonts.js";
 
 /*
  * The PDF overlay primitives (ACTION-825) against the real viewer: PDF.js
@@ -307,4 +314,58 @@ test("a suppressed render stands in for an element and the next normal render sh
       path: `${process.env.OVERLAY_PROOF}/t37-stand-in.png`,
       clip: { x: 0, y: 0, width: 800, height: 420 },
     });
+});
+
+test("a host loads an element's embedded CFF font and types with the file's advances", async ({
+  page,
+}) => {
+  await mountPdf(page, cffTextPdf());
+  const result = await page.evaluate(async (characters) => {
+    const viewer = (window as any).__overlayViewer;
+    const session = await viewer.edit();
+    const { item: font } = await session.getTextFont("p0:o0");
+    const face = new FontFace(`face-${font.key}`, font.face.data);
+    await face.load();
+    document.fonts.add(face);
+    const context = document.createElement("canvas").getContext("2d")!;
+    context.font = `1000px "face-${font.key}"`;
+    return {
+      format: font.face.format,
+      status: face.status,
+      widths: Object.fromEntries(
+        characters.map((character: string) => [
+          character,
+          context.measureText(character).width,
+        ]),
+      ),
+    };
+  }, Object.keys(CFF_TEXT_WIDTHS));
+  expect(result.format).toBe("opentype");
+  expect(result.status).toBe("loaded");
+  // At 1000 px a font unit is a pixel: the advances are the PDF's widths.
+  for (const [character, width] of Object.entries(CFF_TEXT_WIDTHS))
+    expect(result.widths[character], character).toBeCloseTo(width, 0);
+});
+
+test("a host loads an embedded TrueType subset that lacks the tables browsers require", async ({
+  page,
+}) => {
+  const noto = new Uint8Array(
+    readFileSync(
+      new URL(
+        "../../packages/viewer/fonts/noto-sans-latin-cyrillic.ttf",
+        import.meta.url,
+      ),
+    ),
+  );
+  await mountPdf(page, await trueTypeTextPdf(strippedTrueType(noto), "Привіт"));
+  const result = await page.evaluate(async () => {
+    const viewer = (window as any).__overlayViewer;
+    const session = await viewer.edit();
+    const { item: font } = await session.getTextFont("p0:o0");
+    const face = new FontFace(`face-${font.key}`, font.face.data);
+    await face.load();
+    return { format: font.face.format, status: face.status };
+  });
+  expect(result).toEqual({ format: "truetype", status: "loaded" });
 });

@@ -144,6 +144,17 @@ frame: `layoutchange` says when the view-geometry helpers describe the new
 revision. Search results and the selection are cleared, with `searchchange`
 and `selectionchange` set to `null`.
 
+While an edited page is rendering, its last completed bitmap and text layers
+stay visible. The new bitmap and matching text/highlight layers are published
+together after rendering succeeds; failed, cancelled or obsolete paints do
+not clear or overwrite the last completed frame. Loading a different document
+still clears the previous document's pages.
+
+If text extraction or text-layer construction fails but the raster succeeds,
+the current raster is still published. Its text and highlight layers are
+cleared so old geometry cannot select or highlight the new pixels. The page
+retains `data-render-error` until a later complete render succeeds.
+
 The reopen has two phases. Opening the edited bytes next to the current
 document may fail or be aborted, and then nothing changes; the swap itself is
 synchronous and cannot fail, so once it ran the call completes even if its
@@ -279,8 +290,9 @@ the document the engine sees, so it can differ slightly from the viewer's
 Page space uses the units of `DocumentInfo.pageSizes` at zoom 1 — points for
 PDF, CSS pixels for Office formats — with the origin at the top-left corner of
 the page as displayed, `y` growing downwards and page rotation already applied.
-Font sizes are always points. Colours are `EditColor` values: a string
-(`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
+Font sizes are always points, as the text shows them: a PDF text object written
+as `1 Tf` with its size in the text matrix reads, and is set, as that size.
+Colours are `EditColor` values: a string (`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
 for Office formats, a theme slot `{ theme, mods? }` that keeps the theme link.
 PDF accepts the string form only.
 
@@ -622,16 +634,17 @@ element, commits the change with one `apply()` on blur or idle, and puts the
 selection back. These reads serve that flow; each returns the usual envelope
 (`sessionId`, `revision`) and queues behind earlier calls like any read.
 
-| Method                                          | Returns                  | What it gives                                                                                                                                                                                                                                                                                                                   |
-| ----------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds`, `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells. |
-| `getPageLayout(pageIndex)`                      | `ReadItem<PageLayout>`   | Every text element's layout of a page plus the page's displayed `width` and `height`, in one read.                                                                                                                                                                                                                              |
-| `positionAt(pageIndex, point)`                  | `ReadItem<TextPosition>` | The caret position nearest to a page-space point; past a glyph's middle in reading direction the caret goes after it. `undefined` on a page without text.                                                                                                                                                                       |
-| `rangeRects(range)`                             | `ReadResult<PageRect>`   | The rectangles a range covers, one per line fragment, for drawing a selection; empty for a range across pages.                                                                                                                                                                                                                  |
-| `renderPageWithout(pageIndex, ids, { scale? })` | `ReadItem<PageBitmap>`   | The page as PDFium draws it with those elements left out: RGBA pixels over white at `scale` device pixels per point (default 1, bounded by `maxDecodedPixels`). Nothing is reopened and the bytes do not change; unknown ids are ignored.                                                                                       |
-| `elementsForSelection(selection)`               | `ReadResult<TextRange>`  | The viewer's `TextSelection` as element ranges: a layout line whose box the selected run covers by half, else the one line that contains the run, else a line whose NFKC-folded text contains the run's; the run's text decides the offsets. Merged per element, in reading order.                                              |
-| `mapRange(range, fromRevision)`                 | `ReadItem<TextRange>`    | Where a range taken at `fromRevision` is now: ranged `replaceText` calls shift it, a deleted element makes it `undefined`, an undo brings it back, renamed ids are followed, and the element's current text bounds it. `undefined` when the session no longer remembers that revision.                                          |
-| `elementsAtSync(pageIndex, point)`              | `ReadResult<PdfElement>` | `elementsAt` from a main-thread cache of the last `getElements({ pageIndex })` result, without waiting behind a queued `apply()`; the revision is the cached one. `cachedPages` lists the pages it holds; changed pages are refreshed after every commit.                                                                       |
+| Method                                          | Returns                  | What it gives                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds`, `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `getTextFont(elementId)`                        | `ReadItem<TextFont>`     | The font a `text` or `textBox` element is drawn in, ready for `FontFace`: `face.data` is the embedded TrueType program (`format: "truetype"`) with the OS/2, name and post tables a subsetting tool left out added and its tables on four-byte boundaries, as browsers require, or an embedded CFF subset wrapped as OpenType (`"opentype"`) with a Unicode cmap built from its glyph names (Adobe Glyph List names, `uniXXXX`, `uXXXX`) and the advance widths of its charstrings, subroutines followed. `key` is the same for every element in one font. Without a face, `missing` says why: `not-embedded` (show `family` by name, as PDF readers do), `cid-keyed`, `type1`, `no-unicode` or `unreadable` (Type 3 fonts among them). |
+| `getPageLayout(pageIndex)`                      | `ReadItem<PageLayout>`   | Every text element's layout of a page plus the page's displayed `width` and `height`, in one read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `positionAt(pageIndex, point)`                  | `ReadItem<TextPosition>` | The caret position nearest to a page-space point; past a glyph's middle in reading direction the caret goes after it. `undefined` on a page without text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `rangeRects(range)`                             | `ReadResult<PageRect>`   | The rectangles a range covers, one per line fragment, for drawing a selection; empty for a range across pages.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `renderPageWithout(pageIndex, ids, { scale? })` | `ReadItem<PageBitmap>`   | The page as PDFium draws it with those elements left out: RGBA pixels over white at `scale` device pixels per point (default 1, bounded by `maxDecodedPixels`). Nothing is reopened and the bytes do not change; unknown ids are ignored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `elementsForSelection(selection)`               | `ReadResult<TextRange>`  | The viewer's `TextSelection` as element ranges: a layout line whose box the selected run covers by half, else the one line that contains the run, else a line whose NFKC-folded text contains the run's; the run's text decides the offsets. Merged per element, in reading order.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `mapRange(range, fromRevision)`                 | `ReadItem<TextRange>`    | Where a range taken at `fromRevision` is now: ranged `replaceText` calls shift it, a deleted element makes it `undefined`, an undo brings it back, renamed ids are followed, and the element's current text bounds it. `undefined` when the session no longer remembers that revision.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `elementsAtSync(pageIndex, point)`              | `ReadResult<PdfElement>` | `elementsAt` from a main-thread cache of the last `getElements({ pageIndex })` result, without waiting behind a queued `apply()`; the revision is the cached one. `cachedPages` lists the pages it holds; changed pages are refreshed after every commit.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 `replaceText` takes an optional `range` (see the operations table), so the
 committed change touches only what the user typed over.
@@ -640,7 +653,9 @@ The flow, end to end:
 
 1. On hover, `elementsAtSync` (after one `getElements({ pageIndex })`) tells
    which element is under the pointer; `getTextLayout` gives its lines and
-   glyph boxes to place the input.
+   glyph boxes to place the input. When the input opens, `getTextFont` gives
+   the face to type in, so it shows the file's own glyphs and widths; load
+   each `key` once.
 2. When the user selects text in the viewer, `elementsForSelection` turns
    `viewer.getSelection()` into a range; `rangeRects` draws it.
 3. While the input is open, `renderPageWithout` gives a bitmap of the page
@@ -650,6 +665,20 @@ The flow, end to end:
    receipt's `revision` and `documentchange` say when the page is current.
 5. `mapRange` with the revision the range was taken at says where it is now;
    `viewer.selectText` restores the selection.
+
+A face from `getTextFont` holds only what the file embeds. A subset font
+draws only the characters the file uses, so list a fallback after it in the
+input's `font-family`; the browser draws other characters in that one.
+Subsets often leave out the space glyph, which the file places by
+positioning instead (15 of the 25 fonts of one 35-page report do), so typed
+spaces take the fallback's width. Where the element's text has spaces,
+`getTextLayout` gives the advance each is drawn with; the difference from the
+input's own space width can go into its `word-spacing`. The
+face is declared regular, since its glyphs carry their own weight and slant:
+load it with the default `FontFace` descriptors and keep the input at normal
+weight and style, or the browser draws a synthetic bold or italic over it.
+The face changes nothing the engine writes: `replaceText` keeps or
+substitutes fonts as the font rules above say.
 
 Glyph geometry comes from PDFium's text page mapped through the page's
 rotation and crop box, never from PDF.js; where a line starts and ends agrees
@@ -689,6 +718,11 @@ reads describe the deck: `getSlides()` lists the slides in order with a key
 that survives reordering (`"sld3"`, the slide part's number) and their
 layout; `getLayouts()` lists every layout of every master with its id
 (`"layout2"`), name and type, for `insertSlide`.
+`getTextStyle({ target, range? })` reads the text style a range of a
+shape's text shows: each property every run it covers shares, one they
+differ on left out, so a host can toggle bold over a range that is partly
+bold. Without a range it reads the whole text; a collapsed range reads the
+run before it, whose style text typed there takes.
 
 ### Methods
 
@@ -802,7 +836,10 @@ no operations. Only the slide's own shapes are listed: what the renderer
 composes from the layout or master is not editable here.
 
 `elementsAt()` lists the elements under a point top-most first, groups after
-their children. `findText()` searches the text of every shape and table and
+their children. In a viewer it also lists, before them, a shape whose text
+is painted under the point past the shape's frame, as text wrapped below a
+short box is: the viewer's text runs name the frame they were laid out in
+(`TextRun.shapeOrigin`). `findText()` searches the text of every shape and table and
 returns the shape's bounds as the match rectangle: the engine has no glyph
 geometry, so the viewer's `search()` remains the source of word rectangles.
 
@@ -897,6 +934,7 @@ sizes and spacing are points.
 | `insertTable({ before \| after, rows, columnWidths? })`  | Adds a table next to a paragraph or table of the body (not inside a cell): a grid over the section's content width from the relative `columnWidths` (equal when omitted), the `TableGrid` style when the document defines it or single borders otherwise, one paragraph per cell with the cell's text (newlines become line breaks), and an empty paragraph after the table when the next block would be a table or the end of the body. `createdIds` names the table, then every cell paragraph, then that trailing paragraph. 1–100 rows, 1–20 columns. |
 | `setTableCell({ target, row, column, text })`            | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                                                                                                                                                                                                                              |
 | `getRevisions(elementId, options?)`                      | A read: the tracked changes a paragraph holds, in document order (`ins`, `del`, `moveFrom`, `moveTo`, `rPrChange`, `pPrChange` with `id`, `author`, `date`, `scope` and the text they cover); empty for other elements.                                                                                                                                                                                                                                                                                                                                   |
+| `getTextStyle({ target, range? }, options?)`             | A read: the style a range of a paragraph shows, each property every run it covers shares and one they differ on left out; the whole paragraph without a range, the run before a collapsed range, the paragraph mark for an empty paragraph. `undefined` past the text or for other elements.                                                                                                                                                                                                                                                              |
 
 A table is named after its first paragraph, so an insertion, a move or a
 deletion that changes which paragraph comes first in its first cell

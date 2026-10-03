@@ -169,6 +169,8 @@ export function createPdfEditHandler(
         };
         return engine().renderPageWithout(pageIndex, elementIds, scale);
       }
+      case "edit-text-font":
+        return engine().textFont((payload as { readonly id: string }).id);
       case "edit-page-layout":
         return engine().pageLayout(
           (payload as { readonly pageIndex: number }).pageIndex,

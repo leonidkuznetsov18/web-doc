@@ -32,6 +32,7 @@ export type EditWorkerOperation =
   | "edit-elements-at"
   | "edit-find-text"
   | "edit-text-layout"
+  | "edit-text-font"
   | "edit-position-at"
   | "edit-range-rects"
   | "edit-render-without"
@@ -39,6 +40,8 @@ export type EditWorkerOperation =
   | "edit-pptx-slides"
   | "edit-pptx-layouts"
   | "edit-docx-revisions"
+  | "edit-docx-text-style"
+  | "edit-pptx-text-style"
   | "edit-dispose";
 
 export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;
