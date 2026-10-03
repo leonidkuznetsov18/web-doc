@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -122,19 +123,45 @@ async function pushedFiles() {
   return [...files];
 }
 
-function run(check) {
-  console.log(`\n▶ npm run ${check.script}`);
-  const result = spawnSync("npm", ["run", check.script], {
-    cwd: root,
-    stdio: "inherit",
-    env: { ...process.env, ...check.env },
-  });
-  if (result.status !== 0) {
-    console.error(
-      `\n✖ npm run ${check.script} failed. Fix it and push again; WEB_DOC_VERIFY=quick git push runs only \`npm run check\`.`,
-    );
-    process.exit(result.status ?? 1);
+/** Runs the checks in order and stops at the first failure; resolves its exit status. */
+function runAll(checks) {
+  for (const check of checks) {
+    console.log(`\n▶ npm run ${check.script}`);
+    const result = spawnSync("npm", ["run", check.script], {
+      cwd: root,
+      stdio: "inherit",
+      env: { ...process.env, ...check.env },
+    });
+    if (result.status !== 0) {
+      console.error(
+        `\n✖ npm run ${check.script} failed. Fix it and push again; WEB_DOC_VERIFY=quick git push runs only \`npm run check\`.`,
+      );
+      return result.status ?? 1;
+    }
   }
+  return 0;
+}
+
+/** Tracked reports under artifacts/ that differ from HEAD. */
+function changedReports() {
+  return git(["diff", "--name-only", "--", "artifacts"])
+    .split("\n")
+    .filter(Boolean);
+}
+
+/**
+ * The paths `npm run format:check` formats; the hook checks no more, so a
+ * generated file outside them (CHANGELOG.md) commits as it is written.
+ */
+async function formatScope() {
+  const manifest = JSON.parse(
+    await readFile(resolve(root, "package.json"), "utf8"),
+  );
+  const command = manifest.scripts["format:check"].split("&&")[0];
+  return command
+    .replace(/^\s*prettier --check\s+/, "")
+    .trim()
+    .split(/\s+/);
 }
 
 /** Prettier over the staged content of staged files, rustfmt when Rust is staged. */
@@ -149,8 +176,11 @@ async function verifyStaged() {
     .split("\0")
     .filter(Boolean);
   const prettier = await import("prettier");
+  const scope = await formatScope();
   const unformatted = [];
-  for (const file of staged) {
+  for (const file of staged.filter((file) =>
+    scope.some((path) => file === path || file.startsWith(`${path}/`)),
+  )) {
     const path = resolve(root, file);
     const info = await prettier.getFileInfo(path, {
       ignorePath: resolve(root, ".prettierignore"),
@@ -179,16 +209,27 @@ async function verifyStaged() {
 }
 
 async function main(argv) {
+  // Actions only release, and the release builds and pack-tests the package
+  // itself; its own commit and push must not wait on the developer checks.
+  if (process.env.CI && !argv.includes("--all")) return;
   const mode = process.env.WEB_DOC_VERIFY;
   if (argv.includes("--staged")) return verifyStaged();
-  if (argv.includes("--all")) return plan([], "full").forEach(run);
+  if (argv.includes("--all")) process.exit(runAll(plan([], "full")));
   if (argv.includes("--push")) {
     const files = await pushedFiles();
     const checks = plan(files ?? [], files ? mode : "full");
     console.log(
       `Pre-push checks: ${checks.map((check) => check.script).join(", ")}`,
     );
-    return checks.forEach(run);
+    // The browser, packaging and size checks rewrite the tracked reports in
+    // artifacts/; a push leaves the ones it found clean as they were, so the
+    // working tree it leaves is the one it started from. `npm run verify`
+    // keeps the fresh reports.
+    const dirty = new Set(changedReports());
+    const status = runAll(checks);
+    const rewritten = changedReports().filter((path) => !dirty.has(path));
+    if (rewritten.length > 0) git(["checkout", "--", ...rewritten]);
+    process.exit(status);
   }
   throw new Error("Usage: node scripts/verify.mjs --staged | --push | --all");
 }
