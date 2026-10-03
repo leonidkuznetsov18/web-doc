@@ -239,15 +239,12 @@ function transformObjects(
 ): void {
   const { lib } = context.pdfium;
   context.withHolder(location, (holder) => {
-    for (const index of location.indexes)
-      lib.FPDFPageObj_Transform(
-        lib.FPDFPage_GetObject(holder, index),
-        a,
-        b,
-        c,
-        d,
-        e,
-        f,
-      );
+    for (const index of location.indexes) {
+      const object = lib.FPDFPage_GetObject(holder, index);
+      lib.FPDFPageObj_Transform(object, a, b, c, d, e, f);
+      // PDFium stores the clip in the holder's space, separately from the
+      // object's matrix. Move and resize must transform both together.
+      lib.FPDFPageObj_TransformClipPath(object, a, b, c, d, e, f);
+    }
   });
 }
