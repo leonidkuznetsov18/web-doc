@@ -28,6 +28,7 @@ import {
   type SlideElements,
 } from "./elements.js";
 import { frameContains, rectsIntersect } from "./geometry.js";
+import { isDrawn } from "./visibility.js";
 import { DeckModel, type SlideRecord } from "./model.js";
 import { pptxHandlers } from "./handlers.js";
 import {
@@ -444,10 +445,17 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
     const model = await this.model(signal);
     if (pageIndex < 0 || pageIndex >= model.pageCount) return [];
     const elements = await this.#slideElements(pageIndex, signal);
+    const byId = new Map(
+      elements.records.map((record) => [record.element.id, record.element]),
+    );
     const hits: PptxElement[] = [];
     for (let index = elements.records.length - 1; index >= 0; index -= 1) {
       const record = elements.records[index]!;
-      if (record.placed && frameContains(record.placed, point))
+      if (
+        record.placed &&
+        frameContains(record.placed, point) &&
+        isDrawn(record.element, byId)
+      )
         hits.push(record.element);
     }
     return hits;

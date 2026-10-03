@@ -41,6 +41,7 @@ import type {
 } from "../types.js";
 import type { PptxEngineReads } from "./engine.js";
 import { spanOnTarget } from "../range-style.js";
+import { isDrawn } from "./visibility.js";
 import type {
   PptxDeleteElementOperation,
   PptxDeleteSlideOperation,
@@ -151,9 +152,10 @@ export class PptxSession implements PptxEditSession {
   }
 
   /**
-   * The elements under a point, top-most first: those whose frame holds it,
-   * and before them a shape whose text is painted there past its frame, as
-   * text wrapped below a short box is.
+   * The drawn elements under a point, top-most first: those whose frame
+   * holds it, and a shape whose text is painted there past its frame, as
+   * text wrapped below a short box is. Hidden shapes, and shapes in hidden
+   * groups, are never hit; `getElements` and `getElement` still list them.
    */
   async elementsAt(
     pageIndex: number,
@@ -172,16 +174,25 @@ export class PptxSession implements PptxEditSession {
       .map((run) => run.shapeOrigin!);
     if (origins.length === 0) return framed;
     const all = (await this.getElements({ pageIndex }, options)).items;
+    const byId = new Map(all.map((element) => [element.id, element]));
     const painted = all.filter(
       (element) =>
         element.text !== undefined &&
+        isDrawn(element, byId) &&
         !framed.items.some((hit) => hit.id === element.id) &&
         origins.some((origin) => originOf(element, origin)),
     );
     if (painted.length === 0) return framed;
+    // Elements are listed back to front; whatever is drawn after a shape
+    // covers the text it paints past its frame.
+    const order = new Map(all.map((element, index) => [element.id, index]));
     return Object.freeze({
       ...framed,
-      items: Object.freeze([...painted, ...framed.items]),
+      items: Object.freeze(
+        [...painted, ...framed.items].sort(
+          (a, b) => (order.get(b.id) ?? -1) - (order.get(a.id) ?? -1),
+        ),
+      ),
     });
   }
 

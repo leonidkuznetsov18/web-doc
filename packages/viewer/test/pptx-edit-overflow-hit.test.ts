@@ -38,6 +38,30 @@ const run = (text: string, y: number, origin = { x: 40, y: 100 }): TextRun => ({
 // ACTION-912: a click on the second line, painted 14 px below the frame,
 // selected nothing.
 describe("PPTX elementsAt: text painted past a shape's frame", () => {
+  it("orders overlapping overflow hits front to back without duplicates", async () => {
+    const shape = (id: number) =>
+      textShape({
+        id,
+        x: 40 * EMU_PER_PX,
+        y: 100 * EMU_PER_PX,
+        cx: 480 * EMU_PER_PX,
+        cy: 48 * EMU_PER_PX,
+        paragraphs: [[id === 2 ? "Back" : "Front"]],
+      });
+    const { session, end } = await pptxSession(
+      buildDeck({ slides: [{ shapes: [shape(2), shape(3)] }] }),
+      [[run("Back overflow", 150), run("Front overflow", 150)]],
+    );
+    try {
+      assert.deepEqual(
+        (await session.elementsAt(0, { x: 60, y: 160 })).items.map((e) => e.id),
+        ["sld1:3", "sld1:2"],
+      );
+    } finally {
+      await end();
+    }
+  });
+
   it("hits the shape whose text is painted under the point, past its frame", async () => {
     const { session, end } = await pptxSession(deck, [
       [
