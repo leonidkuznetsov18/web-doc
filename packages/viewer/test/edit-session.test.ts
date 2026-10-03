@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type MockTracker } from "node:test";
 
 import { EditSessionController } from "../src/edit/session.js";
 import type {
@@ -761,6 +761,44 @@ describe("checkpoints and assets (revision 2)", () => {
     await edit.undo();
     assert.equal(engine.restoreBases.at(-1), undefined);
     assert.equal(lastRestore(engine.calls), "restore:3");
+  });
+
+  /** Makes every engine apply take `ms` on a mocked `performance.now`. */
+  function slowEngine(
+    t: { mock: MockTracker },
+    engine: FakeEditEngine,
+    ms: number,
+  ): void {
+    let now = 0;
+    t.mock.method(performance, "now", () => now);
+    const apply = engine.apply.bind(engine);
+    engine.apply = async (batch, signal) => {
+      now += ms;
+      return apply(batch, signal);
+    };
+  }
+
+  it("undoes and redoes slow changes by reopening their checkpoints, not by replaying the history", async (t) => {
+    const { session: edit, engine, host, apply } = session();
+    slowEngine(t, engine, 1500);
+    for (let index = 1; index <= 3; index += 1) await apply([text(index)]);
+    await edit.undo();
+    assert.equal(lastRestore(engine.calls), "restore:0");
+    assert.deepEqual(engine.restoreBases.at(-1), ["s2", "two", "three"]);
+    assert.deepEqual(host.current, ["s2", "two", "three"]);
+    await edit.redo();
+    assert.equal(lastRestore(engine.calls), "restore:0");
+    assert.deepEqual(engine.restoreBases.at(-1), ["s3", "two", "three"]);
+  });
+
+  it("keeps a checkpoint once fast changes add up to a slow replay", async (t) => {
+    const { session: edit, engine, apply } = session();
+    slowEngine(t, engine, 400);
+    for (let index = 1; index <= 5; index += 1) await apply([text(index)]);
+    // 400 ms each: replaying to state 3 would take 1.2 s, so its bytes stay.
+    await edit.undo();
+    assert.equal(lastRestore(engine.calls), "restore:1");
+    assert.deepEqual(engine.restoreBases.at(-1), ["s3", "two", "three"]);
   });
 
   it("forgets checkpoints a new change after an undo made unreachable", async () => {
