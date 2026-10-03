@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.15.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.14.2...v0.15.0) (2026-10-03)
+
+### Features
+
+* **viewer:** render docx drafts without changing history ([1a35113](https://github.com/leonidkuznetsov18/web-doc/commit/1a351133d31a0e4e170fcca8c9d3208a58027d20))
+
+### Bug fixes
+
+* **viewer:** preserve pdf page identities across checkpoints ([fb00eae](https://github.com/leonidkuznetsov18/web-doc/commit/fb00eae3e4af855c8108d92b932f2ffbe380f54e))
+
 ## [0.14.2](https://github.com/leonidkuznetsov18/web-doc/compare/v0.14.1...v0.14.2) (2026-10-03)
 
 ### Bug fixes
