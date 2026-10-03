@@ -262,22 +262,34 @@ function replaceInPlace(
   context.withPage(target.location.pageIndex, (page) => {
     setText(pdfium, lib.FPDFPage_GetObject(page, index), text);
   });
-  const readBack = context.withPage(target.location.pageIndex, (page) => {
+  const faithful = context.withPage(target.location.pageIndex, (page) => {
     const textPage = lib.FPDFText_LoadPage(page);
     try {
-      return pdfium.readWideString((buffer, bytes) =>
-        lib.FPDFTextObj_GetText(
-          lib.FPDFPage_GetObject(page, index),
-          textPage,
-          buffer,
-          bytes,
-        ),
+      const object = lib.FPDFPage_GetObject(page, index);
+      const readBack = pdfium.readWideString((buffer, bytes) =>
+        lib.FPDFTextObj_GetText(object, textPage, buffer, bytes),
       );
+      if (readBack === text) return true;
+      // Reading-order extraction can append a generated gap before the next
+      // object. Verify the object's own characters instead, retaining every
+      // authored space: trimming would also hide a lost deliberate space.
+      let authored = "";
+      const count = lib.FPDFText_CountChars(textPage);
+      for (let at = 0; at < count; at += 1) {
+        if (
+          lib.FPDFText_GetTextObject(textPage, at) === object &&
+          lib.FPDFText_IsGenerated(textPage, at) === 0
+        )
+          authored += String.fromCodePoint(
+            lib.FPDFText_GetUnicode(textPage, at),
+          );
+      }
+      return authored === text;
     } finally {
       lib.FPDFText_ClosePage(textPage);
     }
   });
-  if (readBack === text) return true;
+  if (faithful) return true;
   // Put the old text back so the fallback path starts from a known state.
   context.withPage(target.location.pageIndex, (page) => {
     setText(pdfium, lib.FPDFPage_GetObject(page, index), previous);

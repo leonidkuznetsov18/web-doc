@@ -176,6 +176,7 @@ export interface PdfiumFunctions {
   ): boolean;
   FPDFText_GetTextObject(textPage: number, index: number): number;
   FPDFText_GetUnicode(textPage: number, index: number): number;
+  FPDFText_IsGenerated(textPage: number, index: number): number;
   FPDFText_GetCharIndexFromTextIndex(
     textPage: number,
     textIndex: number,
