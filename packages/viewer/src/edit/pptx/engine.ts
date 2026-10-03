@@ -41,7 +41,9 @@ import type {
   PptxLayoutInfo,
   PptxOperation,
   PptxSlideInfo,
+  PptxTextStyle,
 } from "./types.js";
+import { spanFits, type TextSpan } from "../range-style.js";
 
 /*
  * The PPTX engine: an OOXML package plus the deck index and the per-slide
@@ -53,6 +55,11 @@ import type {
 export interface PptxEngineReads {
   slides(signal: AbortSignal): Promise<readonly PptxSlideInfo[]>;
   layouts(signal: AbortSignal): Promise<readonly PptxLayoutInfo[]>;
+  textStyle(
+    id: string,
+    span: TextSpan | undefined,
+    signal: AbortSignal,
+  ): Promise<Partial<PptxTextStyle> | undefined>;
 }
 
 interface Inspection {
@@ -505,6 +512,19 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
         hidden: await model.hidden(slide, signal),
       });
     return out;
+  }
+
+  /** The style a span of a shape's text shows; none for an element without text or a span past it. */
+  async textStyle(
+    id: string,
+    span: TextSpan | undefined,
+    signal: AbortSignal,
+  ): Promise<Partial<PptxTextStyle> | undefined> {
+    const record = await this.#locate(id, signal);
+    if (!record?.styleOf || !record.text) return undefined;
+    const range = span ?? { start: 0, end: record.text.text.length };
+    if (!spanFits(range, record.text.text.length)) return undefined;
+    return record.styleOf(range);
   }
 
   async layouts(signal: AbortSignal): Promise<readonly PptxLayoutInfo[]> {

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.9.0...v0.10.0) (2026-10-03)
+
+### Features
+
+* **viewer:** give hosts the embedded font of pdf text ([607e3b8](https://github.com/leonidkuznetsov18/web-doc/commit/607e3b8511a8d2fdae7af7a98e8046d3da4353ce))
+
+### Bug fixes
+
+* **viewer:** hit pptx text painted past its shape ([003cd3f](https://github.com/leonidkuznetsov18/web-doc/commit/003cd3ff27acb7363e79a4622968536785938458))
+* **viewer:** keep painted pages visible during edits ([298df20](https://github.com/leonidkuznetsov18/web-doc/commit/298df20ccd7440cf928f290c401dec8530a3e1f2))
+* **viewer:** preserve queued paints across page revisions ([10d2900](https://github.com/leonidkuznetsov18/web-doc/commit/10d290015722b5efab9bc50c4f04b3d6555f1237))
+* **viewer:** publish rasters when text layers fail ([d96b288](https://github.com/leonidkuznetsov18/web-doc/commit/d96b288be3f9006473adfb57cfb4c07dbd97d5ec))
+* **viewer:** size pdf text by the size it shows ([6ad5542](https://github.com/leonidkuznetsov18/web-doc/commit/6ad55423e6d6751eb8c830e5f9d907b07d4292bd))
+
 ## [0.9.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.8.0...v0.9.0) (2026-10-02)
 
 ### Features

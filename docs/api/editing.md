@@ -140,6 +140,17 @@ frame: `layoutchange` says when the view-geometry helpers describe the new
 revision. Search results and the selection are cleared, with `searchchange`
 and `selectionchange` set to `null`.
 
+While an edited page is rendering, its last completed bitmap and text layers
+stay visible. The new bitmap and matching text/highlight layers are published
+together after rendering succeeds; failed, cancelled or obsolete paints do
+not clear or overwrite the last completed frame. Loading a different document
+still clears the previous document's pages.
+
+If text extraction or text-layer construction fails but the raster succeeds,
+the current raster is still published. Its text and highlight layers are
+cleared so old geometry cannot select or highlight the new pixels. The page
+retains `data-render-error` until a later complete render succeeds.
+
 The reopen has two phases. Opening the edited bytes next to the current
 document may fail or be aborted, and then nothing changes; the swap itself is
 synchronous and cannot fail, so once it ran the call completes even if its
@@ -276,8 +287,9 @@ the document the engine sees, so it can differ slightly from the viewer's
 Page space uses the units of `DocumentInfo.pageSizes` at zoom 1 — points for
 PDF, CSS pixels for Office formats — with the origin at the top-left corner of
 the page as displayed, `y` growing downwards and page rotation already applied.
-Font sizes are always points. Colours are `EditColor` values: a string
-(`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
+Font sizes are always points, as the text shows them: a PDF text object written
+as `1 Tf` with its size in the text matrix reads, and is set, as that size.
+Colours are `EditColor` values: a string (`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
 for Office formats, a theme slot `{ theme, mods? }` that keeps the theme link.
 PDF accepts the string form only.
 
@@ -807,6 +819,11 @@ reads describe the deck: `getSlides()` lists the slides in order with a key
 that survives reordering (`"sld3"`, the slide part's number) and their
 layout; `getLayouts()` lists every layout of every master with its id
 (`"layout2"`), name and type, for `insertSlide`.
+`getTextStyle({ target, range? })` reads the text style a range of a
+shape's text shows: each property every run it covers shares, one they
+differ on left out, so a host can toggle bold over a range that is partly
+bold. Without a range it reads the whole text; a collapsed range reads the
+run before it, whose style text typed there takes.
 
 ### Methods
 
@@ -920,7 +937,10 @@ no operations. Only the slide's own shapes are listed: what the renderer
 composes from the layout or master is not editable here.
 
 `elementsAt()` lists the elements under a point top-most first, groups after
-their children. `findText()` searches the text of every shape and table and
+their children. In a viewer it also lists, before them, a shape whose text
+is painted under the point past the shape's frame, as text wrapped below a
+short box is: the viewer's text runs name the frame they were laid out in
+(`TextRun.shapeOrigin`). `findText()` searches the text of every shape and table and
 returns the shape's bounds as the match rectangle: the engine has no glyph
 geometry, so the viewer's `search()` remains the source of word rectangles.
 
@@ -1015,6 +1035,7 @@ sizes and spacing are points.
 | `insertTable({ before \| after, rows, columnWidths? })`  | Adds a table next to a paragraph or table of the body (not inside a cell): a grid over the section's content width from the relative `columnWidths` (equal when omitted), the `TableGrid` style when the document defines it or single borders otherwise, one paragraph per cell with the cell's text (newlines become line breaks), and an empty paragraph after the table when the next block would be a table or the end of the body. `createdIds` names the table, then every cell paragraph, then that trailing paragraph. 1–100 rows, 1–20 columns. |
 | `setTableCell({ target, row, column, text })`            | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                                                                                                                                                                                                                              |
 | `getRevisions(elementId, options?)`                      | A read: the tracked changes a paragraph holds, in document order (`ins`, `del`, `moveFrom`, `moveTo`, `rPrChange`, `pPrChange` with `id`, `author`, `date`, `scope` and the text they cover); empty for other elements.                                                                                                                                                                                                                                                                                                                                   |
+| `getTextStyle({ target, range? }, options?)`             | A read: the style a range of a paragraph shows, each property every run it covers shares and one they differ on left out; the whole paragraph without a range, the run before a collapsed range, the paragraph mark for an empty paragraph. `undefined` past the text or for other elements.                                                                                                                                                                                                                                                              |
 
 A table is named after its first paragraph, so an insertion, a move or a
 deletion that changes which paragraph comes first in its first cell

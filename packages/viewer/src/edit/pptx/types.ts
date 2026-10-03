@@ -7,6 +7,7 @@ import type {
   EditSessionBase,
   PagePoint,
   PageRect,
+  ReadItem,
   ReadOptions,
   ReadResult,
   SavedDocument,
@@ -271,6 +272,16 @@ export interface PptxEditSession extends EditSessionBase<
   getSlides(options?: ReadOptions): Promise<ReadResult<PptxSlideInfo>>;
   /** Every layout of every master, for `insertSlide`. */
   getLayouts(options?: ReadOptions): Promise<ReadResult<PptxLayoutInfo>>;
+  /**
+   * The text style a range of a shape's text shows: each property every run
+   * it covers shares, a property they differ on left out. Without a range,
+   * the whole text; a collapsed range reads the run before it, whose style
+   * text typed there takes. `undefined` for an element without text.
+   */
+  getTextStyle(
+    fields: { readonly target: string; readonly range?: TextRange },
+    options?: ReadOptions,
+  ): Promise<ReadItem<Partial<PptxTextStyle>>>;
   /** Replaces the whole text of a shape, or the part a range covers. */
   replaceText(
     fields: PptxFields<PptxReplaceTextOperation>,

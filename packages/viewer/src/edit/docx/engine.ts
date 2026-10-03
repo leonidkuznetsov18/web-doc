@@ -25,7 +25,7 @@ import { NO_PAGE, toElement } from "./elements.js";
 import { docxHandlers } from "./handlers.js";
 import { freshParagraphId, paragraphsOf } from "./ids.js";
 import { DocxModel, type AnyRecord } from "./model.js";
-import type { DocxStyles } from "./style.js";
+import { resolveTextStyle, type DocxStyles } from "./style.js";
 import {
   issueCollector,
   type DocxOperationContext,
@@ -33,7 +33,18 @@ import {
 } from "./operations.js";
 import { docxOperationSchemas } from "./schemas.js";
 import { revisionsOf } from "./tracked.js";
-import type { DocxElement, DocxOperation, DocxRevision } from "./types.js";
+import type {
+  DocxElement,
+  DocxOperation,
+  DocxRevision,
+  DocxTextStyle,
+} from "./types.js";
+import {
+  runsCovering,
+  sharedStyle,
+  spanFits,
+  type TextSpan,
+} from "../range-style.js";
 import { attributeProblem, namespacePatches } from "./write.js";
 
 /*
@@ -74,6 +85,11 @@ function unauthoredIdsOf(bytes: Uint8Array): string[] {
 /** Reads the DOCX session adds on top of the core, served by the engine and the worker client alike. */
 export interface DocxEngineReads {
   revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]>;
+  textStyle(
+    id: string,
+    span: TextSpan | undefined,
+    signal: AbortSignal,
+  ): Promise<Partial<DocxTextStyle> | undefined>;
 }
 
 /** The tracked-change record of a batch, when it writes revisions. */
@@ -403,6 +419,33 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
     const record = model.byId.get(id);
     if (!record || record.kind !== "paragraph") return [];
     return revisionsOf(model.document, record.node);
+  }
+
+  /**
+   * The style a span of a paragraph shows: what every run it covers shares;
+   * the paragraph mark's for an empty paragraph. None for another element,
+   * an unknown id or a span past the text.
+   */
+  async textStyle(
+    id: string,
+    span: TextSpan | undefined,
+    signal: AbortSignal,
+  ): Promise<Partial<DocxTextStyle> | undefined> {
+    const model = await this.model(signal);
+    const record = model.byId.get(id);
+    if (!record || record.kind !== "paragraph") return undefined;
+    const { text, items } = record.text;
+    const range = span ?? { start: 0, end: text.length };
+    if (!spanFits(range, text.length)) return undefined;
+    const covered = runsCovering(items, range);
+    const mark = record.pPr?.children.find((child) => child.local === "rPr");
+    return sharedStyle(
+      covered.length > 0
+        ? covered.map((item) =>
+            resolveTextStyle(model.styles, record.pPr, item.rPr),
+          )
+        : [resolveTextStyle(model.styles, record.pPr, mark)],
+    );
   }
 
   async materialize(

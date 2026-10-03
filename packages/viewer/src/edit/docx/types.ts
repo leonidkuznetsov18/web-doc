@@ -5,6 +5,7 @@ import type {
   EditElement,
   EditReceipt,
   EditSessionBase,
+  ReadItem,
   ReadOptions,
   ReadResult,
   SavedDocument,
@@ -262,6 +263,16 @@ export interface DocxEditSession extends EditSessionBase<
     elementId: string,
     options?: ReadOptions,
   ): Promise<ReadResult<DocxRevision>>;
+  /**
+   * The text style a range of a paragraph shows: each property every run it
+   * covers shares, a property they differ on left out. Without a range, the
+   * whole text; a collapsed range reads the run before it, whose style text
+   * typed there takes. `undefined` for an element without text.
+   */
+  getTextStyle(
+    fields: { readonly target: string; readonly range?: TextRange },
+    options?: ReadOptions,
+  ): Promise<ReadItem<Partial<DocxTextStyle>>>;
   /** Replaces the whole text of a paragraph, or the part a range covers. */
   replaceText(
     fields: DocxFields<DocxReplaceTextOperation>,

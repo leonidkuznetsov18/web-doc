@@ -301,6 +301,8 @@ export class ViewerViewport {
     revision?: number,
   ): void {
     const previous = this.#info;
+    const painted = this.#painted.get(this.#contentRevision);
+    this.#painted.clear();
     this.#info = info;
     this.#contentRevision = revision ?? this.#contentRevision + 1;
     // Only pages whose content or size changed get a new render key; the
@@ -319,9 +321,14 @@ export class ViewerViewport {
       const before = previous?.pageSizes?.[pageIndex];
       const resized =
         size?.width !== before?.width || size?.height !== before?.height;
-      if (pageIndex >= from || changed.has(pageIndex) || resized)
+      if (pageIndex >= from || changed.has(pageIndex) || resized) {
         this.#pageRevisions[pageIndex] =
           (this.#pageRevisions[pageIndex] ?? 0) + 1;
+      } else if (painted?.has(pageIndex) && this.#slots.has(pageIndex)) {
+        // A completed, retained page is still current. Carry its queued
+        // notification forward instead of losing it at the next frame.
+        this.#markPainted(pageIndex, this.#contentRevision);
+      }
     }
     // Slots stay mounted and repaint in place; the browser clamps the scroll
     // position itself once the spacer takes the new document's height.
@@ -548,6 +555,7 @@ export class ViewerViewport {
         slot.controller?.abort();
         slot.root.remove();
         this.#slots.delete(pageIndex);
+        for (const pages of this.#painted.values()) pages.delete(pageIndex);
       }
     for (let pageIndex = range.start; pageIndex < range.end; pageIndex += 1) {
       const slot = this.#slots.get(pageIndex) ?? this.#createSlot(pageIndex);
@@ -628,44 +636,92 @@ export class ViewerViewport {
     slot.controller = controller;
     const generation = ++slot.generation;
     const zoom = this.#host.state.zoom;
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const pageRevision = this.#pageRevisions[pageIndex] ?? 0;
     const contentRevision = this.#contentRevision;
+    // Adapters resize and paint their target asynchronously. Never give them
+    // the visible canvas: resizing clears it before the next frame is ready.
+    const canvas = document.createElement("canvas");
+    const textLayer = document.createElement("div");
+    const highlightLayer = document.createElement("div");
+    textLayer.style.cssText = slot.textLayer.style.cssText;
+    highlightLayer.style.cssText = slot.highlightLayer.style.cssText;
+    const isCurrent = (): boolean =>
+      !this.#destroyed &&
+      !controller.signal.aborted &&
+      this.#slots.get(pageIndex) === slot &&
+      slot.controller === controller &&
+      slot.generation === generation &&
+      (this.#pageRevisions[pageIndex] ?? 0) === pageRevision &&
+      this.#host.state.zoom === zoom &&
+      (window.devicePixelRatio || 1) === devicePixelRatio;
+    let rendering: Promise<void> | undefined;
     try {
-      let renderError: unknown;
-      const rendering = this.#host
-        .renderPage(pageIndex, slot.canvas, {
-          zoom,
-          devicePixelRatio: window.devicePixelRatio || 1,
-          priority:
-            pageIndex === this.#host.state.pageIndex ? "visible" : "adjacent",
-          signal: controller.signal,
-        })
-        .catch((error: unknown) => {
-          renderError = error;
-        });
-      const runs = await this.#host.getTextRuns(pageIndex, controller.signal);
-      if (controller.signal.aborted || slot.generation !== generation) return;
-      await this.#buildTextLayers(
-        slot.textLayer,
-        slot.highlightLayer,
-        pageIndex,
-        runs,
+      rendering = this.#host.renderPage(pageIndex, canvas, {
         zoom,
-        controller.signal,
-      );
-      if (controller.signal.aborted || slot.generation !== generation) return;
-      await rendering;
-      if (renderError) throw renderError;
-      if (controller.signal.aborted || slot.generation !== generation) return;
-      const cssWidth = slot.canvas.width / (window.devicePixelRatio || 1);
-      const cssHeight = slot.canvas.height / (window.devicePixelRatio || 1);
+        devicePixelRatio,
+        priority:
+          pageIndex === this.#host.state.pageIndex ? "visible" : "adjacent",
+        signal: controller.signal,
+      });
+      const preparingText = this.#host
+        .getTextRuns(pageIndex, controller.signal)
+        .then(async (runs) => {
+          await rendering;
+          if (!isCurrent()) return;
+          await this.#buildTextLayers(
+            textLayer,
+            highlightLayer,
+            pageIndex,
+            runs,
+            zoom,
+            controller.signal,
+          );
+        })
+        .then(
+          () => true,
+          (error: unknown) => {
+            if (isCurrent())
+              slot.root.dataset.renderError =
+                error instanceof Error ? error.message : String(error);
+            // A valid raster still publishes without unavailable geometry.
+            // Never retain partial or previous text/highlight hit targets.
+            for (const layer of [textLayer, highlightLayer]) {
+              layer.replaceChildren();
+              resetOverlay(layer);
+            }
+            return false;
+          },
+        );
+      const [, textReady] = await Promise.all([rendering, preparingText]);
+      if (!isCurrent()) return;
+      const context = slot.canvas.getContext("2d");
+      if (!context) throw new Error("Canvas 2D context is unavailable");
+      // Publish the completed raster and its matching text geometry in one
+      // synchronous commit, keeping the mounted page and layer identities.
+      slot.canvas.width = canvas.width;
+      slot.canvas.height = canvas.height;
+      context.drawImage(canvas, 0, 0);
+      replaceTextLayer(slot.textLayer, textLayer);
+      replaceTextLayer(slot.highlightLayer, highlightLayer);
+      const cssWidth = canvas.width / devicePixelRatio;
+      const cssHeight = canvas.height / devicePixelRatio;
       slot.root.style.width = `${cssWidth}px`;
       slot.root.style.height = `${cssHeight}px`;
+      if (textReady) delete slot.root.dataset.renderError;
       this.#markPainted(pageIndex, contentRevision);
     } catch (error) {
-      if (!controller.signal.aborted) {
+      if (isCurrent()) {
         slot.root.dataset.renderError =
           error instanceof Error ? error.message : String(error);
       }
+      controller.abort();
+    } finally {
+      // A cancelled adapter may still be writing. Release its backing store
+      // only once it has stopped, without affecting the committed page.
+      await rendering?.catch(() => undefined);
+      canvas.width = 0;
+      canvas.height = 0;
     }
   }
 
@@ -1078,12 +1134,23 @@ export class ViewerViewport {
   }
 
   #clearSlots(): void {
+    this.#painted.clear();
     for (const slot of this.#slots.values()) {
       slot.controller?.abort();
       slot.root.remove();
     }
     this.#slots.clear();
   }
+}
+
+function replaceTextLayer(
+  target: HTMLDivElement,
+  source: HTMLDivElement,
+): void {
+  const children = document.createDocumentFragment();
+  while (source.firstChild) children.append(source.firstChild);
+  target.style.cssText = source.style.cssText;
+  target.replaceChildren(children);
 }
 
 function naturalPageSize(

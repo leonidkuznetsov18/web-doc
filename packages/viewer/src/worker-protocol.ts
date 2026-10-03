@@ -41,6 +41,8 @@ export type EditWorkerOperation =
   | "edit-pptx-slides"
   | "edit-pptx-layouts"
   | "edit-docx-revisions"
+  | "edit-docx-text-style"
+  | "edit-pptx-text-style"
   | "edit-dispose";
 
 export type WorkerOperation = DocumentWorkerOperation | EditWorkerOperation;

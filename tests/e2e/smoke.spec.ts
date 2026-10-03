@@ -36,7 +36,7 @@ test("virtualizes a long document and exposes viewport interactions", async ({
   page,
 }) => {
   await page.goto("/");
-  const result = await page.evaluate(async () => {
+  const fixture = await page.evaluateHandle(async () => {
     const { ViewerClient } = (await import("/main.js")) as {
       ViewerClient: {
         create(options: { adapters: readonly unknown[] }): {
@@ -84,6 +84,7 @@ test("virtualizes a long document and exposes viewport interactions", async ({
       close: () => {},
     };
     const container = document.createElement("div");
+    container.dataset.testid = "virtualized-document";
     Object.assign(container.style, { width: "800px", height: "600px" });
     document.body.append(container);
     const client = ViewerClient.create({ adapters: [adapter] });
@@ -91,90 +92,114 @@ test("virtualizes a long document and exposes viewport interactions", async ({
     await viewer.load(new TextEncoder().encode("%PDF-1.7\n"), {
       fileName: "long.pdf",
     });
-    const nextFrame = () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    await nextFrame();
-    await nextFrame();
     const root = container.querySelector<HTMLElement>(
       '[data-zrimo="viewport"]',
-    )!;
-    const initialSlotCount = root.querySelectorAll("canvas").length;
-    const initialText = root.querySelector("[data-start]")?.textContent ?? "";
+    );
+    if (!root) throw new Error("The fixture viewport was not created");
+    return { viewer, client, container, root };
+  });
 
-    viewer.goToPage(5_000);
-    await nextFrame();
-    await nextFrame();
-    const deepIndices = Array.from(
-      root.querySelectorAll<HTMLCanvasElement>("canvas"),
-      (canvas) => Number(canvas.parentElement?.dataset.pageIndex),
-    );
-    viewer.fitWidth();
-    const fittedZoom = viewer.state.zoom;
-    root.dispatchEvent(
-      new WheelEvent("wheel", {
-        deltaY: -100,
-        ctrlKey: true,
-        cancelable: true,
-      }),
-    );
-    const wheelZoom = viewer.state.zoom;
-    root.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
-    const keyboardPanY = viewer.state.panY;
-    const touch = (type: string, pointerId: number, clientX: number) =>
+  let viewportRemoved = false;
+  try {
+    // ready means document metadata is available; fonts and page painting
+    // can still be pending. Observe the committed text rather than frame count.
+    await expect(
+      page
+        .getByTestId("virtualized-document")
+        .locator('[data-page-index="0"] [data-zrimo-layer="text"]'),
+    ).toContainText("日本語 العربية हिन्दी");
+    const result = await fixture.evaluate(async ({ viewer, root }) => {
+      const nextFrame = () =>
+        new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const initialSlotCount = root.querySelectorAll("canvas").length;
+      const initialText = root.querySelector("[data-start]")?.textContent ?? "";
+
+      viewer.goToPage(5_000);
+      await nextFrame();
+      await nextFrame();
+      const deepIndices = Array.from(
+        root.querySelectorAll<HTMLCanvasElement>("canvas"),
+        (canvas) => Number(canvas.parentElement?.dataset.pageIndex),
+      );
+      viewer.fitWidth();
+      const fittedZoom = viewer.state.zoom;
       root.dispatchEvent(
-        new PointerEvent(type, {
-          pointerId,
-          pointerType: "touch",
-          clientX,
-          clientY: 120,
-          button: 0,
-          buttons: type === "pointerup" ? 0 : 1,
-          bubbles: true,
+        new WheelEvent("wheel", {
+          deltaY: -100,
+          ctrlKey: true,
           cancelable: true,
         }),
       );
-    touch("pointerdown", 11, 100);
-    touch("pointerdown", 12, 200);
-    touch("pointermove", 12, 260);
-    const pinchZoom = viewer.state.zoom;
-    touch("pointerup", 12, 260);
-    touch("pointerup", 11, 100);
-    viewer.panBy(0, 2_000);
-    await nextFrame();
-    await nextFrame();
-    const finalSlotCount = root.querySelectorAll("canvas").length;
-    const finalPage = viewer.state.pageIndex;
-    const panY = viewer.state.panY;
-    await viewer.destroy();
-    const viewportRemoved = !container.querySelector('[data-zrimo="viewport"]');
-    await client.destroy();
-    container.remove();
-    return {
-      initialSlotCount,
-      initialText,
-      deepIndices,
-      fittedZoom,
-      wheelZoom,
-      keyboardPanY,
-      pinchZoom,
-      finalSlotCount,
-      finalPage,
-      panY,
-      viewportRemoved,
-    };
-  });
+      const wheelZoom = viewer.state.zoom;
+      root.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+      const keyboardPanY = viewer.state.panY;
+      const touch = (type: string, pointerId: number, clientX: number) =>
+        root.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId,
+            pointerType: "touch",
+            clientX,
+            clientY: 120,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      touch("pointerdown", 11, 100);
+      touch("pointerdown", 12, 200);
+      touch("pointermove", 12, 260);
+      const pinchZoom = viewer.state.zoom;
+      touch("pointerup", 12, 260);
+      touch("pointerup", 11, 100);
+      viewer.panBy(0, 2_000);
+      await nextFrame();
+      await nextFrame();
+      const finalSlotCount = root.querySelectorAll("canvas").length;
+      const finalPage = viewer.state.pageIndex;
+      const panY = viewer.state.panY;
+      return {
+        initialSlotCount,
+        initialText,
+        deepIndices,
+        fittedZoom,
+        wheelZoom,
+        keyboardPanY,
+        pinchZoom,
+        finalSlotCount,
+        finalPage,
+        panY,
+      };
+    });
 
-  expect(result.initialSlotCount).toBeLessThanOrEqual(4);
-  expect(result.initialText).toContain("日本語 العربية हिन्दी");
-  expect(result.deepIndices.some((pageIndex) => pageIndex >= 4_999)).toBe(true);
-  expect(result.fittedZoom).toBeGreaterThan(0.9);
-  expect(result.wheelZoom).toBeGreaterThan(result.fittedZoom);
-  expect(result.keyboardPanY).toBeGreaterThan(0);
-  expect(result.pinchZoom).toBeGreaterThan(result.wheelZoom);
-  expect(result.finalSlotCount).toBeLessThanOrEqual(4);
-  expect(result.finalPage).toBeGreaterThan(5_000);
-  expect(result.panY).toBeGreaterThan(0);
-  expect(result.viewportRemoved).toBe(true);
+    expect(result.initialSlotCount).toBeLessThanOrEqual(4);
+    expect(result.initialText).toContain("日本語 العربية हिन्दी");
+    expect(result.deepIndices.some((pageIndex) => pageIndex >= 4_999)).toBe(
+      true,
+    );
+    expect(result.fittedZoom).toBeGreaterThan(0.9);
+    expect(result.wheelZoom).toBeGreaterThan(result.fittedZoom);
+    expect(result.keyboardPanY).toBeGreaterThan(0);
+    expect(result.pinchZoom).toBeGreaterThan(result.wheelZoom);
+    expect(result.finalSlotCount).toBeLessThanOrEqual(4);
+    expect(result.finalPage).toBeGreaterThan(5_000);
+    expect(result.panY).toBeGreaterThan(0);
+  } finally {
+    try {
+      viewportRemoved = await fixture.evaluate(
+        async ({ viewer, client, container }) => {
+          await viewer.destroy();
+          const removed = !container.querySelector('[data-zrimo="viewport"]');
+          await client.destroy();
+          container.remove();
+          return removed;
+        },
+      );
+    } finally {
+      await fixture.dispose();
+    }
+  }
+  expect(viewportRemoved).toBe(true);
 });
 
 test("keeps heterogeneous PDF page geometry stable and centered", async ({
@@ -992,12 +1017,15 @@ test("runs the localized basic UI workflow without leaking styles", async ({
   await expect(ui.locator('[data-panel="thumbnails"] canvas')).toHaveCount(3);
 
   await ui.getByRole("button", { name: "На весь экран" }).click();
-  const fullscreenActive = await ui.evaluate(
-    (element) =>
-      element.classList.contains("zrimo-ui--fullscreen-fallback") ||
-      document.fullscreenElement === element,
-  );
-  expect(fullscreenActive).toBe(true);
+  await expect
+    .poll(() =>
+      ui.evaluate(
+        (element) =>
+          element.classList.contains("zrimo-ui--fullscreen-fallback") ||
+          document.fullscreenElement === element,
+      ),
+    )
+    .toBe(true);
   await ui.press("Escape");
 
   const download = page.waitForEvent("download");

@@ -301,7 +301,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
     createSession: (core, access) =>
       core.format === "docx"
         ? new DocxSession(core, access)
-        : new PptxSession(core),
+        : new PptxSession(core, access),
   };
   readonly formats = [...MODERN_FORMATS, ...LEGACY_FORMATS] as const;
   readonly #options: OfficeAdapterOptions;
@@ -373,7 +373,6 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       useGoogleFonts: false,
       maxZipEntryBytes: context.limits.maxZipEntryBytes,
       mode: "main",
-      ...(reopening ? { progressiveLayout: true } : {}),
     };
     try {
       const kind = kindFor(format);
@@ -407,7 +406,10 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       }
       const buffer = exactArrayBuffer(data);
       if (kind === "presentation") {
-        const backend = await this.#loadPptx(buffer, engineOptions);
+        const backend = await this.#loadPptx(buffer, {
+          ...engineOptions,
+          ...(reopening ? { progressiveLayout: true } : {}),
+        });
         throwIfAborted(context.signal, backend);
         context.reportProgress({
           phase: "parsing",
@@ -627,6 +629,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
         y: run.shapeY + run.inShapeY,
         width: run.w,
         height: run.h,
+        shapeOrigin: { x: run.shapeX, y: run.shapeY },
         ...safeHyperlink(run.hyperlink, (ref) =>
           handle.backend.resolveInternalTarget?.(ref, pageIndex),
         ),

@@ -28,6 +28,11 @@ export interface FixtureText {
   readonly y?: number;
   readonly fontSize?: number;
   readonly font?: "Helvetica" | "Helvetica-Bold" | "Times-Italic";
+  /**
+   * The linear part of the text matrix, `[a, b, c, d]`: producers often
+   * write `1 Tf` and carry the size here, scaled or turned.
+   */
+  readonly matrix?: readonly [number, number, number, number];
   readonly color?: readonly [number, number, number];
   /** Tag the object with a WebDoc mark carrying these parameters. */
   readonly mark?: Readonly<Record<string, unknown>>;
@@ -147,7 +152,8 @@ function addText(
     pdfium.free(wide);
   }
   if (text.color) lib.FPDFPageObj_SetFillColor(object, ...text.color, 255);
-  lib.FPDFPageObj_Transform(object, 1, 0, 0, 1, text.x ?? 72, text.y ?? 700);
+  const [a, b, c, d] = text.matrix ?? [1, 0, 0, 1];
+  lib.FPDFPageObj_Transform(object, a, b, c, d, text.x ?? 72, text.y ?? 700);
   if (text.mark || text.brokenMark) {
     const mark = lib.FPDFPageObj_AddMark(object, MARK_NAME);
     lib.FPDFPageObjMark_SetStringParam(
