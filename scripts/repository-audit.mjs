@@ -25,9 +25,12 @@ const trackedSet = new Set(tracked);
 const issues = [];
 
 const requiredFiles = [
-  ".github/workflows/ci.yml",
+  ".githooks/commit-msg",
+  ".githooks/pre-commit",
+  ".githooks/pre-push",
   ".github/workflows/pages.yml",
   ".github/workflows/publish.yml",
+  ".github/workflows/release.yml",
   "Cargo.lock",
   "Cargo.toml",
   "LICENSE",
@@ -46,6 +49,21 @@ const requiredFiles = [
 for (const path of requiredFiles) {
   if (!trackedSet.has(path))
     issues.push(`required file is not tracked: ${path}`);
+}
+
+// Checks run in the git hooks (scripts/verify.mjs); Actions only release.
+for (const line of git(["ls-files", "-s", ".githooks"]).split("\n")) {
+  const [mode, , , path] = line.split(/\s+/);
+  if (path && mode !== "100755")
+    issues.push(`git hook is not executable: ${path}`);
+}
+for (const path of tracked.filter((path) =>
+  path.startsWith(".github/workflows/"),
+)) {
+  if (/^\s+pull_request:/m.test(await readFile(resolve(root, path), "utf8")))
+    issues.push(
+      `workflow runs on pull requests; checks belong in .githooks: ${path}`,
+    );
 }
 
 const forbiddenSegments = new Set([

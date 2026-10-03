@@ -164,11 +164,18 @@ describe("pdf compaction", () => {
       const before = await pageTexts(original);
       const model = new PdfEditDocument(pdfium, original);
       try {
+        // The box has to lie on the page: the corpus holds a 200×50 pt one.
+        const page = model.pageLayout(0)!;
         model.apply([
           op({
             op: "insertTextBox",
             pageIndex: 0,
-            rect: { x: 36, y: 36, width: 200, height: 30 },
+            rect: {
+              x: Math.min(36, page.width / 10),
+              y: Math.min(36, page.height / 10),
+              width: Math.min(200, page.width * 0.8),
+              height: Math.min(30, page.height * 0.8),
+            },
             text: "Compacted",
           }),
         ]);
