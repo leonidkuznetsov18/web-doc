@@ -4,8 +4,10 @@ import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  attachInfoDictionary,
   compactPdf,
   PdfCompactionError,
+  readObjects,
 } from "../src/edit/pdf/engine/compact.js";
 import { PdfEditDocument } from "../src/edit/pdf/engine/document.js";
 import type { PdfOperation } from "../src/index.js";
@@ -92,6 +94,50 @@ async function pdfjsSummary(bytes: Uint8Array) {
 
 describe("pdf compaction", () => {
   const content = "BT /F1 12 Tf 72 700 Td (Kept) Tj ET";
+
+  it("attaches orphaned page metadata without adopting names in nested values or streams", () => {
+    const bytes = classicPdf([
+      "<< /Type /Catalog /Fake << /WebDocPageKeys (not Info) >> >>",
+      "<< /Note (/WebDocPageKeys endobj trailer) >>",
+      "<< /Length 20 >>\nstream\n/WebDocPageKeys fake!\nendstream",
+      "<< /WebDocPageKeys (metadata) >>",
+    ]);
+    const linked = attachInfoDictionary(bytes, "WebDocPageKeys");
+    assert.match(latin1(linked), /\/Info 4 0 R/);
+    assert.equal(
+      readObjects(compactPdf(linked)).get(4)?.value?.trim(),
+      "<< /WebDocPageKeys (metadata) >>",
+    );
+    assert.deepEqual(attachInfoDictionary(linked, "WebDocPageKeys"), linked);
+
+    // An incremental repair must not tokenize or alter the earlier signed
+    // prefix, which may use a cross-reference stream instead of a trailer.
+    const prefix = Uint8Array.from("<< /Type /XRef >>\n% signed bytes\n", (c) =>
+      c.charCodeAt(0),
+    );
+    const incremental = new Uint8Array(prefix.length + bytes.length);
+    incremental.set(prefix);
+    incremental.set(bytes, prefix.length);
+    const repaired = attachInfoDictionary(
+      incremental,
+      "WebDocPageKeys",
+      prefix.length,
+    );
+    assert.deepEqual(repaired.subarray(0, prefix.length), prefix);
+    assert.match(latin1(repaired.subarray(prefix.length)), /\/Info 4 0 R/);
+  });
+
+  it("refuses ambiguous orphaned Info metadata instead of choosing another object", () => {
+    const bytes = classicPdf([
+      "<< /Type /Catalog >>",
+      "<< /WebDocPageKeys (first) >>",
+      "<< /WebDocPageKeys (second) >>",
+    ]);
+    assert.throws(
+      () => attachInfoDictionary(bytes, "WebDocPageKeys"),
+      PdfCompactionError,
+    );
+  });
 
   it("keeps reachable objects through strings, comments, names and split references", async () => {
     const bytes = classicPdf([

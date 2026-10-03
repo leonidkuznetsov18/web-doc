@@ -370,6 +370,20 @@ describe("PDF text inside Form XObjects", () => {
     };
     const invalid = [
       "{",
+      JSON.stringify({
+        ...tree,
+        children: [
+          ...tree.children.slice(0, 2),
+          {
+            ...inner("p0:o1/2"),
+            children: [
+              { id: "p0:o1/2/0", type: 2 },
+              { id: "p0:", type: 1 },
+            ],
+          },
+          tree.children[3],
+        ],
+      }),
       JSON.stringify({ ...tree, children: tree.children.slice(1) }),
       JSON.stringify({
         ...tree,
@@ -392,7 +406,7 @@ describe("PDF text inside Form XObjects", () => {
     const pdfium = await fixturePdfium();
     const cases = [
       ...invalid.map((raw) => ({ raw, stale: false })),
-      { raw: invalid[4]!, stale: true },
+      { raw: invalid[5]!, stale: true },
     ];
     for (const { raw, stale } of cases) {
       const document = pdfium.openDocument(sharedFormPdf());
@@ -439,6 +453,11 @@ describe("PDF text inside Form XObjects", () => {
       }
       const model = await open(bytes);
       try {
+        assert.ok(
+          model
+            .getElements({ pageIndex: 0 })
+            .every((element) => !element.id.endsWith(":")),
+        );
         assert.equal(model.getElement("p0:o0")?.text, "Top-level control text");
         assert.equal(
           model.getElement("p0:o1/2/1")?.text?.trim(),
@@ -470,7 +489,7 @@ describe("PDF text inside Form XObjects", () => {
     }
   });
 
-  it("binds saved form identities to the page a drawing moves onto", async () => {
+  it("retains saved form identities when their logical page moves", async () => {
     const { session, end } = await pdfSession(sharedFormPdf());
     try {
       await session.setTextStyle({
@@ -482,7 +501,7 @@ describe("PDF text inside Form XObjects", () => {
       ]);
       const reopened = await open((await session.save()).bytes);
       try {
-        const target = "p1:p0:o1/2/1";
+        const target = "p0:o1/2/1";
         assert.equal(reopened.getElement(target)?.pageIndex, 1);
         assert.equal(reopened.getElement(target)?.textStyle?.color, "#ff0000");
         await apply(reopened, [
@@ -490,7 +509,7 @@ describe("PDF text inside Form XObjects", () => {
         ]);
         assert.equal(reopened.getElement(target)?.textStyle?.color, "#00ff00");
         assert.equal(
-          reopened.getElement("p1:p0:o1/3/1")?.textStyle?.color,
+          reopened.getElement("p0:o1/3/1")?.textStyle?.color,
           "#000000",
         );
       } finally {

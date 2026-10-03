@@ -1,6 +1,7 @@
 import { ViewerError } from "../../../errors.js";
 import { OBJECT_FORM, type ObjectRecord } from "./elements.js";
 import { MAX_FORM_DEPTH } from "./forms.js";
+import { isPageKey } from "./page-keys.js";
 import type { Pdfium } from "./pdfium.js";
 
 /** Identity belongs to this drawing, not to its potentially shared XObject. */
@@ -107,12 +108,13 @@ export function readFormIds(
     const { id: storedId, type } = value;
     if (
       typeof storedId !== "string" ||
-      !/^p[^:]+:[^\s]+$/.test(storedId) ||
+      !/^[^:]+:[^\s]+$/.test(storedId) ||
       type !== lib.FPDFPageObj_GetType(object)
     )
       return undefined;
     const owner = sourceKey ?? storedId.slice(0, storedId.indexOf(":"));
-    if (!storedId.startsWith(`${owner}:`)) return undefined;
+    if (!isPageKey(owner) || !storedId.startsWith(`${owner}:`))
+      return undefined;
     // Like ordinary WebDoc marks, a drawing imported onto another page
     // keeps its suffix but belongs to that page for target dispatch.
     const id = storedId.startsWith(`${pageKey}:`)

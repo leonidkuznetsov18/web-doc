@@ -54,6 +54,11 @@ import {
 } from "./forms.js";
 import { FontLibrary, TextMeasurer } from "./fonts.js";
 import { readFormIds, writeFormIds } from "./form-ids.js";
+import {
+  preservePageKeysMetadata,
+  readPageKeys,
+  writePageKeys,
+} from "./page-keys.js";
 import { textFaceOf, type TextFace } from "./text-font.js";
 import { fontRequestsOf } from "./text-box.js";
 import {
@@ -490,15 +495,25 @@ export class PdfEditDocument {
         : (mode ?? (this.#signatures > 0 ? "incremental" : "full"));
     if (this.#batches === 0 && this.#base === this.#original)
       return { bytes: this.#original.slice(), warnings: [] };
+    if (this.#batches > 0)
+      writePageKeys(
+        this.#pdfium,
+        this.#document.handle,
+        this.#pages.map((page) => page.key),
+      );
     if (chosen === "incremental")
       return {
         bytes:
           this.#batches === 0
             ? this.#base.slice()
-            : this.#document.save("incremental"),
+            : preservePageKeysMetadata(
+                this.#document.save("incremental"),
+                this.#base.byteLength,
+              ),
         warnings: [],
       };
-    const full = this.#document.save("full");
+    const saved = this.#document.save("full");
+    const full = this.#batches > 0 ? preservePageKeysMetadata(saved) : saved;
     try {
       return { bytes: this.#compact(full), warnings: [] };
     } catch (error) {
@@ -1077,7 +1092,11 @@ export class PdfEditDocument {
           ),
         ),
       insertPageRecord: (index) => {
-        const key = `q${stateId}.${operationIndex}`;
+        const seed = `q${stateId}.${operationIndex}`;
+        let key = seed;
+        let suffix = 1;
+        while (this.#pages.some((page) => page.key === key))
+          key = `${seed}~${suffix++}`;
         this.#pages.splice(index, 0, { key });
         this.#forgetElements();
         return key;
@@ -1242,7 +1261,10 @@ export class PdfEditDocument {
 
   #originalPages(): PageRecord[] {
     const count = this.#pdfium.lib.FPDF_GetPageCount(this.#document.handle);
-    return Array.from({ length: count }, (_, index) => ({ key: `p${index}` }));
+    const keys = readPageKeys(this.#pdfium, this.#document.handle);
+    return Array.from({ length: count }, (_, index) => ({
+      key: keys?.[index] ?? `p${index}`,
+    }));
   }
 
   #pageIndexOf(id: string): number | undefined {
