@@ -57,6 +57,8 @@ import type {
   PdfElement,
   PdfOperation,
   PdfSaveOptions,
+  PdfTextParagraph,
+  ReplaceParagraphTextOperation,
   ReplaceTextOperation,
   ResizeElementOperation,
   RotatePageOperation,
@@ -322,6 +324,28 @@ export class PdfSession implements PdfEditSession {
 
   callTool(call: ToolCall, options?: ToolCallOptions): Promise<ToolResult> {
     return runTool(this, this.tools, call, options);
+  }
+
+  getTextParagraph(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<PdfTextParagraph>> {
+    return this.#core.readItem(options, (engine, signal) => {
+      const reads = pdfReads(engine);
+      if (!reads.textParagraph)
+        throw new ViewerError(
+          "edit-unsupported",
+          "This engine does not resolve PDF paragraphs",
+        );
+      return reads.textParagraph(elementId, signal);
+    });
+  }
+
+  replaceParagraphText(
+    fields: Fields<ReplaceParagraphTextOperation>,
+    options?: ApplyOptions,
+  ): Promise<EditReceipt> {
+    return this.apply([{ op: "replaceParagraphText", ...fields }], options);
   }
 
   getTextLayout(

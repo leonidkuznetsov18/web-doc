@@ -32,6 +32,14 @@ export const moveElement: OperationHandler<MoveElementOperation> = {
   validate(operation, context, issue) {
     const target = anyTarget(operation.target, context, issue);
     if (!target) return;
+    if (target.element.kind === "paragraph") {
+      issue(
+        "/target",
+        "unsupported-target",
+        "Imported paragraphs cannot be moved",
+      );
+      return;
+    }
     if ((operation.to === undefined) === (operation.by === undefined)) {
       issue("", "one-of", "Give exactly one of `to` and `by`");
       return;
@@ -84,8 +92,15 @@ export const resizeElement: OperationHandler<ResizeElementOperation> = {
   validate(operation, context, issue) {
     const target = anyTarget(operation.target, context, issue);
     if (!target) return;
-    if (target.element.kind === "table") {
-      issue("/target", "unsupported-target", "Tables cannot be resized");
+    if (
+      target.element.kind === "table" ||
+      target.element.kind === "paragraph"
+    ) {
+      issue(
+        "/target",
+        "unsupported-target",
+        "Tables and imported paragraphs cannot be resized",
+      );
       return;
     }
     validateRect(
@@ -142,10 +157,16 @@ export const deleteElement: OperationHandler<DeleteElementOperation> = {
   },
   apply(operation, context) {
     const { location } = anyTarget(operation.target, context)!;
+    const paragraph = context.paragraph(operation.target)?.paragraph;
     removeObjects(context, location);
     return {
       ...changed(location, { overflow: false }),
-      removedIds: [operation.target],
+      removedIds: [
+        ...new Set([
+          operation.target,
+          ...(paragraph?.id === operation.target ? paragraph.memberIds : []),
+        ]),
+      ],
     };
   },
 };

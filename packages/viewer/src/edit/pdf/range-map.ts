@@ -29,7 +29,7 @@ export interface MutationRecord {
 }
 
 interface ReplaceLike {
-  readonly op: "replaceText";
+  readonly op: "replaceText" | "replaceParagraphText";
   readonly target: string;
   readonly text: string;
   readonly range?: TextRange;
@@ -133,7 +133,8 @@ function asReplace(
   operation: EditOperation,
   elementId: string,
 ): ReplaceLike | undefined {
-  if (operation.op !== "replaceText") return undefined;
+  if (operation.op !== "replaceText" && operation.op !== "replaceParagraphText")
+    return undefined;
   const candidate = operation as Partial<ReplaceLike>;
   if (candidate.target !== elementId || typeof candidate.text !== "string")
     return undefined;

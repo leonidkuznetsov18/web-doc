@@ -14,6 +14,86 @@ const EDIT_ASSETS = [
   "/assets/pdfium/pdfium.wasm",
 ];
 
+test("edits an imported paragraph through the native worker and reopens its stable target", async ({
+  page,
+}) => {
+  const lines = [
+    "Native paragraphs preserve their identity",
+    "across source lines and worker messages",
+    "and remain editable after saving.",
+  ];
+  const original = await buildPdf([
+    {
+      texts: lines.map((text, index) => ({
+        text,
+        x: 72,
+        y: 700 - index * 20,
+        fontSize: 11,
+      })),
+    },
+  ]);
+  await page.goto("/");
+  const result = await page.evaluate(
+    async ({ data, first }) => {
+      const { ViewerClient } =
+        (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+      const viewer = ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href).href,
+      }).createViewer();
+      try {
+        await viewer.load(new Uint8Array(data), { fileName: "paragraph.pdf" });
+        const session = await viewer.edit();
+        if (session.format !== "pdf") throw new Error("Expected a PDF session");
+        const row = (await session.getElements({ pageIndex: 0 })).items.find(
+          (item) => item.text === first,
+        );
+        if (!row?.textEditingTarget)
+          throw new Error("Imported paragraph hint is missing");
+        const paragraph = (await session.getTextParagraph(row.id)).item;
+        if (!paragraph) throw new Error("Native paragraph is missing");
+        const initial = (await session.getElement(row.textEditingTarget)).item;
+        await session.replaceParagraphText({
+          target: paragraph.id,
+          text: "Updated paragraph through the worker.",
+        });
+        await session.undo();
+        const undone = (await session.getTextParagraph(paragraph.id)).item
+          ?.text;
+        await session.redo();
+        const saved = await session.save();
+        await session.end();
+        await viewer.load(saved.bytes, { fileName: "saved-paragraph.pdf" });
+        const reopened = await viewer.edit();
+        if (reopened.format !== "pdf")
+          throw new Error("Expected a reopened PDF session");
+        const current = (await reopened.getTextParagraph(paragraph.id)).item;
+        const elements = (await reopened.getElements({ pageIndex: 0 })).items;
+        return {
+          initialText: initial?.text,
+          memberCount: paragraph.memberIds.length,
+          undone,
+          id: current?.id,
+          originalId: paragraph.id,
+          text: current?.text,
+          elements: elements.map((element) => element.text),
+        };
+      } finally {
+        await viewer.close();
+      }
+    },
+    { data: Array.from(original), first: lines[0] },
+  );
+  expect(result).toEqual({
+    initialText: lines.join(" "),
+    memberCount: 3,
+    undone: lines.join(" "),
+    id: result.originalId,
+    originalId: result.originalId,
+    text: "Updated paragraph through the worker.",
+    elements: ["Updated paragraph through the worker."],
+  });
+});
+
 async function loadPdf(page: Page, bytes: Uint8Array): Promise<void> {
   await page.goto("/");
   await page.evaluate(async (data) => {

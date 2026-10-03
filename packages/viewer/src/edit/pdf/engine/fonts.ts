@@ -1,4 +1,5 @@
 import type { EditWorkerFont } from "../../../worker-protocol.js";
+import type { Issue } from "./operations.js";
 import type { Pdfium } from "./pdfium.js";
 
 /*
@@ -567,4 +568,81 @@ export class TextMeasurer {
       lib.FPDFPageObj_Destroy(object);
     }
   }
+}
+
+/** True only when the original native font is known to encode every character. */
+export function fontCanDraw(
+  pdfium: Pdfium,
+  font: number,
+  text: string,
+): boolean {
+  const { lib } = pdfium;
+  if (!lib.FPDFFont_GetIsEmbedded(font)) {
+    const base = pdfium.readUtf8String((buffer, bytes) =>
+      lib.FPDFFont_GetBaseFontName(font, buffer, bytes),
+    );
+    return (
+      isStandardFamily(base.split(/[-,]/)[0] ?? "") &&
+      firstNonWinAnsi(text) === undefined
+    );
+  }
+  const coverage = fontCoverage(pdfium, font);
+  if (!coverage) return false;
+  return [...text].every((character) => {
+    const code = character.codePointAt(0)!;
+    return code === 0x0a || code === 0x20 || coverage.drawable(code);
+  });
+}
+
+function fontCoverage(pdfium: Pdfium, font: number): CmapCoverage | undefined {
+  const data = fontBytes(pdfium, font);
+  if (!data) return undefined;
+  const tag = String.fromCharCode(...data.slice(0, 4));
+  const truetype =
+    (data[0] === 0 && data[1] === 1 && data[2] === 0 && data[3] === 0) ||
+    tag === "true";
+  return truetype ? parseCmap(data) : undefined;
+}
+
+export function fontBytes(
+  pdfium: Pdfium,
+  font: number,
+): Uint8Array | undefined {
+  const { lib } = pdfium;
+  const size = pdfium.readNumbers(1, "i32", ([out]) =>
+    lib.FPDFFont_GetFontData(font, 0, 0, out!),
+  )?.[0];
+  if (!size) return undefined;
+  const buffer = pdfium.malloc(size);
+  try {
+    const out = pdfium.malloc(4);
+    try {
+      if (!lib.FPDFFont_GetFontData(font, buffer, size, out)) return undefined;
+    } finally {
+      pdfium.free(out);
+    }
+    return pdfium.readBytes(buffer, size);
+  } finally {
+    pdfium.free(buffer);
+  }
+}
+
+/** Right-to-left scripts need shaping the MVP does not do. */
+export function validateScript(text: string, issue: Issue): boolean {
+  for (const character of text) {
+    const code = character.codePointAt(0)!;
+    if (
+      (code >= 0x0590 && code <= 0x08ff) ||
+      (code >= 0xfb1d && code <= 0xfdff) ||
+      (code >= 0xfe70 && code <= 0xfeff)
+    ) {
+      issue(
+        "/text",
+        "unsupported-script",
+        `Right-to-left text such as "${character}" cannot be edited yet`,
+      );
+      return false;
+    }
+  }
+  return true;
 }

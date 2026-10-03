@@ -216,7 +216,8 @@ describe("PDF sessions", () => {
         EditElement
       >;
       const names = Object.keys(client.schemas.operations).sort();
-      assert.equal(names.length, 15);
+      assert.equal(names.length, 16);
+      assert.ok(names.includes("replaceParagraphText"));
       const run = async (operation: Record<string, unknown>) => {
         assert.ok(names.includes(operation.op as string), String(operation.op));
         const json = JSON.parse(JSON.stringify(operation)) as EditOperation;

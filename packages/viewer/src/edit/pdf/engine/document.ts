@@ -21,6 +21,7 @@ import type {
   PageLayout,
   PdfElement,
   PdfOperation,
+  PdfTextParagraph,
   TextLayout,
 } from "../types.js";
 import type { EditWorkerBitmap } from "../../../worker-protocol.js";
@@ -47,6 +48,12 @@ import {
   type OperationHandler,
 } from "./operations.js";
 import { insertTextBox } from "./text-box.js";
+import {
+  discoverParagraphs,
+  paragraphElement,
+  type ParagraphTarget,
+} from "./paragraph.js";
+import { replaceParagraphText } from "./paragraph-edit.js";
 import { replaceText, setTextStyle } from "./existing-text.js";
 import { deleteElement, moveElement, resizeElement } from "./transform.js";
 import { deletePage, insertPage, movePage, rotatePage } from "./pages.js";
@@ -78,6 +85,7 @@ interface PageRecord {
   objects?: ObjectRecord[];
   /** Elements derived from `objects`; dropped whenever the page changes. */
   elements?: readonly PdfElement[];
+  paragraphs?: ReadonlyMap<string, ParagraphTarget>;
 }
 
 /**
@@ -181,6 +189,7 @@ function referenceOf(operation: { readonly op: string }): number | undefined {
 }
 
 const handlers: Readonly<Record<PdfOperation["op"], OperationHandler>> = {
+  replaceParagraphText: replaceParagraphText as OperationHandler,
   insertTextBox: insertTextBox as OperationHandler,
   replaceText: replaceText as OperationHandler,
   setTextStyle: setTextStyle as OperationHandler,
@@ -516,7 +525,14 @@ export class PdfEditDocument {
   getElement(id: string): PdfElement | undefined {
     const pageIndex = this.#pageIndexOf(id);
     if (pageIndex === undefined) return undefined;
-    return this.#elementsOf(pageIndex).find((element) => element.id === id);
+    const element = this.#elementsOf(pageIndex).find(
+      (element) => element.id === id,
+    );
+    if (element) return element;
+    const target = this.#pages[pageIndex]?.paragraphs?.get(id);
+    return target?.paragraph.id === id
+      ? paragraphElement(target.paragraph)
+      : undefined;
   }
 
   /** Elements under a point, top-most (drawn last) first. */
@@ -557,12 +573,41 @@ export class PdfEditDocument {
   }
 
   /** Lines, glyph boxes and styles of a text, text box or table element. */
+  textParagraph(elementId: string): PdfTextParagraph | undefined {
+    return this.#paragraphOf(elementId)?.paragraph;
+  }
+
+  #paragraphOf(id: string): ParagraphTarget | undefined {
+    const pageIndex = this.#pageIndexOf(id);
+    if (pageIndex === undefined) return undefined;
+    this.#elementsOf(pageIndex);
+    return this.#pages[pageIndex]?.paragraphs?.get(id);
+  }
+
   textLayout(elementId: string): TextLayout | undefined {
     const pageIndex = this.#pageIndexOf(elementId);
     if (pageIndex === undefined) return undefined;
-    return this.#scanText(pageIndex, (scan) => {
+    const paragraph = this.#paragraphOf(elementId);
+    return this.#scanText(pageIndex, (raw) => {
+      const scan =
+        paragraph?.paragraph.id === elementId
+          ? this.#paragraphScan(raw, paragraph)
+          : raw;
       const element = scan.elements.find((entry) => entry.id === elementId);
-      return element ? layoutOf(this.#pdfium, scan, element) : undefined;
+      const layout = element
+        ? layoutOf(this.#pdfium, scan, element)
+        : undefined;
+      return layout && paragraph?.paragraph.id === elementId
+        ? {
+            ...layout,
+            lines: [...layout.lines]
+              .sort((a, b) => a.range.start.offset - b.range.start.offset)
+              .map((line) => ({
+                ...line,
+                fontSize: paragraph.paragraph.textStyle.fontSize,
+              })),
+          }
+        : layout;
     });
   }
 
@@ -621,7 +666,12 @@ export class PdfEditDocument {
           "The rendered page exceeds maxDecodedPixels",
           { details: { actual: pixels, limit: this.#limits.maxDecodedPixels } },
         );
-      const wanted = new Set(elementIds);
+      const wanted = new Set(
+        elementIds.flatMap((id) => {
+          const paragraph = this.#paragraphOf(id)?.paragraph;
+          return paragraph?.id === id ? paragraph.memberIds : [id];
+        }),
+      );
       const records = this.#objectsOf(pageIndex, page);
       const suppressed: {
         readonly object: number;
@@ -710,8 +760,18 @@ export class PdfEditDocument {
       pageIndex !== this.#pageIndexOf(range.end.elementId)
     )
       return [];
+    const paragraph =
+      range.start.elementId === range.end.elementId
+        ? this.#paragraphOf(range.start.elementId)
+        : undefined;
     return this.#scanText(pageIndex, (scan) =>
-      rectsOf(this.#pdfium, scan, range),
+      rectsOf(
+        this.#pdfium,
+        paragraph?.paragraph.id === range.start.elementId
+          ? this.#paragraphScan(scan, paragraph)
+          : scan,
+        range,
+      ),
     );
   }
 
@@ -748,10 +808,14 @@ export class PdfEditDocument {
       newId: (pageIndex, suffix = "") =>
         `${this.#unusedId(pageIndex, `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}`)}${suffix}`,
       withPage: (pageIndex, use) => this.#writePage(pageIndex, use),
+      readPage: (pageIndex, use) => this.#withPage(pageIndex, use),
+      paragraph: (id) => this.#paragraphOf(id),
+      pageElements: (pageIndex) => this.#elementsOf(pageIndex),
       appendObjects: (pageIndex, records) => {
         const page = this.#pages[pageIndex]!;
         page.objects = [...(page.objects ?? []), ...records];
         delete page.elements;
+        delete page.paragraphs;
       },
       locate: (id) => this.#locate(id),
       element: (id) => this.getElement(id),
@@ -783,6 +847,7 @@ export class PdfEditDocument {
         if (!page) return;
         delete page.geometry;
         delete page.elements;
+        delete page.paragraphs;
       },
       spliceObjects: (pageIndex, start, count, records) => {
         const page = this.#pages[pageIndex]!;
@@ -790,13 +855,17 @@ export class PdfEditDocument {
         objects.splice(start, count, ...records);
         page.objects = objects;
         delete page.elements;
+        delete page.paragraphs;
       },
     };
   }
 
   /** Cached elements carry page indexes, which a structure change makes stale. */
   #forgetElements(): void {
-    for (const page of this.#pages) delete page.elements;
+    for (const page of this.#pages) {
+      delete page.elements;
+      delete page.paragraphs;
+    }
   }
 
   #locate(id: string): ElementLocation | undefined {
@@ -810,7 +879,16 @@ export class PdfEditDocument {
       if (record.id === id) indexes.push(index);
     });
     const record = records[indexes[0] ?? -1];
-    return record ? { pageIndex, indexes, record } : undefined;
+    if (record) return { pageIndex, indexes, record };
+    const paragraph = this.#paragraphOf(id);
+    const first = paragraph && records[paragraph.indexes[0] ?? -1];
+    return paragraph?.paragraph.id === id && first
+      ? {
+          pageIndex,
+          indexes: paragraph.indexes,
+          record: { ...first, id, mark: paragraph.spec },
+        }
+      : undefined;
   }
 
   /** Loads a page, lets `use` change it, regenerates its content stream. */
@@ -834,6 +912,7 @@ export class PdfEditDocument {
           },
         );
       delete this.#pages[pageIndex]!.elements;
+      delete this.#pages[pageIndex]!.paragraphs;
       return result;
     } finally {
       lib.FPDF_ClosePage(page);
@@ -863,7 +942,23 @@ export class PdfEditDocument {
         geometry,
         this.#objectsOf(pageIndex, page),
       );
-      record.elements = Object.freeze(elements);
+      record.paragraphs = discoverParagraphs(
+        this.#pdfium,
+        page,
+        pageIndex,
+        geometry,
+        this.#objectsOf(pageIndex, page),
+        elements,
+        textPage,
+      );
+      record.elements = Object.freeze(
+        elements.map((element) => {
+          const paragraph = record.paragraphs?.get(element.id)?.paragraph;
+          return paragraph && paragraph.id !== element.id
+            ? { ...element, textEditingTarget: paragraph.id }
+            : element;
+        }),
+      );
       return record.elements;
     });
   }
@@ -990,6 +1085,30 @@ export class PdfEditDocument {
       rotation: lib.FPDFPage_GetRotation(page),
     };
     return record.geometry;
+  }
+
+  #paragraphScan(scan: TextPageScan, target: ParagraphTarget): TextPageScan {
+    const paragraph = target.paragraph;
+    if (paragraph.memberIds.includes(paragraph.id)) return scan;
+    const members = new Map(
+      paragraph.members.map((member) => [member.elementId, member]),
+    );
+    return {
+      ...scan,
+      elements: [
+        ...scan.elements.filter((element) => !members.has(element.id)),
+        paragraphElement(paragraph),
+      ],
+      offsets: scan.offsets.map((position) => {
+        const member = position && members.get(position.elementId);
+        return member && position
+          ? {
+              elementId: paragraph.id,
+              offset: Math.min(member.end, member.start + position.offset),
+            }
+          : position;
+      }),
+    };
   }
 
   /** Loads a page with its text page and the character-to-element mapping. */

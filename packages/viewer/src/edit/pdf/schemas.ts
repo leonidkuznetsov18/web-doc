@@ -164,6 +164,15 @@ export const pdfOperationSchemas: OperationSchemaSet = Object.freeze({
       },
       ["target", "style"],
     ),
+    replaceParagraphText: operation(
+      "replaceParagraphText",
+      {
+        target: { $ref: "#/$defs/target" },
+        text: { type: "string", maxLength: 20000 },
+        range: { $ref: "#/$defs/textRange" },
+      },
+      ["target", "text"],
+    ),
     resizeElement: operation(
       "resizeElement",
       {
@@ -356,6 +365,39 @@ export const textBoxMarkSchema: JsonSchema = {
         "italic",
         "color",
         "align",
+        "lineHeight",
+      ],
+      additionalProperties: false,
+      properties: definitions.textBoxStyle!.properties as JsonSchema,
+    },
+  },
+  $defs: definitions,
+};
+
+/** Persisted native imported paragraph; no unvalidated layout inputs are trusted. */
+export const paragraphMarkSchema: JsonSchema = {
+  type: "object",
+  required: ["kind", "id", "rect", "text", "lines", "style", "baselineOffset"],
+  additionalProperties: false,
+  properties: {
+    kind: { const: "paragraph" },
+    id: { $ref: "#/$defs/target" },
+    rect: { $ref: "#/$defs/rect" },
+    text: { type: "string", maxLength: 20000 },
+    baselineOffset: { type: "number", minimum: 0, maximum: 2 },
+    lines: {
+      type: "array",
+      maxItems: 20000,
+      items: { type: "string", maxLength: 20000 },
+    },
+    style: {
+      type: "object",
+      required: [
+        "fontFamily",
+        "fontSize",
+        "bold",
+        "italic",
+        "color",
         "lineHeight",
       ],
       additionalProperties: false,

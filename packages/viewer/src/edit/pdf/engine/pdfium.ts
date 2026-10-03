@@ -148,6 +148,7 @@ export interface PdfiumFunctions {
     bytes: number,
   ): number;
   FPDFTextObj_GetFontSize(textObject: number, size: number): boolean;
+  FPDFTextObj_GetTextRenderMode(textObject: number): number;
   FPDFTextObj_GetFont(textObject: number): number;
   FPDFFont_GetFamilyName(font: number, buffer: number, bytes: number): number;
   FPDFFont_GetBaseFontName(font: number, buffer: number, bytes: number): number;
