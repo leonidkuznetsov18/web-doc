@@ -100,20 +100,35 @@ export function parseReference(target: string): number | undefined {
 }
 
 export function freezeOperations<T>(operations: readonly T[]): readonly T[] {
-  return Object.freeze(operations.map((operation) => deepCopy(operation) as T));
+  const copies = new WeakMap<object, unknown>();
+  return Object.freeze(
+    operations.map((operation) => deepCopy(operation, copies) as T),
+  );
 }
 
-function deepCopy(value: unknown): unknown {
+function deepCopy(value: unknown, copies: WeakMap<object, unknown>): unknown {
   if (value instanceof Uint8Array) return value.slice();
-  if (Array.isArray(value)) return Object.freeze(value.map(deepCopy));
-  if (isPlainObject(value))
-    return Object.freeze(
-      Object.fromEntries(
-        Object.entries(value)
-          .filter(([, child]) => child !== undefined)
-          .map(([key, child]) => [key, deepCopy(child)]),
-      ),
+  if (typeof value === "object" && value !== null && copies.has(value))
+    return copies.get(value);
+  // Snapshot cycles as cycles: queued JSON validation can then report their
+  // precise path instead of the copier overflowing before apply returns.
+  if (Array.isArray(value)) {
+    const copy: unknown[] = new Array(value.length);
+    copies.set(value, copy);
+    value.forEach((child, index) => {
+      copy[index] = deepCopy(child, copies);
+    });
+    return Object.freeze(copy);
+  }
+  if (isPlainObject(value)) {
+    const copy: Record<string, unknown> = Object.fromEntries(
+      Object.entries(value).filter(([, child]) => child !== undefined),
     );
+    copies.set(value, copy);
+    for (const [key, child] of Object.entries(copy))
+      copy[key] = deepCopy(child, copies);
+    return Object.freeze(copy);
+  }
   return value;
 }
 

@@ -163,6 +163,59 @@ describe("EditSessionController", () => {
     assert.equal(host.events.length, 0);
   });
 
+  it("rejects cyclic applyJson inputs as promises without changing content or redo history", async () => {
+    const { session: edit, engine, host, apply } = session();
+    const object: Record<string, unknown> = {};
+    object.self = object;
+    const array: unknown[] = [];
+    array.push(array);
+    const nested: Record<string, unknown> = {};
+    nested.branch = { loop: nested };
+    await apply([{ op: "setText", pageIndex: 0, text: "history" }]);
+    await edit.undo();
+    const state = edit.state;
+    const saved = await edit.save();
+    const events = [...host.events];
+    for (const { value, path } of [
+      { value: object, path: "/extra/self" },
+      { value: array, path: "/extra/0" },
+      { value: nested, path: "/extra/branch/loop" },
+    ]) {
+      const calls = [...engine.calls];
+      const operation = {
+        op: "setText",
+        pageIndex: 0,
+        text: "discard",
+        extra: value,
+      };
+      const pending = edit.applyJson([operation]);
+      assert.ok(pending instanceof Promise);
+      await assert.rejects(
+        pending,
+        rejectsWith("invalid-operation", (error) =>
+          assert.deepEqual(error.details?.issues, [
+            {
+              operationIndex: 0,
+              path,
+              code: "not-json",
+              message: "Cyclic value",
+            },
+          ]),
+        ),
+      );
+      assert.deepEqual(edit.state, state);
+      assert.deepEqual(host.events, events);
+      assert.deepEqual(engine.calls, calls);
+      assert.deepEqual(await edit.save(), saved);
+      assert.deepEqual(host.current, ["one", "two", "three"]);
+    }
+    await edit.redo();
+    assert.equal(host.current?.[0], "history");
+    await apply([{ op: "setText", pageIndex: 0, text: "recovered" }]);
+    assert.equal(host.current?.[0], "recovered");
+    await edit.end();
+  });
+
   it("rolls back a failing engine, materialize or reopen and reports the stage", async () => {
     const failing = session();
     await failing.apply([{ op: "setText", pageIndex: 2, text: "kept" }]);
