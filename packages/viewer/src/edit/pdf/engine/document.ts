@@ -289,9 +289,9 @@ export class PdfEditDocument {
   }
 
   /**
-   * Checks a batch against the current document. Operations are checked one
-   * after another against the state before the batch, which is exact for
-   * everything but a page count another operation of the batch changes.
+   * Preflights a batch against its starting document. Applying revalidates
+   * each operation against earlier changes in the batch; created-element
+   * references are checked once their targets exist.
    */
   validate(operations: readonly PdfOrUnknownOperation[]): OperationIssue[] {
     const issues: OperationIssue[] = [];
@@ -358,7 +358,7 @@ export class PdfEditDocument {
       if (!handler)
         throw new ViewerError("internal", `Unknown pdf operation ${raw.op}`);
       const context = this.#context(stateId, operationIndex);
-      const operation = this.#resolveReference(
+      const operation = this.#resolveAndValidate(
         raw as PdfOperation,
         operationIndex,
         createdByOperation,
@@ -386,12 +386,11 @@ export class PdfEditDocument {
   }
 
   /**
-   * Turns a `"$<n>"` target into the id operation `n` created, then runs the
-   * handler's own checks on the resolved operation: a reference that lands
-   * on an element the operation cannot act on fails the batch the same way
-   * validation would have.
+   * Resolves a `"$<n>"` target, then checks every operation against the
+   * current document. Earlier operations may have moved, resized or removed
+   * an ordinary target since the batch's initial preflight.
    */
-  #resolveReference(
+  #resolveAndValidate(
     operation: PdfOperation,
     operationIndex: number,
     createdByOperation: readonly (readonly string[])[],
@@ -399,19 +398,21 @@ export class PdfEditDocument {
     context: OperationContext,
   ): PdfOperation {
     const reference = referenceOf(operation);
-    if (reference === undefined) return operation;
     const issues: OperationIssue[] = [];
     const issue = issueCollector(operationIndex, issues);
-    const id = createdByOperation[reference]?.[0];
-    if (id === undefined) {
-      issue(
-        "/target",
-        "unknown-target",
-        `Operation ${reference} created no element for "$${reference}"`,
-      );
-      throw invalidOperationError(issues);
+    let resolved = operation;
+    if (reference !== undefined && "target" in operation) {
+      const id = createdByOperation[reference]?.[0];
+      if (id === undefined) {
+        issue(
+          "/target",
+          "unknown-target",
+          `Operation ${reference} created no element for "$${reference}"`,
+        );
+        throw invalidOperationError(issues);
+      }
+      resolved = { ...operation, target: id };
     }
-    const resolved = { ...operation, target: id } as PdfOperation;
     handler.validate(resolved, context, issue);
     if (issues.length > 0) throw invalidOperationError(issues);
     return resolved;

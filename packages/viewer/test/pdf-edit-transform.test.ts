@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
 
 import { PdfEditDocument } from "../src/edit/pdf/engine/document.js";
-import type { PageRect, PdfOperation } from "../src/index.js";
+import { ViewerError, type PageRect, type PdfOperation } from "../src/index.js";
 import {
   buildPdf,
   extractPageText,
   fixturePdfium,
 } from "./fixtures/pdf-builder.js";
+import { pdfSession } from "./fixtures/pdf-session.js";
 
 function near(actual: PageRect, expected: PageRect, slack = 0.5): void {
   for (const key of ["x", "y", "width", "height"] as const)
@@ -243,6 +244,180 @@ describe("moveElement, resizeElement and deleteElement", () => {
     } finally {
       first.dispose();
       second.dispose();
+    }
+  });
+});
+
+describe("sequential PDF transform batch validation", () => {
+  let original: Uint8Array;
+
+  before(async () => {
+    original = await buildPdf([
+      {
+        width: 200,
+        height: 200,
+        image: { x: 80, y: 80, width: 40, height: 40 },
+      },
+    ]);
+  });
+
+  for (const dryRun of [false, true]) {
+    it(`rejects cumulative off-page moves atomically${dryRun ? " in a dry run" : ""}`, async () => {
+      const { session, end } = await pdfSession(original);
+      try {
+        const state = session.state;
+        const before = (await session.getElement("p0:o0")).item;
+        assert.ok(before);
+        await assert.rejects(
+          session.apply(
+            Array.from({ length: 3 }, () =>
+              op({
+                op: "moveElement",
+                target: "p0:o0",
+                by: { dx: 70, dy: 0 },
+              }),
+            ),
+            { dryRun },
+          ),
+          (error: unknown) => {
+            assert.ok(error instanceof ViewerError);
+            assert.equal(error.code, "invalid-operation");
+            assert.deepEqual(error.details?.issues, [
+              {
+                operationIndex: 1,
+                path: "/by",
+                code: "range",
+                message: "The rectangle must lie within the 200×200 pt page",
+              },
+            ]);
+            return true;
+          },
+        );
+        assert.deepEqual(session.state, state);
+        assert.deepEqual((await session.getElement("p0:o0")).item, before);
+        assert.deepEqual((await session.save()).bytes, original);
+      } finally {
+        await end();
+      }
+    });
+  }
+
+  it("uses the size from an earlier resize when validating a later move", async () => {
+    const { session, end } = await pdfSession(original);
+    try {
+      const state = session.state;
+      const before = (await session.getElement("p0:o0")).item;
+      await assert.rejects(
+        session.apply([
+          {
+            op: "resizeElement",
+            target: "p0:o0",
+            rect: { x: 80, y: 80, width: 100, height: 40 },
+          },
+          { op: "moveElement", target: "p0:o0", by: { dx: 30, dy: 0 } },
+        ]),
+        (error: unknown) => {
+          assert.ok(error instanceof ViewerError);
+          assert.equal(error.code, "invalid-operation");
+          assert.deepEqual(error.details?.issues, [
+            {
+              operationIndex: 1,
+              path: "/by",
+              code: "range",
+              message: "The rectangle must lie within the 200×200 pt page",
+            },
+          ]);
+          return true;
+        },
+      );
+      assert.deepEqual(session.state, state);
+      assert.deepEqual((await session.getElement("p0:o0")).item, before);
+      assert.deepEqual((await session.save()).bytes, original);
+    } finally {
+      await end();
+    }
+  });
+
+  it("reports a target deleted earlier in the batch without committing its deletion", async () => {
+    const { session, end } = await pdfSession(original);
+    try {
+      const state = session.state;
+      const before = (await session.getElement("p0:o0")).item;
+      await assert.rejects(
+        session.apply([
+          { op: "deleteElement", target: "p0:o0" },
+          { op: "moveElement", target: "p0:o0", by: { dx: 1, dy: 0 } },
+        ]),
+        (error: unknown) => {
+          assert.ok(error instanceof ViewerError);
+          assert.equal(error.code, "invalid-operation");
+          assert.deepEqual(error.details?.issues, [
+            {
+              operationIndex: 1,
+              path: "/target",
+              code: "unknown-target",
+              message: "No element p0:o0",
+            },
+          ]);
+          return true;
+        },
+      );
+      assert.deepEqual(session.state, state);
+      assert.deepEqual((await session.getElement("p0:o0")).item, before);
+      assert.deepEqual((await session.save()).bytes, original);
+    } finally {
+      await end();
+    }
+  });
+
+  it("keeps a valid sequential batch as one undoable, saveable edit", async () => {
+    const { session, end } = await pdfSession(original);
+    try {
+      const receipt = await session.apply([
+        { op: "moveElement", target: "p0:o0", by: { dx: 10, dy: 0 } },
+        { op: "moveElement", target: "p0:o0", by: { dx: 10, dy: 0 } },
+        {
+          op: "resizeElement",
+          target: "p0:o0",
+          rect: { x: 100, y: 90, width: 50, height: 30 },
+        },
+        { op: "moveElement", target: "p0:o0", by: { dx: 20, dy: 0 } },
+      ]);
+      assert.equal(receipt.operationCount, 4);
+      assert.equal(receipt.revision, 1);
+      assert.deepEqual(receipt.changedPages, [0]);
+      assert.deepEqual(receipt.createdIds, []);
+      assert.deepEqual(receipt.removedIds, []);
+      assert.deepEqual(receipt.warnings, []);
+      const expected = { x: 120, y: 90, width: 50, height: 30 };
+      assert.deepEqual(
+        (await session.getElement("p0:o0")).item?.bounds,
+        expected,
+      );
+      await session.undo();
+      assert.deepEqual((await session.getElement("p0:o0")).item?.bounds, {
+        x: 80,
+        y: 80,
+        width: 40,
+        height: 40,
+      });
+      assert.equal(session.state.canUndo, false);
+      await session.redo();
+      assert.deepEqual(
+        (await session.getElement("p0:o0")).item?.bounds,
+        expected,
+      );
+      const reopened = await pdfSession((await session.save()).bytes);
+      try {
+        assert.deepEqual(
+          (await reopened.session.getElement("p0:o0")).item?.bounds,
+          expected,
+        );
+      } finally {
+        await reopened.end();
+      }
+    } finally {
+      await end();
     }
   });
 });
