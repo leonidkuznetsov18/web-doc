@@ -69,6 +69,7 @@ import type {
   PageLayout,
   RenderOptions,
   SetTextStyleOperation,
+  TextFont,
   TextLayout,
 } from "./types.js";
 
@@ -359,6 +360,15 @@ export class PdfSession implements PdfEditSession {
   ): Promise<ReadItem<TextLayout>> {
     return this.#core.readItem(options, (engine, signal) =>
       pdfReads(engine).textLayout(elementId, signal),
+    );
+  }
+
+  getTextFont(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextFont>> {
+    return this.#core.readItem(options, (engine, signal) =>
+      pdfReads(engine).textFont(elementId, signal),
     );
   }
 

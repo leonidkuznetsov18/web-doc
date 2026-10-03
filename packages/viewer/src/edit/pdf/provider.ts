@@ -19,8 +19,9 @@ import { pdfOperationSchemas } from "./schemas.js";
 import type {
   PageBitmap,
   PageLayout,
-  TextLayout,
   PdfTextParagraph,
+  TextFont,
+  TextLayout,
 } from "./types.js";
 
 /** The reads behind the overlay primitives, beyond the core engine interface. */
@@ -30,6 +31,7 @@ export interface PdfEngineReads {
     signal: AbortSignal,
   ): Promise<PdfTextParagraph | undefined>;
   textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined>;
+  textFont(id: string, signal: AbortSignal): Promise<TextFont | undefined>;
   positionAt(
     pageIndex: number,
     point: PagePoint,
@@ -150,6 +152,10 @@ export class PdfEditEngineClient
 
   textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined> {
     return this.request("edit-text-layout", { id }, signal);
+  }
+
+  textFont(id: string, signal: AbortSignal): Promise<TextFont | undefined> {
+    return this.request("edit-text-font", { id }, signal);
   }
 
   positionAt(

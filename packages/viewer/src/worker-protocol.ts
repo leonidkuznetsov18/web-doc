@@ -33,6 +33,7 @@ export type EditWorkerOperation =
   | "edit-find-text"
   | "edit-text-layout"
   | "edit-text-paragraph"
+  | "edit-text-font"
   | "edit-position-at"
   | "edit-range-rects"
   | "edit-render-without"
