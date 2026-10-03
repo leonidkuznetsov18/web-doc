@@ -120,7 +120,7 @@ export interface ReplaceParagraphTextOperation {
 
 export interface SetTextStyleOperation {
   readonly op: "setTextStyle";
-  /** A `textBox` or `text` element. */
+  /** A `textBox`, `text`, or `paragraph` element. */
   readonly target: string;
   readonly style: PdfTextBoxStyle;
 }

@@ -56,17 +56,31 @@ interface Row {
   readonly element: PdfElement;
   readonly index: number;
   readonly font: string;
+  readonly fontHandle: number;
   readonly x: number;
   readonly baseline: number;
   readonly width: number;
+  /** Observed first word plus its following space, when another word follows. */
+  readonly firstWordAdvance: number | undefined;
+}
+
+interface UprightText {
+  readonly element: PdfElement;
+  readonly baseline: number;
 }
 
 const MIN_CONTINUATION_FILL = 0.9;
 const MAX_CONNECTED_EDGE_GAP = 0.65;
 const MAX_LEFT_ALIGNMENT_DELTA = 1;
+const ADJACENT_BASELINE_EM = 0.25;
+const ADJACENT_TEXT_GAP_EM = 3;
+const LIST_ITEM_START = /^(?:[•◦▪‣·*–—-]|\(?\d{1,3}[.)]|\(?[a-z][.)])\s/iu;
+const NUMERIC_VALUE = /^[\d\s.,:/%()+−–—-]+$/u;
 // Public PDF geometry is canonicalized to thousandths of a point. This only
 // absorbs native floating-point rounding, not visible tracking or kerning.
 const GLYPH_POSITION_PRECISION = 0.001;
+const MAX_PAIR_ADJUSTMENT_EM = 0.1;
+const MATRIX_RELATIVE_PRECISION = 0.000001;
 
 interface NativeGlyph {
   readonly text: string;
@@ -118,6 +132,7 @@ export function discoverParagraphs(
   // Arbitrarily rotated pages/objects require transformed layout and are left
   // independently editable until that native layout contract exists.
   const rows: Row[] = [];
+  const uprightTexts = new Map<string, UprightText>();
   const fontKeys = new Map<number, string>();
   const programs: Uint8Array[] = [];
   const fontKey = (font: number): string => {
@@ -190,15 +205,7 @@ export function discoverParagraphs(
     )
       return;
     const element = elementsById.get(record.id);
-    if (
-      !element?.textStyle ||
-      !element.text?.trim() ||
-      element.text !== element.text.trimStart() ||
-      element.rotation ||
-      element.text.includes("\u0002") ||
-      /[\r\n\t]/u.test(element.text)
-    )
-      return;
+    if (!element?.text?.trim()) return;
     const object = lib.FPDFPage_GetObject(page, index);
     const matrix = pdfium.readNumbers(6, "float", ([out]) =>
       lib.FPDFPageObj_GetMatrix(object, out!),
@@ -206,9 +213,23 @@ export function discoverParagraphs(
     if (
       !matrix ||
       matrix[0]! <= 0 ||
+      matrix[3]! <= 0 ||
       Math.abs(matrix[1]!) > 0.001 ||
-      Math.abs(matrix[2]!) > 0.001 ||
-      Math.abs(matrix[0]! - matrix[3]!) > 0.001
+      Math.abs(matrix[2]!) > 0.001
+    )
+      return;
+    const origin = userToPage(geometry, matrix[4]!, matrix[5]!);
+    uprightTexts.set(element.id, { element, baseline: origin.y });
+    if (
+      !element.textStyle ||
+      element.text !== element.text.trimStart() ||
+      element.rotation ||
+      element.text.includes("\u0002") ||
+      /[\r\n\t]/u.test(element.text) ||
+      LIST_ITEM_START.test(element.text) ||
+      NUMERIC_VALUE.test(element.text) ||
+      Math.abs(matrix[0]! - matrix[3]!) >
+        Math.max(matrix[0]!, matrix[3]!) * MATRIX_RELATIVE_PRECISION
     )
       return;
     const rgba = pdfium.readNumbers(4, "i32", ([r, g, b, a]) =>
@@ -217,7 +238,6 @@ export function discoverParagraphs(
     if (rgba?.[3] !== 255 || lib.FPDFTextObj_GetTextRenderMode(object) !== 0)
       return;
     const font = lib.FPDFTextObj_GetFont(object);
-    const origin = userToPage(geometry, matrix[4]!, matrix[5]!);
     const rawSize = pdfium.readNumbers(1, "float", ([out]) =>
       lib.FPDFTextObj_GetFontSize(object, out!),
     )?.[0];
@@ -231,12 +251,12 @@ export function discoverParagraphs(
     };
     if (effective.textStyle.fontSize < 1 || effective.textStyle.fontSize > 500)
       return;
-    // Reused fonts must draw the same advances as our native reflow. CFF and
-    // other non-writable fonts already require an explicit font-substitution
-    // warning on replacement; their metrics are not claimed preserved here.
+    // Text/size reflow recomputes default native advances; bounded source pair
+    // adjustments are not retained. Color-only changes retain source positions.
+    // Non-writable fonts require the separate explicit substitution warning.
     if (
       fontCanDraw(pdfium, font, element.text) &&
-      !hasDefaultAdvances(
+      !hasSupportedAdvances(
         glyphsByObject.get(object) ?? [],
         element.text,
         font,
@@ -253,16 +273,21 @@ export function discoverParagraphs(
       element: effective,
       index,
       font: fontKey(font),
+      fontHandle: font,
       x: origin.x,
       baseline: origin.y,
       width,
+      firstWordAdvance: observedFirstWordAdvance(
+        glyphsByObject.get(object) ?? [],
+        element.text,
+      ),
     });
   });
   rows.sort((a, b) => a.baseline - b.baseline || a.x - b.x);
-  // Every candidate containing one of these rows is already rejected by the
-  // shared-row check below: its overlapping neighbor cannot belong to the same
-  // styled/aligned group. Keep rows in `aligned` so leading inference is exact.
-  const blockedRows = overlappingIncompatibleRows(rows, elements);
+  // Neighboring cells/list labels share a baseline and a nearby horizontal
+  // gap. Distant columns and rotated sidebars do not invalidate body text.
+  // Keep blocked rows in `aligned` so leading inference is unchanged.
+  const blockedRows = rowsWithAdjacentText(rows, [...uprightTexts.values()]);
   const used = new Set<string>();
   for (const first of rows) {
     if (used.has(first.element.id) || blockedRows.has(first.element.id))
@@ -309,20 +334,27 @@ export function discoverParagraphs(
     });
     const ids = new Set(group.map((row) => row.element.id));
     const firstIndex = Math.min(...group.map((row) => row.index));
-    // A short non-final line may end an independent paragraph. A same-baseline
-    // neighbor may be another table cell or a separate list label. Neither has
-    // enough evidence of ordinary paragraph wrapping to merge safely.
+    // A short non-final line needs native evidence that the next word could
+    // not fit; otherwise it may end an independent paragraph.
     if (
       group
         .slice(0, -1)
-        .some((row) => row.width < rect.width * MIN_CONTINUATION_FILL) ||
+        .some(
+          (row, index) =>
+            !continuesAtWrap(
+              row,
+              group[index + 1]!,
+              rect.width,
+              pdfium,
+              measurer,
+            ),
+        ) ||
       elements.some((element) => {
         if (ids.has(element.id) || !element.text?.trim()) return false;
         const b = element.bounds;
-        const sharesRow = group.some((row) => {
-          const a = row.element.bounds;
-          return a.y < b.y + b.height && a.y + a.height > b.y;
-        });
+        const upright = uprightTexts.get(element.id);
+        const sharesRow =
+          upright && group.some((row) => isAdjacentText(row, upright));
         if (sharesRow) return true;
         // Do not expose the matching tail/head of an unsupported connected
         // section (indentation, mixed style, excluded source characters).
@@ -410,46 +442,94 @@ function sameTypography(a: Row, b: Row): boolean {
   );
 }
 
-function overlappingIncompatibleRows(
+function rowsWithAdjacentText(
   rows: readonly Row[],
-  elements: readonly PdfElement[],
+  texts: UprightText[],
 ): ReadonlySet<string> {
-  const rowsById = new Map(rows.map((row) => [row.element.id, row]));
-  const texts = elements
-    .filter((element) => element.text?.trim())
-    .sort((a, b) => a.bounds.y - b.bounds.y);
+  texts.sort((a, b) => a.baseline - b.baseline);
   const blocked = new Set<string>();
-  let active: PdfElement[] = [];
-  for (const element of texts) {
-    active = active.filter(
-      (other) => other.bounds.y + other.bounds.height > element.bounds.y,
-    );
-    const row = rowsById.get(element.id);
-    for (const other of active) {
-      if (
-        element.id === other.id ||
-        element.bounds.y + element.bounds.height <= other.bounds.y
-      )
-        continue;
-      const otherRow = rowsById.get(other.id);
-      // Alignment is relative to the group's first row, not pairwise. Two
-      // continuation rows may lie on opposite sides of that ±1pt tolerance.
-      if (
-        row &&
-        otherRow &&
-        Math.abs(row.x - otherRow.x) <= 2 * MAX_LEFT_ALIGNMENT_DELTA &&
-        sameTypography(row, otherRow)
-      )
-        continue;
-      if (row) blocked.add(row.element.id);
-      if (otherRow) blocked.add(otherRow.element.id);
+  for (const row of rows) {
+    const tolerance = row.element.textStyle!.fontSize * ADJACENT_BASELINE_EM;
+    let low = 0;
+    let high = texts.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (texts[mid]!.baseline < row.baseline - tolerance) low = mid + 1;
+      else high = mid;
     }
-    active.push(element);
+    for (let at = low; at < texts.length; at += 1) {
+      const other = texts[at]!;
+      if (other.baseline > row.baseline + tolerance) break;
+      if (isAdjacentText(row, other)) {
+        blocked.add(row.element.id);
+        break;
+      }
+    }
   }
   return blocked;
 }
 
-function hasDefaultAdvances(
+function isAdjacentText(row: Row, other: UprightText): boolean {
+  if (row.element.id === other.element.id) return false;
+  const size = row.element.textStyle!.fontSize;
+  if (Math.abs(row.baseline - other.baseline) > size * ADJACENT_BASELINE_EM)
+    return false;
+  const a = row.element.bounds;
+  const b = other.element.bounds;
+  const gap = Math.max(b.x - (a.x + a.width), a.x - (b.x + b.width));
+  return gap <= size * ADJACENT_TEXT_GAP_EM;
+}
+
+function continuesAtWrap(
+  row: Row,
+  next: Row,
+  width: number,
+  pdfium: Pdfium,
+  measurer: TextMeasurer,
+): boolean {
+  if (row.width >= width * MIN_CONTINUATION_FILL) return true;
+  // Source glyph origins also work for fonts whose encoding cannot be reused
+  // (for example a subset missing U+0020). Do not measure its notdef space.
+  if (next.firstWordAdvance !== undefined)
+    return row.width + next.firstWordAdvance > width + GLYPH_POSITION_PRECISION;
+  const nextWord = next.element.text!.trim().split(/\s/u)[0];
+  if (!nextWord || !fontCanDraw(pdfium, row.fontHandle, ` ${nextWord}`))
+    return false;
+  const needed = measurer.advance(
+    row.fontHandle,
+    row.element.textStyle!.fontSize,
+    ` ${nextWord}`,
+  );
+  return (
+    Number.isFinite(needed) &&
+    row.width + needed > width + GLYPH_POSITION_PRECISION
+  );
+}
+
+function observedFirstWordAdvance(
+  glyphs: readonly NativeGlyph[],
+  text: string,
+): number | undefined {
+  const prefix = /^\S+\s+/u.exec(text)?.[0];
+  if (!prefix) return undefined;
+  const count = [...prefix].length;
+  const first = glyphs[0];
+  const nextWord = glyphs[count];
+  if (
+    !first ||
+    !nextWord ||
+    glyphs
+      .slice(0, count)
+      .map((glyph) => glyph.text)
+      .join("") !== prefix
+  )
+    return undefined;
+  const advance = nextWord.x - first.x;
+  return Number.isFinite(advance) && advance > 0 ? advance : undefined;
+}
+
+/** A bounded eligibility rule, not a claim that source TJ positioning survives reflow. */
+function hasSupportedAdvances(
   glyphs: readonly NativeGlyph[],
   text: string,
   font: number,
@@ -459,21 +539,42 @@ function hasDefaultAdvances(
   const characters = [...text.trimEnd()];
   const first = glyphs[0];
   if (!first || glyphs.length < characters.length) return false;
-  let advance = 0;
+  const pairLimit = fontSize * MAX_PAIR_ADJUSTMENT_EM;
+  let previousAdvance = 0;
+  let cumulativeAdjustment = 0;
+  let adjustedPairs = 0;
+  let defaultPairs = 0;
   for (const [index, character] of characters.entries()) {
     const glyph = glyphs[index];
     if (
       !glyph ||
       glyph.text !== character ||
-      Math.abs(glyph.x - first.x - advance) > GLYPH_POSITION_PRECISION ||
+      !Number.isFinite(glyph.x) ||
+      !Number.isFinite(glyph.y) ||
       Math.abs(glyph.y - first.y) > GLYPH_POSITION_PRECISION
     )
       return false;
-    const width = measurer.advance(font, fontSize, character);
-    if (!Number.isFinite(width) || width <= 0) return false;
-    advance += width;
+    const previous = glyphs[index - 1];
+    if (previous) {
+      const adjustment = glyph.x - previous.x - previousAdvance;
+      const changed = Math.abs(adjustment) > GLYPH_POSITION_PRECISION;
+      // Real and inferred word spaces cannot be treated as pair adjustments.
+      if (/\s/u.test(previous.text + character)) {
+        if (changed) return false;
+      } else if (changed) {
+        if (Math.abs(adjustment) > pairLimit) return false;
+        adjustedPairs += 1;
+      } else {
+        defaultPairs += 1;
+      }
+      cumulativeAdjustment += adjustment;
+      if (Math.abs(cumulativeAdjustment) > pairLimit) return false;
+    }
+    previousAdvance = measurer.advance(font, fontSize, character);
+    if (!Number.isFinite(previousAdvance) || previousAdvance <= 0) return false;
   }
-  return true;
+  // Uniform tracking cannot pass merely because its per-glyph change is tiny.
+  return adjustedPairs === 0 || defaultPairs > adjustedPairs;
 }
 
 export function intersects(a: PageRect, b: PageRect): boolean {

@@ -481,23 +481,42 @@ no longer match its inputs — a box or table that another tool moved, resized
 or retyped is never rebuilt from stale inputs.
 
 Imported paragraph discovery requires matching typography, a common left edge,
-regular leading and physical word-wrap evidence: every non-final row reaches
-at least 90% of the paragraph width. Short rows end a paragraph. Same-baseline
-neighboring cells or bullets, an indented/excluded continuation, mixed styles,
-line-end hyphens (including PDFium's U+0002 extraction), ambiguous overlaps and
-Form objects are not promoted. Unsupported content keeps its original object
-identity; the engine does not invent a full-paragraph target from its remaining
-rows.
+regular leading and physical word-wrap evidence. A non-final row must reach
+at least 90% of the paragraph width, or the next row's first word plus a space
+must not fit in its remaining width. The latter uses observed native glyph
+origins where available; a font measurement is used only when the source font
+can encode the measured characters.
 
-When the source font is writable, discovery additionally requires native glyph
-origins to agree with the same unkerned advances used for reflow, within 0.001
-point of geometry precision. Nondefault tracking, word spacing or justification
-that reflow cannot preserve remains per-object. An unwritable source font,
-including embedded CFF, can still provide a full paragraph read and native
-color-only changes; replacement uses an explicit `font-substitution` warning.
-That substitution also changes wrapping and spacing. It is not a promise of
-native CFF typography fidelity. Paragraph font sizes are canonicalized to the
-engine's three-decimal geometry precision before persistence.
+Upright neighboring text blocks discovery when its baseline is within one
+quarter of the candidate's font size and its horizontal gap is at most three
+times that size. This refuses adjacent table cells and separate list labels
+without letting a large numeral widen the body-text exclusion radius. Distant
+columns and rotated side labels do not block discovery merely by sharing a
+vertical band; actual overlapping bounds still do. In-object list markers,
+pure numeric/date values, indented or excluded continuations, mixed styles,
+line-end hyphens (including PDFium's U+0002 extraction), and Form objects are
+not promoted. Unsupported content keeps its original identity; the engine
+does not expose just the remaining tail of an excluded connected paragraph.
+
+These are conservative geometric rules, not semantic paragraph recognition.
+Equal-width multiword values or consecutive full-width prose can remain
+indistinguishable from physical wraps when the PDF supplies no structure.
+
+For writable source fonts, native glyph origins are checked against the same
+font's default advances. Baseline and whitespace-adjacent differences must
+stay within 0.001 point of geometry precision. Sparse within-word pair
+adjustments are accepted only when default pairs outnumber adjusted pairs
+and both each adjustment and cumulative drift stay within 0.1 em. Systematic
+tracking, custom word spacing and larger unexplained positioning remain
+per-object. Text and font-size reflow recompute default advances; accepted
+source pair positioning is not preserved. Color-only changes preserve it.
+
+An unwritable source font, including embedded CFF or a subset without a mapped
+space glyph, can still provide a full paragraph read and native color-only
+changes; replacement uses an explicit `font-substitution` warning. That
+substitution also changes wrapping and spacing. It is not a promise of native
+font fidelity. Paragraph font sizes are canonicalized to the engine's
+three-decimal geometry precision before persistence.
 
 A `findText()` range naming a canonical paragraph can be passed directly to
 `replaceText()`. When reflow first incorporates original rows, the receipt's
@@ -505,6 +524,10 @@ optional `textAnchorMigrations` records each row's original UTF-16 length and
 start in the paragraph, together with its operation index in the batch.
 `mapRange()` follows those mappings before applying text offsets, including
 Undo, Redo and Reset; failed batches and dry runs do not alter history.
+Replacing or first promoting an already readable canonical paragraph reports
+`createdIds: []`: its logical identity already exists and remains unchanged.
+Removed source-row identities are reported in `removedIds` and, when their
+text is incorporated into the paragraph, `textAnchorMigrations`.
 
 `elementsAt()` lists the elements under a point top-most first. Bounds of
 stroked shapes include the stroke, as PDFium reports them.
@@ -652,9 +675,11 @@ newlines remain hard breaks. No dehyphenation is inferred.
 
 Recognition is deliberately bounded: whole left-aligned horizontal rows,
 uniform upright text scaling, the same font program/style, and regular
-leading. Column boundaries, larger paragraph gaps and overlapping text are
-not combined. Rotated, skewed, Form XObject, mixed-style and ambiguous text
-stays independently editable; absence of a paragraph item is normal.
+leading with physical wrap evidence as described above. Adjacent cells, list
+items, numeric/date values, larger paragraph gaps and overlapping text are not
+combined. Distant columns can each form their own paragraph. Rotated, skewed,
+Form XObject, mixed-style and ambiguous text stays independently editable;
+absence of a paragraph item is normal.
 
 Eligible source elements expose the optional `textEditingTarget` hint. Their
 original ids and kinds remain unchanged. Hosts can follow the hint using

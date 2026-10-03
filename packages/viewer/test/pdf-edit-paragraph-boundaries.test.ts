@@ -15,7 +15,7 @@ import {
 import { pdfSession } from "./fixtures/pdf-session.js";
 
 const lines = [
-  "The first paragraph line begins",
+  "The first paragraph line",
   "continues over a second line",
   "and finishes on a third line.",
 ] as const;
@@ -27,10 +27,8 @@ const paragraphObjects: readonly FixtureText[] = lines.map((text, index) => ({
   fontSize: 11,
 }));
 const rightColumn: readonly FixtureText[] = [
-  // Same-baseline columns are now deliberately refused as table-ambiguous.
-  // Staggered small neighboring text still exercises exclusion and preservation.
-  { text: "Separate right column", x: 350, y: 690, fontSize: 8 },
-  { text: "Its own second line", x: 350, y: 670, fontSize: 8 },
+  { text: "Separate right column", x: 350, y: 700, fontSize: 11 },
+  { text: "Its own second line", x: 350, y: 680, fontSize: 11 },
 ];
 const nextParagraph: FixtureText = {
   text: "The next paragraph stays separate.",
@@ -65,7 +63,7 @@ function contentOf(element: PdfElement) {
 
 describe("native PDF paragraph boundaries", () => {
   for (const order of ["forward", "interleaved reverse"] as const) {
-    it(`uses visual reading order without absorbing staggered neighboring text (${order})`, async () => {
+    it(`uses visual reading order without absorbing another column (${order})`, async () => {
       const objects =
         order === "forward"
           ? [...paragraphObjects, ...rightColumn]

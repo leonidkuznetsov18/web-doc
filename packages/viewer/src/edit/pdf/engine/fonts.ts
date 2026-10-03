@@ -590,7 +590,10 @@ export function fontCanDraw(
   if (!coverage) return false;
   return [...text].every((character) => {
     const code = character.codePointAt(0)!;
-    return code === 0x0a || code === 0x20 || coverage.drawable(code);
+    // A space needs an encoding even though a valid space has no outline.
+    // Imported subsets can omit its cmap entry and use positioned word gaps.
+    if (code === 0x20) return (coverage.glyph(code) ?? 0) !== 0;
+    return code === 0x0a || coverage.drawable(code);
   });
 }
 
