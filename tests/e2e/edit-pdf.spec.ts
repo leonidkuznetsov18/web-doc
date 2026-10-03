@@ -54,6 +54,7 @@ test("repaints an unchanged mounted page when an edit retires its pending zoom r
     const requestFrame = window.requestAnimationFrame.bind(window);
     const cancelFrame = window.cancelAnimationFrame.bind(window);
     const frames = new Map<number, FrameRequestCallback>();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
     let frameId = 0;
     const slot = (index: number) =>
       container.querySelector<HTMLElement>(`[data-page-index="${index}"]`);
@@ -90,13 +91,15 @@ test("repaints an unchanged mounted page when an edit retires its pending zoom r
     const target = (await session.getElements({ pageIndex: 0 })).items[0];
     if (!target) throw new Error("Missing first-page text");
     return {
+      dpr,
       snapshot,
       async editDuringZoom() {
         const held = Promise.withResolvers<void>();
         window.requestAnimationFrame = (callback) => {
           // Hold the native PDF.js continuation only once page two has begun
           // painting its new-size canvas. Earlier viewport frames run normally.
-          if (secondPaint?.width !== 918) return requestFrame(callback);
+          if (secondPaint?.width !== Math.ceil(918 * dpr))
+            return requestFrame(callback);
           const id = --frameId;
           frames.set(id, callback);
           held.resolve();
@@ -121,29 +124,30 @@ test("repaints an unchanged mounted page when an edit retires its pending zoom r
     };
   }, Array.from(original));
   try {
+    const dpr = await fixture.evaluate((f) => f.dpr);
     await expect
       .poll(() => fixture.evaluate((f) => f.snapshot(1)))
       .toMatchObject({
-        width: 612,
-        height: 792,
+        width: Math.ceil(612 * dpr),
+        height: Math.ceil(792 * dpr),
         error: "",
         text: "Unchanged second page",
       });
     await expect
       .poll(() => fixture.evaluate((f) => f.snapshot(1).ink))
-      .toBeGreaterThan(50);
+      .toBeGreaterThan(50 * dpr * dpr);
     await fixture.evaluate((f) => f.editDuringZoom());
     await expect
       .poll(() => fixture.evaluate((f) => f.snapshot(1)))
       .toMatchObject({
-        width: 918,
-        height: 1188,
+        width: Math.ceil(918 * dpr),
+        height: Math.ceil(1188 * dpr),
         error: "",
         text: "Unchanged second page",
       });
     await expect
       .poll(() => fixture.evaluate((f) => f.snapshot(1).ink))
-      .toBeGreaterThan(100);
+      .toBeGreaterThan(100 * dpr * dpr);
     await expect
       .poll(() => fixture.evaluate((f) => f.snapshot(0).text))
       .toBe("Updated first page");
