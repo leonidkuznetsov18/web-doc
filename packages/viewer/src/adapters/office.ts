@@ -373,7 +373,6 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       useGoogleFonts: false,
       maxZipEntryBytes: context.limits.maxZipEntryBytes,
       mode: "main",
-      ...(reopening ? { progressiveLayout: true } : {}),
     };
     try {
       const kind = kindFor(format);
@@ -407,7 +406,10 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
       }
       const buffer = exactArrayBuffer(data);
       if (kind === "presentation") {
-        const backend = await this.#loadPptx(buffer, engineOptions);
+        const backend = await this.#loadPptx(buffer, {
+          ...engineOptions,
+          ...(reopening ? { progressiveLayout: true } : {}),
+        });
         throwIfAborted(context.signal, backend);
         context.reportProgress({
           phase: "parsing",
