@@ -421,6 +421,19 @@ Every method takes the operation's fields and the usual `ApplyOptions`
 | `movePage`             | `from`, `to` (the page's index after the move)                                                                             |                                                                                                                                                                                                                                                                                                                                                |
 | `rotatePage`           | `pageIndex`, `rotation: 0 \| 90 \| 180 \| 270` or `by: 90 \| 180 \| 270`                                                   | `rotation` sets the clockwise angle; `by` turns from the page's current angle, the one the file was saved with included. Exactly one of the two. Page space turns with the page.                                                                                                                                                               |
 
+PDF rectangles use the displayed page's MediaBox ∩ CropBox, including its
+rotation. Inserts must fit inside that page (with a fixed 0.01 pt numeric
+tolerance). Moving or resizing an imported object that already extends past
+an edge may preserve or reduce its existing overflow, but cannot increase
+that edge's overflow, introduce overflow at another edge, or leave the
+object entirely outside the visible page. Each operation in a batch checks
+the current bounds after earlier operations. No coordinates or dimensions
+are implicitly clamped. For example, an object extending above and below
+the page can move horizontally; a vertical move that worsens either edge
+is rejected. The tolerance stays anchored to the page, so repeated small
+moves cannot accumulate additional overflow. Unchanged bounds of a partly
+visible object are accepted under the existing history semantics.
+
 ```ts
 interface PdfTextBoxStyle {
   fontFamily?: string; // "Helvetica" (default), "Times", "Courier" or a registered family
