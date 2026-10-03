@@ -652,7 +652,12 @@ The flow, end to end:
 
 A face from `getTextFont` holds only what the file embeds. A subset font
 draws only the characters the file uses, so list a fallback after it in the
-input's `font-family`; the browser draws other characters in that one. The
+input's `font-family`; the browser draws other characters in that one.
+Subsets often leave out the space glyph, which the file places by
+positioning instead (15 of the 25 fonts of one 35-page report do), so typed
+spaces take the fallback's width. Where the element's text has spaces,
+`getTextLayout` gives the advance each is drawn with; the difference from the
+input's own space width can go into its `word-spacing`. The
 face is declared regular, since its glyphs carry their own weight and slant:
 load it with the default `FontFace` descriptors and keep the input at normal
 weight and style, or the browser draws a synthetic bold or italic over it.

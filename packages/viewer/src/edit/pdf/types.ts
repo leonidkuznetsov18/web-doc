@@ -316,8 +316,9 @@ export interface TextFont {
    * the OS/2, name and post tables a subset left out added, or a CFF program
    * wrapped as OpenType with a Unicode cmap built from its glyph names (Adobe
    * Glyph List names, `uniXXXX` and `uXXXX`). The program's own glyphs and
-   * widths are kept. Subset fonts hold only the glyphs the file uses; a
-   * browser draws other characters in a fallback face. The file declares a
+   * widths are kept. Subset fonts hold only the glyphs the file uses, often
+   * not even a space, which the file places by positioning instead; a browser
+   * draws other characters in a fallback face. The file declares a
    * regular face: its glyphs already carry the weight and slant, so load it
    * with the default descriptors and do not ask the browser for bold or
    * italic on top.
