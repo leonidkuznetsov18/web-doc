@@ -275,8 +275,9 @@ the document the engine sees, so it can differ slightly from the viewer's
 Page space uses the units of `DocumentInfo.pageSizes` at zoom 1 — points for
 PDF, CSS pixels for Office formats — with the origin at the top-left corner of
 the page as displayed, `y` growing downwards and page rotation already applied.
-Font sizes are always points. Colours are `EditColor` values: a string
-(`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
+Font sizes are always points, as the text shows them: a PDF text object written
+as `1 Tf` with its size in the text matrix reads, and is set, as that size.
+Colours are `EditColor` values: a string (`#RRGGBB`, `#RRGGBBAA`, or `"auto"` where a format has automatic colours) or,
 for Office formats, a theme slot `{ theme, mods? }` that keeps the theme link.
 PDF accepts the string form only.
 

@@ -226,6 +226,69 @@ describe("edits to existing text objects", () => {
     }
   });
 
+  // ACTION-908: a title written as `1 Tf` with its size in the text matrix
+  // read as size 1, and setting 24 drew it at 24 × 24.
+  it("reads and sets the size a text matrix carries, keeping its turn", async () => {
+    const scaled = await buildPdf([
+      {
+        texts: [
+          {
+            text: "Upright title",
+            fontSize: 1,
+            matrix: [24, 0, 0, 24],
+            y: 700,
+          },
+          {
+            text: "Turned title",
+            fontSize: 1,
+            matrix: [0, 24, -24, 0],
+            x: 300,
+            y: 300,
+          },
+        ],
+      },
+    ]);
+    const engine = await engineFor(scaled);
+    try {
+      for (const id of ["p0:o0", "p0:o1"]) {
+        const before = await element(engine, id);
+        assert.equal(before.textStyle?.fontSize, 24, `${id} reads 24 pt`);
+        await run(
+          engine,
+          op({ op: "setTextStyle", target: id, style: { fontSize: 12 } }),
+        );
+        const after = await element(engine, id);
+        assert.equal(after.textStyle?.fontSize, 12, `${id} reads 12 pt`);
+        assert.equal(after.text, before.text);
+        // Half the size along the text, and still turned the same way.
+        const along = (box: PdfElement["bounds"]) =>
+          Math.max(box.width, box.height);
+        const across = (box: PdfElement["bounds"]) =>
+          Math.min(box.width, box.height);
+        assert.ok(
+          Math.abs(along(after.bounds) / along(before.bounds) - 0.5) < 0.05,
+          `${id} along`,
+        );
+        assert.ok(
+          Math.abs(across(after.bounds) / across(before.bounds) - 0.5) < 0.1,
+          `${id} across`,
+        );
+        assert.equal(
+          after.bounds.width > after.bounds.height,
+          before.bounds.width > before.bounds.height,
+        );
+      }
+      // Replacing the text keeps the size it shows.
+      await run(
+        engine,
+        op({ op: "replaceText", target: "p0:o0", text: "New title" }),
+      );
+      assert.equal((await element(engine, "p0:o0")).textStyle?.fontSize, 12);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("replays existing-text edits deterministically", async () => {
     const batch = [
       op({ op: "replaceText", target: "p0:o0", text: "Replayed" }),

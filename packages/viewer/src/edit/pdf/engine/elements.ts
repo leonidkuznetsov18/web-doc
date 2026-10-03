@@ -337,6 +337,17 @@ function textOf(pdfium: Pdfium, object: number, textPage: number): string {
   );
 }
 
+/**
+ * How much a text object's matrix scales its glyphs: the length of its
+ * vertical axis. Producers often write `1 Tf` and carry the size in the
+ * matrix, so the point size the text shows is its font size times this; a
+ * turn or a horizontal squeeze leaves it alone.
+ */
+export function textScale(matrix: readonly number[] | undefined): number {
+  const scale = matrix ? Math.hypot(matrix[2]!, matrix[3]!) : 1;
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
 export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
   const { lib } = pdfium;
   const font = lib.FPDFTextObj_GetFont(object);
@@ -357,9 +368,12 @@ export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
     pdfium.readNumbers(1, "float", ([pointer]) =>
       lib.FPDFTextObj_GetFontSize(object, pointer!),
     )?.[0] ?? 0;
+  const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
+    lib.FPDFPageObj_GetMatrix(object, pointer!),
+  );
   return {
     fontFamily: family,
-    fontSize: round(size),
+    fontSize: round(size * textScale(matrix)),
     bold:
       weight >= 600 ||
       (flags & FLAG_FORCE_BOLD) !== 0 ||
