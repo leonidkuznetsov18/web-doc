@@ -3,6 +3,7 @@ import type {
   EditReceipt,
   TextPosition,
   TextRange,
+  TextAnchorMigration,
 } from "../types.js";
 
 /*
@@ -25,6 +26,7 @@ export interface MutationRecord {
    * offsets inside surviving elements are left as they were.
    */
   readonly operations: readonly EditOperation[];
+  readonly textAnchorMigrations?: readonly TextAnchorMigration[];
   readonly receipt: EditReceipt;
 }
 
@@ -38,6 +40,8 @@ interface ReplaceLike {
 interface Carried {
   position: TextPosition;
   gone: boolean;
+  /** Only row-origin anchors return to rows when a promotion is undone. */
+  readonly migrations: TextAnchorMigration[];
 }
 
 /** The range after the records, or `undefined` when its element is gone. */
@@ -60,15 +64,24 @@ function carry(
   position: TextPosition,
   records: readonly MutationRecord[],
 ): Carried {
-  const carried: Carried = { position, gone: false };
+  const carried: Carried = { position, gone: false, migrations: [] };
   for (const record of records) {
     const forward = record.kind === "apply" || record.kind === "redo";
-    const operations = forward
-      ? record.operations
-      : [...record.operations].reverse();
-    for (const operation of operations) {
-      if (forward) applyForward(carried, operation);
-      else applyBackward(carried, operation);
+    const indexed = record.operations.map((operation, index) => ({
+      operation,
+      index,
+    }));
+    for (const { operation, index } of forward ? indexed : indexed.reverse()) {
+      const migrations = (record.textAnchorMigrations ?? []).filter(
+        (migration) => migration.operationIndex === index,
+      );
+      if (forward) {
+        migrateForward(carried, migrations);
+        applyForward(carried, operation);
+      } else {
+        applyBackward(carried, operation);
+        migrateBackward(carried, migrations);
+      }
     }
     const { receipt } = record;
     const id = carried.position.elementId;
@@ -78,6 +91,51 @@ function carry(
     if (renamed) carried.position = { ...carried.position, elementId: renamed };
   }
   return carried;
+}
+
+function migrateForward(
+  carried: Carried,
+  migrations: readonly TextAnchorMigration[],
+): void {
+  const migration = migrations.find(
+    (entry) => entry.sourceElementId === carried.position.elementId,
+  );
+  if (!migration || carried.gone) return;
+  carried.migrations.push(migration);
+  carried.position = {
+    elementId: migration.targetElementId,
+    offset:
+      migration.targetOffset +
+      Math.min(carried.position.offset, migration.sourceLength),
+  };
+}
+
+function migrateBackward(
+  carried: Carried,
+  migrations: readonly TextAnchorMigration[],
+): void {
+  const previous = carried.migrations.at(-1);
+  if (
+    !previous ||
+    carried.position.elementId !== previous.targetElementId ||
+    !migrations.some(
+      (entry) =>
+        entry.sourceElementId === previous.sourceElementId &&
+        entry.targetElementId === previous.targetElementId,
+    )
+  )
+    return;
+  carried.migrations.pop();
+  carried.position = {
+    elementId: previous.sourceElementId,
+    offset: Math.max(
+      0,
+      Math.min(
+        previous.sourceLength,
+        carried.position.offset - previous.targetOffset,
+      ),
+    ),
+  };
 }
 
 function applyForward(carried: Carried, operation: EditOperation): void {

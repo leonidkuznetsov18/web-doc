@@ -4,7 +4,10 @@ import type {
   ReplaceTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
-import { paragraphSetTextStyle } from "./paragraph-edit.js";
+import {
+  paragraphSetTextStyle,
+  replaceParagraphText,
+} from "./paragraph-edit.js";
 import { objectBounds, OBJECT_TEXT } from "./elements.js";
 import { fontCanDraw, validateScript } from "./fonts.js";
 import type {
@@ -33,6 +36,12 @@ import {
 
 export const replaceText: OperationHandler<ReplaceTextOperation> = {
   validate(operation, context, issue) {
+    if (context.paragraph(operation.target)?.paragraph.id === operation.target)
+      return replaceParagraphText.validate(
+        { ...operation, op: "replaceParagraphText" },
+        context,
+        issue,
+      );
     const box = textBoxTarget(operation.target, context);
     if (box) {
       const spliced = splice(box.spec.text, operation, issue);
@@ -63,6 +72,11 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
     if (problem) issue(problem.path, problem.code, problem.message);
   },
   apply(operation, context) {
+    if (context.paragraph(operation.target)?.paragraph.id === operation.target)
+      return replaceParagraphText.apply(
+        { ...operation, op: "replaceParagraphText" },
+        context,
+      );
     const box = textBoxTarget(operation.target, context);
     if (box)
       return textBoxReplaceText.apply(

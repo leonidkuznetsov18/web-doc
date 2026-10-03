@@ -241,6 +241,18 @@ export interface AssetOptions {
   readonly signal?: AbortSignal;
 }
 
+/** A source text object incorporated into another logical text element. */
+export interface TextAnchorMigration {
+  /** Zero-based operation in the applied batch, before its text replacement. */
+  readonly operationIndex: number;
+  readonly sourceElementId: string;
+  readonly targetElementId: string;
+  /** UTF-16 length retained from the source, excluding generated trailing whitespace. */
+  readonly sourceLength: number;
+  /** UTF-16 start of the source text in the target before the operation. */
+  readonly targetOffset: number;
+}
+
 export interface EditReceipt {
   readonly sessionId: string;
   /** `state.revision` after the call; unchanged for a dry run or a no-op. */
@@ -253,6 +265,8 @@ export interface EditReceipt {
   readonly removedIds: readonly string[];
   /** Old id → new id, when a format has to rename an element; absent for formats that never do. */
   readonly remappedIds?: Readonly<Record<string, string>>;
+  /** Text anchors migrated by an apply (or preview); absent when none migrated. */
+  readonly textAnchorMigrations?: readonly TextAnchorMigration[];
   /** Page indexes in the resulting document whose content may have changed; a superset. */
   readonly changedPages: readonly number[];
   readonly pageCount: number;

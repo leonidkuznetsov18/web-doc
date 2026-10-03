@@ -16,6 +16,7 @@ import type {
   TextPosition,
   TextRange,
   TextTarget,
+  TextAnchorMigration,
 } from "../../types.js";
 import type {
   PageLayout,
@@ -335,6 +336,7 @@ export class PdfEditDocument {
     const createdIds: string[] = [];
     const createdByOperation: string[][] = [];
     const removedIds: string[] = [];
+    const textAnchorMigrations: TextAnchorMigration[] = [];
     const changedPages = new Set<number>();
     const warnings: EngineChange["warnings"][number][] = [];
     // The first change of a signed, certified, tagged or PDF/A file is the
@@ -362,6 +364,8 @@ export class PdfEditDocument {
       createdIds.push(...result.createdIds);
       createdByOperation[operationIndex] = [...result.createdIds];
       removedIds.push(...(result.removedIds ?? []));
+      for (const migration of result.textAnchorMigrations ?? [])
+        textAnchorMigrations.push({ ...migration, operationIndex });
       for (const pageIndex of result.changedPages) changedPages.add(pageIndex);
       warnings.push(...result.warnings);
     });
@@ -369,6 +373,7 @@ export class PdfEditDocument {
     return {
       createdIds,
       removedIds,
+      ...(textAnchorMigrations.length ? { textAnchorMigrations } : {}),
       changedPages: [...changedPages].sort((a, b) => a - b),
       pageCount: this.pageCount,
       warnings,
@@ -572,7 +577,7 @@ export class PdfEditDocument {
     return targets;
   }
 
-  /** Lines, glyph boxes and styles of a text, text box or table element. */
+  /** Resolves the canonical imported paragraph, when its rows can be grouped safely. */
   textParagraph(elementId: string): PdfTextParagraph | undefined {
     return this.#paragraphOf(elementId)?.paragraph;
   }
@@ -584,6 +589,7 @@ export class PdfEditDocument {
     return this.#pages[pageIndex]?.paragraphs?.get(id);
   }
 
+  /** Lines, glyph boxes and styles of a text, text box, paragraph or table element. */
   textLayout(elementId: string): TextLayout | undefined {
     const pageIndex = this.#pageIndexOf(elementId);
     if (pageIndex === undefined) return undefined;
@@ -950,6 +956,7 @@ export class PdfEditDocument {
         this.#objectsOf(pageIndex, page),
         elements,
         textPage,
+        this.#measurer,
       );
       record.elements = Object.freeze(
         elements.map((element) => {

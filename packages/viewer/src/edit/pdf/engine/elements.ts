@@ -226,7 +226,7 @@ export function markIsFresh(
         }
         const current = textStyle(pdfium, object);
         return (
-          current.fontSize !== spec.style.fontSize ||
+          current.fontSize !== round(spec.style.fontSize) ||
           current.color !== spec.style.color ||
           current.bold !== spec.style.bold ||
           current.italic !== spec.style.italic
@@ -399,7 +399,12 @@ function compositeElement(
       ...(geometry.rotation ? { rotation: geometry.rotation * 90 } : {}),
       operations: geometry.rotation
         ? ["deleteElement"]
-        : ["replaceParagraphText", "setTextStyle", "deleteElement"],
+        : [
+            "replaceText",
+            "replaceParagraphText",
+            "setTextStyle",
+            "deleteElement",
+          ],
     };
   const style = members.find((member) => member.textStyle)?.textStyle;
   return {

@@ -324,7 +324,11 @@ export function fontRequestsOf(
           requests.push({
             family: element.textStyle?.fontFamily ?? "Helvetica",
             text:
-              (operation.range ? (element.text ?? "") : "") + operation.text,
+              element.kind === "paragraph" && operation.range
+                ? (element.text ?? "").slice(0, operation.range.start.offset) +
+                  operation.text +
+                  (element.text ?? "").slice(operation.range.end.offset)
+                : operation.text,
           });
         break;
       }

@@ -40,6 +40,7 @@ import type {
   TextPosition,
   TextRange,
   TextTarget,
+  TextAnchorMigration,
 } from "../types.js";
 import type { PdfEngineReads } from "./provider.js";
 import type {
@@ -83,8 +84,8 @@ export class PdfSession implements PdfEditSession {
   /** Committed calls, oldest first, for `mapRange`; bounded by `LOG_LIMIT`. */
   readonly #log: MutationRecord[] = [];
   /** Batches applied and not undone, and those undone and not redone. */
-  #applied: (readonly EditOperation[])[] = [];
-  #undone: (readonly EditOperation[])[] = [];
+  #applied: MutationBatch[] = [];
+  #undone: MutationBatch[] = [];
   /** The last elements read per page, with the revision they describe. */
   readonly #geometry = new Map<
     number,
@@ -153,22 +154,25 @@ export class PdfSession implements PdfEditSession {
     // A dry run or a no-op leaves the revision alone and changes nothing.
     if (receipt.dryRun || receipt.revision === last) return;
     this.#refreshGeometry(receipt);
-    let involved: readonly EditOperation[] = operations;
+    let involved: MutationBatch = {
+      operations,
+      textAnchorMigrations: receipt.textAnchorMigrations ?? [],
+    };
     switch (kind) {
       case "apply":
-        this.#applied.push(operations);
+        this.#applied.push(involved);
         this.#undone = [];
         break;
       case "undo":
-        involved = this.#applied.pop() ?? [];
+        involved = this.#applied.pop() ?? involved;
         this.#undone.push(involved);
         break;
       case "redo":
-        involved = this.#undone.pop() ?? [];
+        involved = this.#undone.pop() ?? involved;
         this.#applied.push(involved);
         break;
       case "reset":
-        involved = this.#applied.flat();
+        involved = combineBatches(this.#applied);
         this.#applied = [];
         this.#undone = [];
         break;
@@ -182,7 +186,8 @@ export class PdfSession implements PdfEditSession {
     this.#log.push({
       revision: receipt.revision,
       kind,
-      operations: involved,
+      operations: involved.operations,
+      textAnchorMigrations: involved.textAnchorMigrations,
       receipt,
     });
     if (this.#log.length > LOG_LIMIT) this.#log.splice(0, 1);
@@ -562,6 +567,26 @@ export class PdfSession implements PdfEditSession {
 
 /** How many committed calls `mapRange` can look back over. */
 const LOG_LIMIT = 512;
+
+interface MutationBatch {
+  readonly operations: readonly EditOperation[];
+  readonly textAnchorMigrations: readonly TextAnchorMigration[];
+}
+
+/** Reset reverses all committed batches, retaining each migration's operation. */
+function combineBatches(batches: readonly MutationBatch[]): MutationBatch {
+  const operations: EditOperation[] = [];
+  const textAnchorMigrations: TextAnchorMigration[] = [];
+  for (const batch of batches) {
+    for (const migration of batch.textAnchorMigrations)
+      textAnchorMigrations.push({
+        ...migration,
+        operationIndex: operations.length + migration.operationIndex,
+      });
+    operations.push(...batch.operations);
+  }
+  return { operations, textAnchorMigrations };
+}
 
 /** The engine behind a PDF session answers the overlay reads; a stand-in may not. */
 function pdfReads(engine: EditEngine): PdfEngineReads {

@@ -1,7 +1,7 @@
 import type { ResourceLimits, ViewerWarning } from "../../../contracts.js";
 import type { AssetSource } from "../../assets.js";
 import type { ImageCache } from "./images.js";
-import type { OperationIssue } from "../../types.js";
+import type { OperationIssue, TextAnchorMigration } from "../../types.js";
 import type { PdfElement, PdfOperation } from "../types.js";
 import type { PageGeometry } from "./geometry.js";
 import type { ObjectRecord } from "./elements.js";
@@ -69,6 +69,10 @@ export interface OperationResult {
   readonly createdIds: readonly string[];
   /** Ids the operation made disappear. */
   readonly removedIds?: readonly string[];
+  readonly textAnchorMigrations?: readonly Omit<
+    TextAnchorMigration,
+    "operationIndex"
+  >[];
   readonly changedPages: readonly number[];
   readonly warnings: readonly ViewerWarning[];
 }

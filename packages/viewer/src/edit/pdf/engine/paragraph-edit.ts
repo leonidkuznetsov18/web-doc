@@ -6,7 +6,7 @@ import type {
 } from "../types.js";
 import { MARK_NAME, MARK_PARAM, OBJECT_PATH, OBJECT_TEXT } from "./elements.js";
 import { fontCanDraw, isStandardFamily, validateScript } from "./fonts.js";
-import { pageToUser } from "./geometry.js";
+import { pageToUser, round } from "./geometry.js";
 import { layoutText, type Layout } from "./text-layout.js";
 import { parseColor, placeUpright, setText } from "./text-box.js";
 import {
@@ -64,20 +64,16 @@ export const paragraphSetTextStyle: OperationHandler<SetTextStyleOperation> = {
           "unsupported-style",
           `Only color and fontSize can change on imported paragraphs; ${field} cannot`,
         );
-    if (
-      operation.style.fontSize !== undefined &&
-      operation.style.fontSize !== target.spec.style.fontSize
-    )
-      prepare(context, target, styled(target.spec, operation), issue);
+    const spec = styled(target.spec, operation);
+    if (spec.style.fontSize !== target.spec.style.fontSize)
+      prepare(context, target, spec, issue);
   },
   apply(operation, context) {
     const target = requireTarget(operation.target, context);
-    if (
-      operation.style.fontSize === undefined ||
-      operation.style.fontSize === target.spec.style.fontSize
-    )
-      return colorInPlace(context, target, styled(target.spec, operation));
-    return rebuild(context, target, styled(target.spec, operation));
+    const spec = styled(target.spec, operation);
+    if (spec.style.fontSize === target.spec.style.fontSize)
+      return colorInPlace(context, target, spec);
+    return rebuild(context, target, spec);
   },
 };
 
@@ -133,7 +129,7 @@ function styled(
       ...spec.style,
       ...(operation.style.fontSize === undefined
         ? {}
-        : { fontSize: operation.style.fontSize }),
+        : { fontSize: round(operation.style.fontSize) }),
       ...(operation.style.color === undefined
         ? {}
         : { color: operation.style.color }),
@@ -463,6 +459,16 @@ function rebuild(
   return {
     createdIds: [],
     removedIds: promoted ? target.paragraph.memberIds : [],
+    ...(promoted
+      ? {
+          textAnchorMigrations: target.paragraph.members.map((member) => ({
+            sourceElementId: member.elementId,
+            targetElementId: spec.id,
+            sourceLength: member.end - member.start,
+            targetOffset: member.start,
+          })),
+        }
+      : {}),
     changedPages: [pageIndex],
     warnings: prepared.warnings,
   };

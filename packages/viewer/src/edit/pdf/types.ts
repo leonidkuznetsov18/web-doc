@@ -82,7 +82,7 @@ export interface InsertTextBoxOperation {
 
 export interface ReplaceTextOperation {
   readonly op: "replaceText";
-  /** A `textBox` or `text` element. */
+  /** A `textBox`, `text` or `paragraph` element; supported fields depend on its capabilities. */
   readonly target: string;
   readonly text: string;
   /**
@@ -384,7 +384,7 @@ export interface PdfEditSession extends EditSessionBase<
     fields: Fields<ReplaceParagraphTextOperation>,
     options?: ApplyOptions,
   ): Promise<EditReceipt>;
-  /** Lines, glyph boxes and styles of a `text`, `textBox` or `table` element. */
+  /** Lines, glyph boxes and styles of a `text`, `textBox`, `paragraph` or `table` element. */
   getTextLayout(
     elementId: string,
     options?: ReadOptions,

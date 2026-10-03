@@ -8,11 +8,12 @@ import {
 } from "./elements.js";
 import {
   roundRect,
+  round,
   unionRects,
   userToPage,
   type PageGeometry,
 } from "./geometry.js";
-import { fontBytes } from "./fonts.js";
+import { fontBytes, fontCanDraw, type TextMeasurer } from "./fonts.js";
 import type { Pdfium } from "./pdfium.js";
 
 /** Persisted inputs, validated at the PDF marked-content boundary. */
@@ -23,7 +24,7 @@ export interface ParagraphSpec extends MarkParams {
   /** Actual native line strings, retained to detect edits made by another tool. */
   readonly lines: readonly string[];
   readonly style: PdfTextParagraph["textStyle"];
-  /** First baseline relative to rect.y, in multiples of the original font size. */
+  /** First baseline relative to rect.y, in multiples of the current style font size. */
   readonly baselineOffset: number;
 }
 
@@ -42,7 +43,12 @@ export function paragraphElement(paragraph: PdfTextParagraph): PdfElement {
     text: paragraph.text,
     bounds: paragraph.bounds,
     textStyle: paragraph.textStyle,
-    operations: ["replaceParagraphText", "setTextStyle", "deleteElement"],
+    operations: [
+      "replaceParagraphText",
+      "replaceText",
+      "setTextStyle",
+      "deleteElement",
+    ],
   };
 }
 
@@ -53,6 +59,18 @@ interface Row {
   readonly x: number;
   readonly baseline: number;
   readonly width: number;
+}
+
+const MIN_CONTINUATION_FILL = 0.9;
+const MAX_CONNECTED_EDGE_GAP = 0.65;
+// Public PDF geometry is canonicalized to thousandths of a point. This only
+// absorbs native floating-point rounding, not visible tracking or kerning.
+const GLYPH_POSITION_PRECISION = 0.001;
+
+interface NativeGlyph {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
 }
 
 /**
@@ -68,6 +86,7 @@ export function discoverParagraphs(
   records: readonly ObjectRecord[],
   elements: readonly PdfElement[],
   textPage: number,
+  measurer: TextMeasurer,
 ): ReadonlyMap<string, ParagraphTarget> {
   const result = new Map<string, ParagraphTarget>();
   if (geometry.rotation !== 0) return result;
@@ -119,17 +138,29 @@ export function discoverParagraphs(
   };
   const { lib } = pdfium;
   const rightEdges = new Map<number, number>();
+  const glyphsByObject = new Map<number, NativeGlyph[]>();
   for (let at = 0; at < lib.FPDFText_CountChars(textPage); at += 1) {
     const unicode = lib.FPDFText_GetUnicode(textPage, at);
     if (
       !Number.isInteger(unicode) ||
-      unicode < 0 ||
+      unicode < 32 ||
       unicode > 0x10ffff ||
-      (unicode >= 0xd800 && unicode <= 0xdfff) ||
-      /\s/u.test(String.fromCodePoint(unicode))
+      (unicode >= 0xd800 && unicode <= 0xdfff)
     )
       continue;
     const object = lib.FPDFText_GetTextObject(textPage, at);
+    if (!object) continue;
+    const text = String.fromCodePoint(unicode);
+    const origin = pdfium.readNumbers(2, "double", ([x, y]) =>
+      lib.FPDFText_GetCharOrigin(textPage, at, x!, y!),
+    );
+    if (origin) {
+      const point = userToPage(geometry, origin[0]!, origin[1]!);
+      const glyphs = glyphsByObject.get(object) ?? [];
+      glyphs.push({ text, ...point });
+      glyphsByObject.set(object, glyphs);
+    }
+    if (/\s/u.test(text)) continue;
     const box = pdfium.readNumbers(4, "float", ([out]) =>
       lib.FPDFText_GetLooseCharBox(textPage, at, out!),
     );
@@ -156,6 +187,7 @@ export function discoverParagraphs(
       !element.text?.trim() ||
       element.text !== element.text.trimStart() ||
       element.rotation ||
+      element.text.includes("\u0002") ||
       /[\r\n\t]/u.test(element.text)
     )
       return;
@@ -184,9 +216,26 @@ export function discoverParagraphs(
     if (!rawSize) return;
     const effective = {
       ...element,
-      textStyle: { ...element.textStyle, fontSize: rawSize * matrix[0]! },
+      textStyle: {
+        ...element.textStyle,
+        fontSize: round(rawSize * matrix[0]!),
+      },
     };
     if (effective.textStyle.fontSize < 1 || effective.textStyle.fontSize > 500)
+      return;
+    // Reused fonts must draw the same advances as our native reflow. CFF and
+    // other non-writable fonts already require an explicit font-substitution
+    // warning on replacement; their metrics are not claimed preserved here.
+    if (
+      fontCanDraw(pdfium, font, element.text) &&
+      !hasDefaultAdvances(
+        glyphsByObject.get(object) ?? [],
+        element.text,
+        font,
+        rawSize * matrix[0]!,
+        measurer,
+      )
+    )
       return;
     const width =
       (rightEdges.get(object) ?? element.bounds.x + element.bounds.width) -
@@ -228,7 +277,7 @@ export function discoverParagraphs(
         previous &&
         (Math.abs(row.baseline - previous.baseline - leading) >
           Math.max(1, leading * 0.15) ||
-          /[-\u00ad]$/u.test(previous.element.text!.trim()))
+          /[-\u00ad\u0002]$/u.test(previous.element.text!.trim()))
       )
         break;
       group.push(row);
@@ -243,6 +292,33 @@ export function discoverParagraphs(
     });
     const ids = new Set(group.map((row) => row.element.id));
     const firstIndex = Math.min(...group.map((row) => row.index));
+    // A short non-final line may end an independent paragraph. A same-baseline
+    // neighbor may be another table cell or a separate list label. Neither has
+    // enough evidence of ordinary paragraph wrapping to merge safely.
+    if (
+      group
+        .slice(0, -1)
+        .some((row) => row.width < rect.width * MIN_CONTINUATION_FILL) ||
+      elements.some((element) => {
+        if (ids.has(element.id) || !element.text?.trim()) return false;
+        const b = element.bounds;
+        const sharesRow = group.some((row) => {
+          const a = row.element.bounds;
+          return a.y < b.y + b.height && a.y + a.height > b.y;
+        });
+        if (sharesRow) return true;
+        // Do not expose the matching tail/head of an unsupported connected
+        // section (indentation, mixed style, excluded source characters).
+        const sharesColumn =
+          b.x < rect.x + rect.width && b.x + b.width > rect.x;
+        const edgeGap = Math.max(
+          b.y - (rect.y + rect.height),
+          rect.y - (b.y + b.height),
+        );
+        return sharesColumn && edgeGap <= leading * MAX_CONNECTED_EDGE_GAP;
+      })
+    )
+      continue;
     // Ambiguous interleaving/overlap may be another run, heading or figure.
     // A background completely behind the group is safe to keep untouched.
     if (
@@ -310,6 +386,33 @@ function compatible(a: Row, b: Row): boolean {
     x.bold === y.bold &&
     x.italic === y.italic
   );
+}
+
+function hasDefaultAdvances(
+  glyphs: readonly NativeGlyph[],
+  text: string,
+  font: number,
+  fontSize: number,
+  measurer: TextMeasurer,
+): boolean {
+  const characters = [...text.trimEnd()];
+  const first = glyphs[0];
+  if (!first || glyphs.length < characters.length) return false;
+  let advance = 0;
+  for (const [index, character] of characters.entries()) {
+    const glyph = glyphs[index];
+    if (
+      !glyph ||
+      glyph.text !== character ||
+      Math.abs(glyph.x - first.x - advance) > GLYPH_POSITION_PRECISION ||
+      Math.abs(glyph.y - first.y) > GLYPH_POSITION_PRECISION
+    )
+      return false;
+    const width = measurer.advance(font, fontSize, character);
+    if (!Number.isFinite(width) || width <= 0) return false;
+    advance += width;
+  }
+  return true;
 }
 
 export function intersects(a: PageRect, b: PageRect): boolean {
