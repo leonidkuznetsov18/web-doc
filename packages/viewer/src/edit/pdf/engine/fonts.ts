@@ -1,4 +1,5 @@
 import type { EditWorkerFont } from "../../../worker-protocol.js";
+import { glyphUnicode, readCff } from "./cff.js";
 import type { Issue } from "./operations.js";
 import type { Pdfium } from "./pdfium.js";
 
@@ -595,6 +596,68 @@ export function fontCanDraw(
     if (code === 0x20) return (coverage.glyph(code) ?? 0) !== 0;
     return code === 0x0a || coverage.drawable(code);
   });
+}
+
+/**
+ * Whether one text object can be rewritten in its own font: what
+ * `fontCanDraw` proves, extended to bare CFF subsets, whose glyph names say
+ * what they draw, and narrowed to characters the PDF gives an advance, since
+ * a subset's widths list only the codes it used. Paragraph reflow keeps to
+ * `fontCanDraw`, which also decides which rows join a paragraph.
+ */
+export function fontCanRewrite(
+  pdfium: Pdfium,
+  font: number,
+  text: string,
+): boolean {
+  const characters = [...text].filter((character) => character !== "\n");
+  if (
+    !characters.every(
+      (character) => advance(pdfium, font, character.codePointAt(0)!) > 0,
+    )
+  )
+    return false;
+  if (fontCanDraw(pdfium, font, text)) return true;
+  if (!pdfium.lib.FPDFFont_GetIsEmbedded(font)) return false;
+  const data = fontBytes(pdfium, font);
+  const coverage = data && cffCoverage(data);
+  if (!coverage) return false;
+  // A space needs a glyph of its own, as in `fontCanDraw`.
+  return characters.every((character) =>
+    coverage.has(character.codePointAt(0)!),
+  );
+}
+
+/** The PDF's width for a character, per 1000 units of size; 0 for one it gives none or PDFium cannot ask about. */
+function advance(pdfium: Pdfium, font: number, code: number): number {
+  // PDFium takes one UTF-16 code unit.
+  if (code > 0xffff) return 0;
+  return (
+    pdfium.readNumbers(1, "float", ([width]) =>
+      pdfium.lib.FPDFFont_GetGlyphWidth(font, code, 1000, width!),
+    )?.[0] ?? 0
+  );
+}
+
+/**
+ * A bare CFF program's glyphs by the code points their names stand for, as a
+ * simple font draws them: its encoding names the glyph. A CID-keyed program
+ * names none, and only its PDF CMap would say what its glyphs draw.
+ */
+function cffCoverage(data: Uint8Array): CmapCoverage | undefined {
+  const cff = readCff(data);
+  if (!cff || cff.cid) return undefined;
+  const glyphs = new Map<number, number>();
+  cff.glyphNames.forEach((name, glyph) => {
+    const code = glyphUnicode(name);
+    if (glyph !== 0 && code !== undefined && !glyphs.has(code))
+      glyphs.set(code, glyph);
+  });
+  return {
+    has: (code) => glyphs.has(code),
+    glyph: (code) => glyphs.get(code),
+    drawable: (code) => glyphs.has(code),
+  };
 }
 
 function fontCoverage(pdfium: Pdfium, font: number): CmapCoverage | undefined {

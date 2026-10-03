@@ -566,11 +566,16 @@ font covers is `font-unavailable`; right-to-left and complex-script text is
 `unsupported-script`. Text is horizontal and left-to-right.
 
 `replaceText` on an existing text object keeps its font when that font can
-draw the new text — a standard font for WinAnsi text, or an embedded TrueType
+draw the new text — a standard font for WinAnsi text, an embedded TrueType
 font whose `cmap` maps every character to a glyph with outline data (a subset
-font can keep the entry for a glyph it emptied) — and otherwise redraws the
+font can keep the entry for a glyph it emptied), or a bare embedded CFF
+program (`/Type1C`) with a glyph named for every character — and the PDF
+gives every character a width, which a subset lists only for the codes it
+used. Otherwise it redraws the
 text at the same baseline, size and colour in a covering font with a
-`font-substitution` warning. The reported
+`font-substitution` warning. A CID-keyed CFF font names no glyphs, so it is
+always substituted. Paragraph reflow keeps to the narrower rule above, so an
+embedded CFF paragraph is still substituted. The reported
 `fontFamily` of existing text is the family the file declares, not the face
 PDFium substitutes for a font that is not embedded.
 

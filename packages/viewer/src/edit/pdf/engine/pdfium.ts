@@ -159,6 +159,13 @@ export interface PdfiumFunctions {
   FPDFPageObj_Destroy(object: number): void;
   FPDFPage_RemoveObject(page: number, object: number): boolean;
   FPDFFont_GetWeight(font: number): number;
+  /** The advance of the character the font encodes `glyph`, a UTF-16 code unit, as: the PDF's own width for it. */
+  FPDFFont_GetGlyphWidth(
+    font: number,
+    glyph: number,
+    fontSize: number,
+    width: number,
+  ): boolean;
   FPDFText_GetCharBox(
     textPage: number,
     index: number,
