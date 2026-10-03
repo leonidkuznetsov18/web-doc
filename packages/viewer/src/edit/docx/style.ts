@@ -136,11 +136,12 @@ export class DocxStyles {
         node.children.find((child) => child.local === "basedOn") ?? node,
         "w:val",
       );
+      const defaultAttribute = part.attribute(node, "w:default");
       const record: StyleRecord = {
         id,
         type: part.attribute(node, "w:type") ?? "paragraph",
         ...(basedOn && basedOn !== id ? { basedOn } : {}),
-        isDefault: isOn(part.attribute(node, "w:default")),
+        isDefault: defaultAttribute !== undefined && isOn(defaultAttribute),
         ...pick(node, "rPr", "pPr"),
       };
       styles.set(id, record);
@@ -240,7 +241,7 @@ async function readTheme(
   }
 }
 
-/** `w:b`, `w:i`, `w:default`-style toggles: present without a value means on. */
+/** `w:b`/`w:i` toggle values: a present element without `w:val` means on. */
 export function isOn(value: string | undefined): boolean {
   return value === undefined || !/^(0|false|off)$/i.test(value);
 }

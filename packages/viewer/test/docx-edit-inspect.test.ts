@@ -332,6 +332,52 @@ describe("DOCX edit engine: inspection (docx-edit T54)", () => {
     }
   });
 
+  it("does not inherit the first named style when no default is declared", async () => {
+    const { engine, elements } = await elementsOf(
+      buildDocx({
+        body:
+          paragraph("Body text") +
+          '<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr><w:r><w:t>Title text</w:t></w:r></w:p>',
+        styles:
+          "<w:docDefaults><w:rPrDefault/><w:pPrDefault/></w:docDefaults>" +
+          '<w:style w:type="paragraph" w:styleId="Title"><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:sz w:val="56"/></w:rPr></w:style>',
+      }),
+    );
+    try {
+      assert.equal(elements[0]?.textStyle?.fontSize, 10);
+      assert.equal(elements[0]?.paragraphStyle?.align, "left");
+      assert.equal(elements[1]?.textStyle?.fontSize, 28);
+      assert.equal(elements[1]?.paragraphStyle?.align, "center");
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  for (const enabled of ["1", "true", "on"]) {
+    it(`uses an explicit ${enabled} default after ordinary and disabled styles`, async () => {
+      const { engine, elements } = await elementsOf(
+        buildDocx({
+          body: paragraph("Body text"),
+          styles:
+            '<w:style w:type="paragraph" w:styleId="Title"><w:rPr><w:sz w:val="56"/></w:rPr></w:style>' +
+            ["0", "false", "off"]
+              .map(
+                (disabled) =>
+                  `<w:style w:type="paragraph" w:default="${disabled}" w:styleId="Disabled${disabled}"><w:rPr><w:sz w:val="40"/></w:rPr></w:style>`,
+              )
+              .join("") +
+            `<w:style w:type="paragraph" w:default="${enabled}" w:styleId="Normal"><w:pPr><w:jc w:val="right"/></w:pPr><w:rPr><w:sz w:val="22"/></w:rPr></w:style>`,
+        }),
+      );
+      try {
+        assert.equal(elements[0]?.textStyle?.fontSize, 11);
+        assert.equal(elements[0]?.paragraphStyle?.align, "right");
+      } finally {
+        await engine.dispose();
+      }
+    });
+  }
+
   it("finds text in document order with element ranges and no geometry", async () => {
     const body =
       paragraph("alpha beta Alpha") +
