@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.12.0...v0.12.1) (2026-10-03)
+
+### Bug fixes
+
+* **viewer:** retain fonts around generated pdf gaps ([4e48359](https://github.com/leonidkuznetsov18/web-doc/commit/4e48359c95fa0269a6ac2dd2584a7093714da9f5))
+
 ## [0.12.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.11.0...v0.12.0) (2026-10-03)
 
 ### Features
