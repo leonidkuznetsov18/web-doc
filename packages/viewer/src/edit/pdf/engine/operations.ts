@@ -28,6 +28,26 @@ export interface OperationContext {
   withPage<T>(pageIndex: number, use: (page: number) => T): T;
   /** Reads native resources without regenerating the content stream. */
   readPage<T>(pageIndex: number, use: (page: number) => T): T;
+  /**
+   * Loads what holds an element's objects for writing: its page, or for an
+   * element inside forms a stand-in page with the innermost form's objects,
+   * whose forms are rewritten afterwards (see forms.ts). Indexes in
+   * `location.indexes` address objects of the holder.
+   */
+  withHolder<T>(location: ElementLocation, use: (holder: number) => T): T;
+  /** Reads an object of an element's holder, with the page's text, changing nothing. */
+  readObject<T>(
+    location: ElementLocation,
+    index: number,
+    use: (object: number, textPage: number) => T,
+  ): T;
+  /** The page's geometry for objects of the element's holder; see `PageGeometry.matrix`. */
+  holderGeometry(location: ElementLocation): PageGeometry;
+  /**
+   * Whether the forms that hold an element can be rewritten without the
+   * page looking any different; always true on the page itself.
+   */
+  rewritable(location: ElementLocation): boolean;
   /** Records objects appended to a page by this operation. */
   appendObjects(pageIndex: number, records: readonly ObjectRecord[]): void;
   /** Where an element's objects sit: their page and their indexes in drawing order. */
@@ -49,18 +69,21 @@ export interface OperationContext {
   movePageRecord(from: number, to: number): void;
   /** Drops what the model cached about a page after its geometry changed. */
   invalidatePage(index: number): void;
-  /** Replaces `count` object records from `start` with `records`. */
+  /** Replaces `count` object records from `start` with `records`, inside `forms` if given. */
   spliceObjects(
     pageIndex: number,
     start: number,
     count: number,
     records: readonly ObjectRecord[],
+    forms?: readonly number[],
   ): void;
 }
 
 export interface ElementLocation {
   readonly pageIndex: number;
-  /** Indexes of the element's objects in the page's drawing order, ascending. */
+  /** Indexes of the forms that hold the element, from the page inwards; empty on the page. */
+  readonly forms: readonly number[];
+  /** Indexes of the element's objects in its holder's drawing order, ascending. */
   readonly indexes: readonly number[];
   readonly record: ObjectRecord;
 }
@@ -94,4 +117,22 @@ export function issueCollector(
 ): Issue {
   return (path, code, message) =>
     issues.push({ operationIndex, path, code, message });
+}
+
+/**
+ * Text inside forms is written by rewriting its forms, which must leave the
+ * page looking as it did; reports the target when it would not.
+ */
+export function rewritable(
+  location: ElementLocation,
+  context: OperationContext,
+  issue: Issue,
+): boolean {
+  if (context.rewritable(location)) return true;
+  issue(
+    "/target",
+    "unsupported-target",
+    "This text sits in a form web-doc cannot rewrite without changing how the page looks",
+  );
+  return false;
 }

@@ -5,13 +5,15 @@ import type {
   PdfElement,
   ResizeElementOperation,
 } from "../types.js";
+import { OBJECT_TEXT, type ObjectRecord } from "./elements.js";
 import { pageToUser, type PageGeometry } from "./geometry.js";
-import type {
-  ElementLocation,
-  Issue,
-  OperationContext,
-  OperationHandler,
-  OperationResult,
+import {
+  rewritable,
+  type ElementLocation,
+  type Issue,
+  type OperationContext,
+  type OperationHandler,
+  type OperationResult,
 } from "./operations.js";
 import {
   changed,
@@ -31,7 +33,7 @@ import { changedTable, rebuildTable, tableSpecOf } from "./tables.js";
 export const moveElement: OperationHandler<MoveElementOperation> = {
   validate(operation, context, issue) {
     const target = anyTarget(operation.target, context, issue);
-    if (!target) return;
+    if (!target || !rewritable(target.location, context, issue)) return;
     if (target.element.kind === "paragraph") {
       issue(
         "/target",
@@ -74,7 +76,8 @@ export const moveElement: OperationHandler<MoveElementOperation> = {
           at: { x: table.at.x + dx, y: table.at.y + dy },
         }),
       );
-    const geometry = context.geometry(location.pageIndex);
+    // In a form's space for text inside one, see `PageGeometry.matrix`.
+    const geometry = context.holderGeometry(location);
     const from = pageToUser(geometry, 0, 0);
     const to = pageToUser(geometry, dx, dy);
     transformObjects(context, location, [
@@ -101,6 +104,14 @@ export const resizeElement: OperationHandler<ResizeElementOperation> = {
         "/target",
         "unsupported-target",
         "Tables and imported paragraphs cannot be resized",
+      );
+      return;
+    }
+    if (target.location.forms.length > 0) {
+      issue(
+        "/target",
+        "unsupported-target",
+        "Text inside a form cannot be stretched",
       );
       return;
     }
@@ -156,18 +167,21 @@ export const resizeElement: OperationHandler<ResizeElementOperation> = {
 
 export const deleteElement: OperationHandler<DeleteElementOperation> = {
   validate(operation, context, issue) {
-    anyTarget(operation.target, context, issue);
+    const target = anyTarget(operation.target, context, issue);
+    if (target) rewritable(target.location, context, issue);
   },
   apply(operation, context) {
     const { location } = anyTarget(operation.target, context)!;
     const paragraph = context.paragraph(operation.target)?.paragraph;
     removeObjects(context, location);
+    // A form takes the text elements inside it along.
     return {
       ...changed(location, { overflow: false }),
       removedIds: [
         ...new Set([
           operation.target,
           ...(paragraph?.id === operation.target ? paragraph.memberIds : []),
+          ...textInside(location.record),
         ]),
       ],
     };
@@ -189,6 +203,13 @@ function anyTarget(
     return undefined;
   }
   return { location, element };
+}
+
+/** Ids of the text elements inside a form record, at any depth. */
+function textInside(record: ObjectRecord): string[] {
+  return (record.children ?? []).flatMap((child) =>
+    child.type === OBJECT_TEXT ? [child.id] : textInside(child),
+  );
 }
 
 function textBoxSpec(location: ElementLocation): TextBoxSpec | undefined {
@@ -217,10 +238,10 @@ function transformObjects(
   [a, b, c, d, e, f]: readonly [number, number, number, number, number, number],
 ): void {
   const { lib } = context.pdfium;
-  context.withPage(location.pageIndex, (page) => {
+  context.withHolder(location, (holder) => {
     for (const index of location.indexes)
       lib.FPDFPageObj_Transform(
-        lib.FPDFPage_GetObject(page, index),
+        lib.FPDFPage_GetObject(holder, index),
         a,
         b,
         c,

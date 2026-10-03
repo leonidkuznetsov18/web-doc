@@ -16,6 +16,50 @@ export interface PageGeometry {
   };
   /** Quarter turns clockwise, 0–3. */
   readonly rotation: number;
+  /**
+   * For objects inside Form XObjects: what maps their form's space to the
+   * page's user space. Points of such a geometry are in that form's space.
+   */
+  readonly matrix?: Matrix;
+}
+
+/** An affine matrix `[a, b, c, d, e, f]`, PDF style: (x, y) → (ax + cy + e, bx + dy + f). */
+export type Matrix = readonly [number, number, number, number, number, number];
+
+/** `first`, then `second`. */
+export function concat(first: Matrix, second: Matrix): Matrix {
+  const [a, b, c, d, e, f] = first;
+  const [A, B, C, D, E, F] = second;
+  return [
+    a * A + b * C,
+    a * B + b * D,
+    c * A + d * C,
+    c * B + d * D,
+    e * A + f * C + E,
+    e * B + f * D + F,
+  ];
+}
+
+function applyMatrix(
+  [a, b, c, d, e, f]: Matrix,
+  x: number,
+  y: number,
+): { readonly x: number; readonly y: number } {
+  return { x: a * x + c * y + e, y: b * x + d * y + f };
+}
+
+export function invert([a, b, c, d, e, f]: Matrix): Matrix {
+  const det = a * d - b * c;
+  // A form drawn flat shows nothing to edit; mapping back to its origin is harmless.
+  if (det === 0) return [0, 0, 0, 0, -e, -f];
+  return [
+    d / det,
+    -b / det,
+    -c / det,
+    a / det,
+    (c * f - d * e) / det,
+    (b * e - a * f) / det,
+  ];
 }
 
 /** Displayed size in points, rotation applied. */
@@ -32,9 +76,12 @@ export function displayedSize(geometry: PageGeometry): {
 
 export function userToPage(
   geometry: PageGeometry,
-  x: number,
-  y: number,
+  userX: number,
+  userY: number,
 ): PagePoint {
+  const { x, y } = geometry.matrix
+    ? applyMatrix(geometry.matrix, userX, userY)
+    : { x: userX, y: userY };
   const width = geometry.box.right - geometry.box.left;
   const height = geometry.box.top - geometry.box.bottom;
   // Unrotated page space: flip y so it grows downwards from the top edge.
@@ -78,7 +125,10 @@ export function pageToUser(
       px = x;
       py = y;
   }
-  return { x: px + geometry.box.left, y: geometry.box.top - py };
+  const user = { x: px + geometry.box.left, y: geometry.box.top - py };
+  return geometry.matrix
+    ? applyMatrix(invert(geometry.matrix), user.x, user.y)
+    : user;
 }
 
 /** Axis-aligned page-space box of a user-space rectangle. */
