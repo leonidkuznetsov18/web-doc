@@ -1166,7 +1166,21 @@ export class PdfEditDocument {
         byObject,
         new Map(elements.map((element) => [element.id, element.text ?? ""])),
       );
-      return use({ page, textPage, geometry, byObject, elements, offsets });
+      // A text box lays its lines out in the rect its mark keeps; only
+      // fresh marks are still on the records.
+      const frames = new Map<string, PageRect>();
+      for (const record of records)
+        if (record.mark?.kind === "textBox" && !frames.has(record.id))
+          frames.set(record.id, roundRect(record.mark.rect as PageRect));
+      return use({
+        page,
+        textPage,
+        geometry,
+        byObject,
+        elements,
+        offsets,
+        frames,
+      });
     });
   }
 

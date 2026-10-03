@@ -741,7 +741,7 @@ selection back. These reads serve that flow; each returns the usual envelope
 
 | Method                                          | Returns                  | What it gives                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ----------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox`, `paragraph` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds`, `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `getTextLayout(elementId)`                      | `ReadItem<TextLayout>`   | The lines of a `text`, `textBox`, `paragraph` or `table` element in reading order: each line's `range` into `EditElement.text`, `text`, `bounds` (the ink), `advanceBounds` (the box its advances fill), `baseline` (a page-space point), `glyphs` (`offset`, tight `box`, `advance`, pen `origin`), `fontFamily`, `fontSize`, `color`. A line is one PDF text object: a text box's drawn lines, a table's cells. `frame` is the box to place a text field on: a text box's or paragraph's own rectangle, else the union of the lines' `advanceBounds`.                                                                                                                                                                                                                                 |
 | `getTextFont(elementId)`                        | `ReadItem<TextFont>`     | The font a `text`, `textBox` or `paragraph` element is drawn in (a paragraph's from its first row), ready for `FontFace`: `face.data` is the embedded TrueType program (`format: "truetype"`) with the OS/2, name and post tables a subsetting tool left out added and its tables on four-byte boundaries, as browsers require, or an embedded CFF subset wrapped as OpenType (`"opentype"`) with a Unicode cmap built from its glyph names (Adobe Glyph List names, `uniXXXX`, `uXXXX`) and the advance widths of its charstrings, subroutines followed. `key` is the same for every element in one font. Without a face, `missing` says why: `not-embedded` (show `family` by name, as PDF readers do), `cid-keyed`, `type1`, `no-unicode` or `unreadable` (Type 3 fonts among them). |
 | `getPageLayout(pageIndex)`                      | `ReadItem<PageLayout>`   | Every text element's layout of a page plus the page's displayed `width` and `height`, in one read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `positionAt(pageIndex, point)`                  | `ReadItem<TextPosition>` | The caret position nearest to a page-space point; past a glyph's middle in reading direction the caret goes after it. `undefined` on a page without text.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -757,10 +757,10 @@ committed change touches only what the user typed over.
 The flow, end to end:
 
 1. On hover, `elementsAtSync` (after one `getElements({ pageIndex })`) tells
-   which element is under the pointer; `getTextLayout` gives its lines and
-   glyph boxes to place the input. When the input opens, `getTextFont` gives
-   the face to type in, so it shows the file's own glyphs and widths; load
-   each `key` once.
+   which element is under the pointer; `getTextLayout` gives its `frame` to
+   place the input on, and its lines and glyph boxes. When the input opens,
+   `getTextFont` gives the face to type in, so it shows the file's own glyphs
+   and widths; load each `key` once.
 2. When the user selects text in the viewer, `elementsForSelection` turns
    `viewer.getSelection()` into a range; `rangeRects` draws it.
 3. While the input is open, `renderPageWithout` gives a bitmap of the page
@@ -770,6 +770,24 @@ The flow, end to end:
    receipt's `revision` and `documentchange` say when the page is current.
 5. `mapRange` with the revision the range was taken at says where it is now;
    `viewer.selectText` restores the selection.
+
+Size the input from `frame`, not from the element's `bounds`. `bounds`, and
+a line's `bounds`, are the ink: PDFium's union of the glyph outlines, which
+starts right of the pen by the first glyph's side bearing and stops short of
+the last glyph's advance. A browser lays text out by advances, so an input
+as wide as the ink wraps the last word of its line; in the files measured
+the advances run a median 0.8 to 1.2 pt wider than the ink per line, and up
+to 10 pt. A line's `advanceBounds` runs from its first glyph's `origin` to
+the last glyph's `origin` plus its advance, and from the font's ascent to its
+descent at the line's size; the line's `baseline` lies inside it at the
+ascent. Each glyph's `origin` is its pen position, so the steps between
+neighbours are the advances the file draws with, character and word spacing
+and kerning included, where `advance` is the glyph's own width. `frame`,
+`advanceBounds` and `origin` are in page space and axis-aligned like
+`bounds`: for text turned 90° or 270° the advance runs down or up the page,
+and turning the box back by the element's `rotation` gives the upright
+input. `bounds` stays the ink because hit tests and paragraph recognition
+compare it with what is drawn.
 
 A face from `getTextFont` holds only what the file embeds. A subset font
 draws only the characters the file uses, so list a fallback after it in the
