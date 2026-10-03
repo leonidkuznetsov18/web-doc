@@ -654,6 +654,8 @@ export function replacedParagraph(
       (rPr) => runXml(insertedProperties(rPr), runContentXml(segments[0]!)),
       paragraphMarkRPr(part, record),
     );
+    // A split inserts new marks before the original terminating mark. Keep
+    // its exact properties (including section ownership) on the last paragraph.
     const pPr = sliceOf(part, record.pPr);
     const runProperties = insertedProperties(split.rPr);
     const copiedPPr = paragraphPropertiesWithoutSection(
@@ -668,7 +670,7 @@ export function replacedParagraph(
         paragraphXml(
           record.node,
           record.id,
-          pPr,
+          single ? pPr : copiedPPr,
           split.before + (single ? split.after : ""),
         ),
       ),
@@ -684,7 +686,7 @@ export function replacedParagraph(
           paragraphXml(
             record.node,
             id,
-            copiedPPr,
+            last ? pPr : copiedPPr,
             runXml(runProperties, runContentXml(segment)) +
               (last ? split.after : ""),
           ),

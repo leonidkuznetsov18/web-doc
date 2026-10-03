@@ -5,6 +5,7 @@ import { DocxEditEngine } from "../src/edit/docx/engine.js";
 import { loadDocxEditEngine } from "../src/edit/docx/provider.js";
 import { createOoxmlEditHandler } from "../src/edit/pptx/handler.js";
 import { OoxmlPackage } from "../src/edit/ooxml/package.js";
+import { scanXml } from "../src/edit/ooxml/xml.js";
 import { defaultResourceLimits, ViewerError } from "../src/index.js";
 import { buildDocx, paragraph, sectPr } from "./fixtures/docx-builder.js";
 import { docxSession } from "./fixtures/docx-session.js";
@@ -352,6 +353,132 @@ describe("DOCX read-only text draft preview", () => {
       assert.deepEqual((await session.save()).bytes, saved.bytes);
       await session.redo();
       assert.deepEqual((await session.save()).bytes, committed.bytes);
+    } finally {
+      await end();
+    }
+  });
+
+  it("styles a leading split's new empty mark and preserves the original last mark and paragraph properties", async () => {
+    const originalProperties =
+      '<w:pPr><w:spacing w:after="160"/><w:jc w:val="center"/><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:u w:val="none"/></w:rPr>' +
+      "</w:pPr>";
+    const original = buildDocx({
+      body:
+        "<w:p>" +
+        originalProperties +
+        "<w:r><w:t>AB</w:t></w:r></w:p>" +
+        paragraph("following") +
+        sectPr(),
+    });
+    const { session, end } = await docxSession(original, [[]]);
+    try {
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const fields = {
+        target,
+        text: "\nX",
+        range: range(target, 0),
+        insertionStyle: { bold: true, italic: true, underline: true },
+      };
+      const before = session.state;
+      const preview = await session.previewText(fields);
+      assert.ok(preview.item);
+      assert.deepEqual(session.state, before);
+      assert.deepEqual((await session.save()).bytes, original);
+      const committed = await session.replaceText(fields);
+      assert.equal(committed.createdIds.length, 1);
+      for (const bytes of [preview.item, (await session.save()).bytes]) {
+        const engine = await DocxEditEngine.open(bytes, limits, signal);
+        try {
+          const elements = await engine.getElements({}, signal);
+          assert.deepEqual(
+            elements.map((e) => e.text),
+            ["", "XAB", "following"],
+          );
+          assert.equal(elements[0]?.id, target);
+          const mark = await engine.textStyle(target, undefined, signal);
+          assert.equal(mark?.bold, true);
+          assert.equal(mark?.italic, true);
+          assert.equal(mark?.underline, true);
+          const last = elements[1];
+          assert.ok(last);
+          assert.equal(
+            (await engine.textStyle(last.id, { start: 0, end: 1 }, signal))
+              ?.underline,
+            true,
+          );
+          assert.equal(
+            (await engine.textStyle(last.id, { start: 1, end: 3 }, signal))
+              ?.underline,
+            false,
+          );
+          const xml = scanXml("/word/document.xml", await documentXml(bytes));
+          const paragraphs = xml.findAll("w:p");
+          const firstProperties = paragraphs[0]?.children.find(
+            (c) => c.local === "pPr",
+          );
+          const lastProperties = paragraphs[1]?.children.find(
+            (c) => c.local === "pPr",
+          );
+          assert.ok(firstProperties && lastProperties);
+          const firstXml = xml.text.slice(
+            firstProperties.start,
+            firstProperties.end,
+          );
+          assert.ok(firstXml.includes('<w:spacing w:after="160"/>'));
+          assert.ok(firstXml.includes('<w:jc w:val="center"/>'));
+          assert.ok(
+            !firstProperties.children.some((c) => c.local === "sectPr"),
+          );
+          assert.equal(
+            xml.text.slice(lastProperties.start, lastProperties.end),
+            originalProperties,
+          );
+          assert.equal(xml.findAll("w:sectPr").length, 1);
+        } finally {
+          await engine.dispose();
+        }
+      }
+      await session.undo();
+      assert.deepEqual((await session.save()).bytes, original);
+    } finally {
+      await end();
+    }
+  });
+
+  it("keeps section-break paragraphs read-only and preserves their original section bytes on a styled split", async () => {
+    const original = buildDocx({
+      body:
+        "<w:p><w:pPr>" +
+        sectPr({ width: 10000 }) +
+        "</w:pPr><w:r><w:t>AB</w:t></w:r></w:p>" +
+        sectPr(),
+    });
+    const { session, end } = await docxSession(original, [[]]);
+    try {
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const before = session.state;
+      const fields = {
+        target,
+        text: "\nX",
+        range: range(target, 0),
+        insertionStyle: { bold: true, italic: true, underline: true },
+      };
+      for (const request of [
+        () => session.previewText(fields),
+        () => session.replaceText(fields),
+      ]) {
+        await assert.rejects(
+          request(),
+          (error: unknown) =>
+            error instanceof ViewerError &&
+            error.code === "invalid-operation" &&
+            error.message.includes("section-break"),
+        );
+        assert.deepEqual(session.state, before);
+        assert.deepEqual((await session.save()).bytes, original);
+      }
     } finally {
       await end();
     }
