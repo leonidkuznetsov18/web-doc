@@ -16,11 +16,12 @@ import {
   WorkerEngineClient,
 } from "../worker-engine.js";
 import { pdfOperationSchemas } from "./schemas.js";
-import type { PageBitmap, PageLayout, TextLayout } from "./types.js";
+import type { PageBitmap, PageLayout, TextFont, TextLayout } from "./types.js";
 
 /** The reads behind the overlay primitives, beyond the core engine interface. */
 export interface PdfEngineReads {
   textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined>;
+  textFont(id: string, signal: AbortSignal): Promise<TextFont | undefined>;
   positionAt(
     pageIndex: number,
     point: PagePoint,
@@ -134,6 +135,10 @@ export class PdfEditEngineClient
 
   textLayout(id: string, signal: AbortSignal): Promise<TextLayout | undefined> {
     return this.request("edit-text-layout", { id }, signal);
+  }
+
+  textFont(id: string, signal: AbortSignal): Promise<TextFont | undefined> {
+    return this.request("edit-text-font", { id }, signal);
   }
 
   positionAt(
