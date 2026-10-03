@@ -200,6 +200,7 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
     const base = await this.#context(0, signal);
     // Slide operations change the count the later operations see.
     let pageCount = base.pageCount;
+    const replacedTextTargets = new Set<string>();
     for (const [index, operation] of operations.entries()) {
       const context = { ...base, pageCount, operationIndex: index };
       switch (operation.op) {
@@ -238,16 +239,27 @@ export class PptxEditEngine implements EditEngine, PptxEngineReads {
         continue;
       }
       const collect = issueCollector(index, issues);
+      // A preceding replacement changes this target's text length. Its style
+      // range is checked against the resulting text during sequential apply,
+      // which rolls back the whole batch if that later validation fails.
+      const deferStyleRange =
+        operation.op === "setTextStyle" &&
+        typeof target === "string" &&
+        replacedTextTargets.has(target);
       await handler.validate(
         operation as PptxOperation,
         context,
-        reference === undefined
+        reference === undefined && !deferStyleRange
           ? collect
           : (path, code, message) => {
-              if (!path.startsWith("/target") && !path.startsWith("/range"))
-                collect(path, code, message);
+              if (reference !== undefined && path.startsWith("/target")) return;
+              if (path === "/range" || path.startsWith("/range/")) return;
+              collect(path, code, message);
             },
       );
+      if (operation.op === "replaceText" && typeof target === "string") {
+        replacedTextTargets.add(target);
+      }
     }
     return issues;
   }
