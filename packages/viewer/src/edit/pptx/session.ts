@@ -15,7 +15,12 @@ import type {
   ToolResult,
   ToolSet,
 } from "../ai/types.js";
-import type { EditEngine, EditSessionCore } from "../engine.js";
+import type { TextRun } from "../../contracts.js";
+import type {
+  EditEngine,
+  EditSessionAccess,
+  EditSessionCore,
+} from "../engine.js";
 import type {
   ApplyOptions,
   AssetOptions,
@@ -68,8 +73,12 @@ export class PptxSession implements PptxEditSession {
   readonly #core: EditSessionCore;
   #tools: ToolSet | undefined;
 
-  constructor(core: EditSessionCore) {
+  /** The shown deck's text runs; absent in a headless session, which hits frames only. */
+  readonly #access: EditSessionAccess | undefined;
+
+  constructor(core: EditSessionCore, access?: EditSessionAccess) {
     this.#core = core;
+    this.#access = access;
   }
 
   get sessionId(): string {
@@ -138,14 +147,39 @@ export class PptxSession implements PptxEditSession {
     return this.#core.getElement(id, options) as Promise<ReadItem<PptxElement>>;
   }
 
-  elementsAt(
+  /**
+   * The elements under a point, top-most first: those whose frame holds it,
+   * and before them a shape whose text is painted there past its frame, as
+   * text wrapped below a short box is.
+   */
+  async elementsAt(
     pageIndex: number,
     point: PagePoint,
     options?: ReadOptions,
   ): Promise<ReadResult<PptxElement>> {
-    return this.#core.elementsAt(pageIndex, point, options) as Promise<
-      ReadResult<PptxElement>
-    >;
+    const framed = (await this.#core.elementsAt(
+      pageIndex,
+      point,
+      options,
+    )) as ReadResult<PptxElement>;
+    const access = this.#access;
+    if (!access) return framed;
+    const origins = (await access.getTextRuns(pageIndex, options?.signal))
+      .filter((run) => run.shapeOrigin && runHolds(run, point))
+      .map((run) => run.shapeOrigin!);
+    if (origins.length === 0) return framed;
+    const all = (await this.getElements({ pageIndex }, options)).items;
+    const painted = all.filter(
+      (element) =>
+        element.text !== undefined &&
+        !framed.items.some((hit) => hit.id === element.id) &&
+        origins.some((origin) => originOf(element, origin)),
+    );
+    if (painted.length === 0) return framed;
+    return Object.freeze({
+      ...framed,
+      items: Object.freeze([...painted, ...framed.items]),
+    });
   }
 
   findText(
@@ -321,4 +355,25 @@ function pptxReads(engine: EditEngine): PptxEngineReads {
       { details: { format: "pptx", reason: "no-reads" } },
     );
   return candidate as PptxEngineReads;
+}
+
+/** Whether a run's box holds a point. */
+function runHolds(run: TextRun, point: PagePoint): boolean {
+  return (
+    point.x >= run.x &&
+    point.x <= run.x + run.width &&
+    point.y >= run.y &&
+    point.y <= run.y + run.height
+  );
+}
+
+/** Whether a shape's frame starts where a run says its shape does, to half a pixel. */
+function originOf(
+  element: PptxElement,
+  origin: { readonly x: number; readonly y: number },
+): boolean {
+  const frame = element.frame ?? element.bounds;
+  return (
+    Math.abs(frame.x - origin.x) <= 0.5 && Math.abs(frame.y - origin.y) <= 0.5
+  );
 }
