@@ -427,7 +427,7 @@ export interface PdfEditSession extends EditSessionBase<
     options?: ReadOptions,
   ): Promise<ReadItem<TextLayout>>;
   /**
-   * The font a `text` or `textBox` element is drawn in, as a browser loads it,
+   * The font a `text`, `textBox` or `paragraph` element is drawn in, as a browser loads it,
    * or why it cannot be loaded; see `TextFont`.
    */
   getTextFont(

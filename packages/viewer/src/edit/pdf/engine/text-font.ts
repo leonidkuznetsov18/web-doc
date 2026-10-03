@@ -1,6 +1,7 @@
 import type { TextFont } from "../types.js";
 import { glyphUnicode, readCff } from "./cff.js";
 import { textStyle } from "./elements.js";
+import { fontBytes } from "./fonts.js";
 import { cffOpenType, completeSfnt, hasUnicodeCmap } from "./opentype.js";
 import type { Pdfium } from "./pdfium.js";
 
@@ -25,7 +26,7 @@ export function textFaceOf(
   if (!lib.FPDFFont_GetIsEmbedded(font))
     return { key: `name:${baseName}`, family, missing: "not-embedded" };
   // A Type 3 font is embedded as drawings, with no program to read.
-  const program = fontProgram(pdfium, font);
+  const program = fontBytes(pdfium, font);
   if (!program)
     return { key: `embedded:${baseName}`, family, missing: "unreadable" };
   const key = `${baseName}#${fnv1a(program).toString(16)}`;
@@ -68,25 +69,6 @@ function faceOf(
   return data
     ? { face: { data, format: "opentype" } }
     : { missing: "no-unicode" };
-}
-
-/** The font program a PDF font object embeds, or `undefined` for a font it does not embed. */
-function fontProgram(pdfium: Pdfium, font: number): Uint8Array | undefined {
-  const { lib } = pdfium;
-  const size = pdfium.readNumbers(1, "i32", ([out]) =>
-    lib.FPDFFont_GetFontData(font, 0, 0, out!),
-  )?.[0];
-  if (!size) return undefined;
-  const buffer = pdfium.malloc(size);
-  const out = pdfium.malloc(4);
-  try {
-    return lib.FPDFFont_GetFontData(font, buffer, size, out)
-      ? pdfium.readBytes(buffer, size)
-      : undefined;
-  } finally {
-    pdfium.free(out);
-    pdfium.free(buffer);
-  }
 }
 
 /** FNV-1a over the program: a cheap, stable key for one font. */

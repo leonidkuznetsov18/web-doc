@@ -625,12 +625,19 @@ export class PdfEditDocument {
   /** The browser face of the font a text or text box element is drawn in, see `TextFont`. */
   textFont(elementId: string): TextFont | undefined {
     const location = this.#locate(elementId);
-    const element = location && this.getElement(elementId);
-    if (!element || (element.kind !== "text" && element.kind !== "textBox"))
+    if (!location) return undefined;
+    // A paragraph not yet edited is not listed among the elements; its id
+    // still locates its rows.
+    const kind =
+      this.getElement(elementId)?.kind ??
+      (this.#paragraphOf(elementId)?.paragraph.id === elementId
+        ? "paragraph"
+        : undefined);
+    if (kind !== "text" && kind !== "textBox" && kind !== "paragraph")
       return undefined;
     const { lib } = this.#pdfium;
     return this.#withPage(location.pageIndex, (page) => {
-      // A text box's lines share their font; its first line answers.
+      // A text box's lines and a paragraph's rows share their font; the first answers.
       const object = location.indexes
         .map((index) => lib.FPDFPage_GetObject(page, index))
         .find((entry) => lib.FPDFPageObj_GetType(entry) === OBJECT_TEXT);
