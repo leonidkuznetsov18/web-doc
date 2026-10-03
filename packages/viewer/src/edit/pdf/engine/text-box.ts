@@ -212,15 +212,21 @@ export function removeObjects(
 ): number {
   const { lib } = context.pdfium;
   const first = location.indexes[0]!;
-  context.withPage(location.pageIndex, (page) => {
+  context.withHolder(location, (holder) => {
     // Highest first, so earlier indexes stay valid while removing.
     for (const index of [...location.indexes].reverse()) {
-      const object = lib.FPDFPage_GetObject(page, index);
-      lib.FPDFPage_RemoveObject(page, object);
+      const object = lib.FPDFPage_GetObject(holder, index);
+      lib.FPDFPage_RemoveObject(holder, object);
       lib.FPDFPageObj_Destroy(object);
     }
   });
-  context.spliceObjects(location.pageIndex, first, location.indexes.length, []);
+  context.spliceObjects(
+    location.pageIndex,
+    first,
+    location.indexes.length,
+    [],
+    location.forms,
+  );
   return first;
 }
 

@@ -82,6 +82,7 @@ export function createPdfEditHandler(
         };
         await fonts.prepare(engine().fontRequests(operations));
         await engine().images.prepare(operations, host.decodeImage, assets);
+        await engine().prepareRewrites(operations);
         return engine().validate(operations);
       }
       case "edit-apply": {

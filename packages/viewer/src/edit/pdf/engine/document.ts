@@ -33,11 +33,19 @@ import {
 } from "./layout.js";
 import {
   markIsFresh,
+  OBJECT_FORM,
   readMark,
   scanPage,
   type MarkParams,
   type ObjectRecord,
 } from "./elements.js";
+import {
+  formChildren,
+  formsMatrix,
+  graphicsStatesResolve,
+  objectAt,
+  rewriteForms,
+} from "./forms.js";
 import { FontLibrary, TextMeasurer } from "./fonts.js";
 import { fontRequestsOf } from "./text-box.js";
 import {
@@ -99,6 +107,14 @@ export type DocumentFeature = "docmdp" | "tagged" | "pdfa";
  */
 /** FPDFBitmap_CreateEx pixel format with alpha. */
 const BITMAP_BGRA = 4;
+/** Forms nested deeper are kept whole; PDFium itself stops parsing around here. */
+const MAX_FORM_DEPTH = 16;
+/** Size of the renders that check a form rewrite. */
+const FAITHFUL_RENDER_PIXELS = 2_000_000;
+/** A channel may differ by this much before a pixel counts as changed. */
+const PIXEL_TOLERANCE = 64;
+/** One changed pixel is allowed per this many: rewritten numbers may round. */
+const DIFFERING_PIXELS_PER_ALLOWED = 20_000;
 /** FPDF_RenderPageBitmap flag: draw annotations, as PDF.js does. */
 const RENDER_ANNOTATIONS = 0x01;
 
@@ -216,6 +232,10 @@ export class PdfEditDocument {
   #measurer: TextMeasurer;
   #pages: PageRecord[];
   #batches = 0;
+  /** Bumped by every change of state, so verdicts about the old one are dropped. */
+  #revision = 0;
+  /** Whether a form rewrite keeps its page as it is, by `#verdictKey`, for `#revision`. */
+  #verdicts = new Map<string, boolean>();
 
   constructor(
     pdfium: Pdfium,
@@ -357,6 +377,7 @@ export class PdfEditDocument {
       warnings.push(...result.warnings);
     });
     this.#batches += 1;
+    this.#changed();
     return {
       createdIds,
       removedIds,
@@ -489,7 +510,149 @@ export class PdfEditDocument {
     this.#measurer = new TextMeasurer(this.#pdfium, this.#document.handle);
     this.#pages = this.#originalPages();
     this.#batches = 0;
+    this.#changed();
     for (const batch of target.batches) this.apply(batch);
+  }
+
+  /**
+   * Checks, before a batch is validated, whether rewriting the forms that
+   * hold its targets keeps their pages as they are; validation then refuses
+   * text inside forms that would not. The check needs the platform's zlib
+   * stream, so it runs here rather than in the synchronous validation.
+   */
+  async prepareRewrites(
+    operations: readonly PdfOrUnknownOperation[],
+  ): Promise<void> {
+    for (const operation of operations) {
+      const target = (operation as { readonly target?: unknown }).target;
+      if (typeof target !== "string") continue;
+      const location = this.#locate(target);
+      if (!location || location.forms.length === 0) continue;
+      const key = this.#verdictKey(location);
+      if (this.#verdicts.has(key)) continue;
+      const revision = this.#revision;
+      const verdict = await this.#rewritesFaithfully(
+        location.pageIndex,
+        location.forms,
+      );
+      if (revision === this.#revision) this.#verdicts.set(key, verdict);
+    }
+  }
+
+  #changed(): void {
+    this.#revision += 1;
+    this.#verdicts.clear();
+  }
+
+  #verdictKey(location: ElementLocation): string {
+    return `${this.#pages[location.pageIndex]!.key}|${location.forms.join("/")}`;
+  }
+
+  /**
+   * Whether rewriting the forms `forms` leads through leaves the page as a
+   * reader will see it. The page is copied into a scratch document, where
+   * the rewrite runs and the page is written and parsed again; the result
+   * must hold the same objects, render the same, and set no graphics state
+   * its new forms do not hold. A form whose dictionary carries what the
+   * rewrite cannot keep — a transparency group, optional content, a pattern
+   * laid out by its /Matrix — draws differently and is refused, and so is
+   * one whose objects set graphics states from the old forms' resources.
+   */
+  async #rewritesFaithfully(
+    pageIndex: number,
+    forms: readonly number[],
+  ): Promise<boolean> {
+    const pdfium = this.#pdfium;
+    const { lib } = pdfium;
+    const size = this.#withPage(pageIndex, (_page, _textPage, geometry) =>
+      displayedSize(geometry),
+    );
+    const scale = Math.min(
+      1,
+      Math.sqrt(FAITHFUL_RENDER_PIXELS / (size.width * size.height)),
+    );
+    const width = Math.max(1, Math.ceil(size.width * scale));
+    const height = Math.max(1, Math.ceil(size.height * scale));
+    const copy = pdfium.createDocument();
+    try {
+      const indexes = pdfium.writeInt32Array([pageIndex]);
+      try {
+        if (
+          !lib.FPDF_ImportPagesByIndex(
+            copy.handle,
+            this.#document.handle,
+            indexes,
+            1,
+            0,
+          )
+        )
+          return false;
+      } finally {
+        pdfium.free(indexes);
+      }
+      const counts = (page: number): number[] =>
+        forms.map((_, depth) =>
+          lib.FPDFFormObj_CountObjects(
+            objectAt(pdfium, page, forms.slice(0, depth + 1)),
+          ),
+        );
+      let written:
+        { bytes: Uint8Array; standIns: readonly number[] } | undefined;
+      const read = (
+        change: (page: number) => void,
+      ): { readonly pixels: Uint8Array; readonly counts: number[] } => {
+        const page = lib.FPDF_LoadPage(copy.handle, 0);
+        if (!page)
+          throw new ViewerError(
+            "render-failed",
+            "PDFium could not load a copy",
+          );
+        try {
+          change(page);
+          return {
+            pixels: new Uint8Array(this.#render(page, width, height)),
+            counts: counts(page),
+          };
+        } finally {
+          lib.FPDF_ClosePage(page);
+        }
+      };
+      const before = read(() => {});
+      read((page) => {
+        // Saved while the stand-ins exist: deleting a page empties its dictionary.
+        rewriteForms(
+          pdfium,
+          copy.handle,
+          page,
+          forms,
+          () => {},
+          (standIns) => {
+            written = { bytes: copy.save("full"), standIns };
+          },
+        );
+        if (!lib.FPDFPage_GenerateContent(page))
+          throw new ViewerError("edit-failed", "PDFium could not write a copy");
+      });
+      // Parsed again from what was written, as a reader will see it.
+      const after = read(() => {});
+      // Every object must come back as one object, or ids would shift.
+      if (after.counts.some((count, depth) => count !== before.counts[depth]))
+        return false;
+      if (
+        changedPixels(before.pixels, after.pixels) >
+        (width * height) / DIFFERING_PIXELS_PER_ALLOWED
+      )
+        return false;
+      return (
+        written !== undefined &&
+        (await graphicsStatesResolve(written.bytes, written.standIns))
+      );
+    } catch (error) {
+      if (error instanceof ViewerError) return false;
+      throw error;
+    } finally {
+      copy.close();
+    }
   }
 
   getElements(query: ElementQuery): PdfElement[] {
@@ -622,14 +785,13 @@ export class PdfEditDocument {
           { details: { actual: pixels, limit: this.#limits.maxDecodedPixels } },
         );
       const wanted = new Set(elementIds);
-      const records = this.#objectsOf(pageIndex, page);
       const suppressed: {
         readonly object: number;
         readonly active: boolean;
       }[] = [];
-      records.forEach((record, index) => {
+      eachObject(this.#objectsOf(pageIndex, page), [], (record, path) => {
         if (!wanted.has(record.id)) return;
-        const object = lib.FPDFPage_GetObject(page, index);
+        const object = objectAt(this.#pdfium, page, path);
         const active =
           this.#pdfium.readNumbers(1, "i32", ([pointer]) =>
             lib.FPDFPageObj_GetIsActive(object, pointer!),
@@ -748,6 +910,39 @@ export class PdfEditDocument {
       newId: (pageIndex, suffix = "") =>
         `${this.#unusedId(pageIndex, `${this.#pages[pageIndex]!.key}:n${stateId}.${operationIndex}.${created++}`)}${suffix}`,
       withPage: (pageIndex, use) => this.#writePage(pageIndex, use),
+      withHolder: (location, use) =>
+        this.#writePage(location.pageIndex, (page) =>
+          location.forms.length === 0
+            ? use(page)
+            : rewriteForms(
+                this.#pdfium,
+                this.#document.handle,
+                page,
+                location.forms,
+                use,
+              ),
+        ),
+      readObject: (location, index, use) =>
+        this.#withPage(location.pageIndex, (page, textPage) =>
+          use(
+            objectAt(this.#pdfium, page, [...location.forms, index]),
+            textPage,
+          ),
+        ),
+      holderGeometry: (location) =>
+        this.#withPage(location.pageIndex, (page, _textPage, geometry) =>
+          location.forms.length === 0
+            ? geometry
+            : {
+                ...geometry,
+                matrix: formsMatrix(this.#pdfium, page, location.forms),
+              },
+        ),
+      // Text inside forms is checked by `prepareRewrites` ahead of validation;
+      // unchecked, it is refused.
+      rewritable: (location) =>
+        location.forms.length === 0 ||
+        this.#verdicts.get(this.#verdictKey(location)) === true,
       appendObjects: (pageIndex, records) => {
         const page = this.#pages[pageIndex]!;
         page.objects = [...(page.objects ?? []), ...records];
@@ -784,11 +979,15 @@ export class PdfEditDocument {
         delete page.geometry;
         delete page.elements;
       },
-      spliceObjects: (pageIndex, start, count, records) => {
+      spliceObjects: (pageIndex, start, count, records, forms = []) => {
         const page = this.#pages[pageIndex]!;
-        const objects = [...(page.objects ?? [])];
-        objects.splice(start, count, ...records);
-        page.objects = objects;
+        page.objects = spliced(
+          page.objects ?? [],
+          forms,
+          start,
+          count,
+          records,
+        );
         delete page.elements;
       },
     };
@@ -810,7 +1009,19 @@ export class PdfEditDocument {
       if (record.id === id) indexes.push(index);
     });
     const record = records[indexes[0] ?? -1];
-    return record ? { pageIndex, indexes, record } : undefined;
+    if (record) return { pageIndex, forms: [], indexes, record };
+    // Objects inside forms are single objects, never marked groups.
+    let found: ElementLocation | undefined;
+    eachObject(records, [], (entry, path) => {
+      if (!found && entry.id === id && path.length > 1)
+        found = {
+          pageIndex,
+          forms: path.slice(0, -1),
+          indexes: [path.at(-1)!],
+          record: entry,
+        };
+    });
+    return found;
   }
 
   /** Loads a page, lets `use` change it, regenerates its content stream. */
@@ -878,10 +1089,15 @@ export class PdfEditDocument {
     for (let index = 0; index < count; index += 1) {
       const object = lib.FPDFPage_GetObject(page, index);
       const mark = readMark(this.#pdfium, object);
+      const type = lib.FPDFPageObj_GetType(object);
+      const id = mark ? mark.id : `${record.key}:o${index}`;
       objects.push({
-        id: mark ? mark.id : `${record.key}:o${index}`,
-        type: lib.FPDFPageObj_GetType(object),
+        id,
+        type,
         ...(mark ? { mark: this.#ownMark(mark, record.key) } : {}),
+        ...(type === OBJECT_FORM
+          ? { children: this.#formRecords(object, id, 1) }
+          : {}),
       });
     }
     // A table's inputs sit on its first object; members without that head
@@ -930,6 +1146,26 @@ export class PdfEditDocument {
   }
 
   /**
+   * Records for a form's objects, named by their path from the page object:
+   * `p0:o3/1/0` is object 0 of the form that is object 1 of form `p0:o3`.
+   * Marks inside forms are not web-doc's, so they are not read.
+   */
+  #formRecords(form: number, formId: string, depth: number): ObjectRecord[] {
+    const { lib } = this.#pdfium;
+    return formChildren(this.#pdfium, form).map((object, index) => {
+      const id = `${formId}/${index}`;
+      const type = lib.FPDFPageObj_GetType(object);
+      return {
+        id,
+        type,
+        ...(type === OBJECT_FORM && depth < MAX_FORM_DEPTH
+          ? { children: this.#formRecords(object, id, depth + 1) }
+          : {}),
+      };
+    });
+  }
+
+  /**
    * `id`, or its first free `~n` when an object saved by an earlier session
    * has it already. Only ids a session numbered (`<key>:n…`) can collide, so
    * only those are gathered; the objects are read without the page's text.
@@ -939,11 +1175,11 @@ export class PdfEditDocument {
     const objects = record.objects ?? this.#loadObjects(pageIndex);
     const numbered = `${record.key}:n`;
     const taken = new Set<string>();
-    for (const object of objects) {
+    eachObject(objects, [], (object) => {
       if (object.id.startsWith(numbered)) taken.add(object.id);
       if (object.staleMarkId?.startsWith(numbered))
         taken.add(object.staleMarkId);
-    }
+    });
     if (!taken.has(id)) return id;
     let suffix = 1;
     while (taken.has(`${id}~${suffix}`)) suffix += 1;
@@ -996,7 +1232,7 @@ export class PdfEditDocument {
   #scanText<T>(pageIndex: number, use: (scan: TextPageScan) => T): T {
     return this.#withPage(pageIndex, (page, textPage, geometry) => {
       const records = this.#objectsOf(pageIndex, page);
-      const { byObject, elements } = scanPage(
+      const { byObject, elements, outer } = scanPage(
         this.#pdfium,
         page,
         textPage,
@@ -1010,7 +1246,15 @@ export class PdfEditDocument {
         byObject,
         new Map(elements.map((element) => [element.id, element.text ?? ""])),
       );
-      return use({ page, textPage, geometry, byObject, elements, offsets });
+      return use({
+        page,
+        textPage,
+        geometry,
+        byObject,
+        outer,
+        elements,
+        offsets,
+      });
     });
   }
 
@@ -1191,4 +1435,52 @@ export class PdfEditDocument {
       ranges,
     };
   }
+}
+
+/** Visits every record, inside forms too, with its path of indexes from the page. */
+function eachObject(
+  records: readonly ObjectRecord[],
+  path: readonly number[],
+  visit: (record: ObjectRecord, path: readonly number[]) => void,
+): void {
+  records.forEach((record, index) => {
+    const at = [...path, index];
+    visit(record, at);
+    if (record.children) eachObject(record.children, at, visit);
+  });
+}
+
+/** `records` with `count` records from `start` replaced, inside the form `forms` leads to. */
+function spliced(
+  records: readonly ObjectRecord[],
+  forms: readonly number[],
+  start: number,
+  count: number,
+  replacement: readonly ObjectRecord[],
+): ObjectRecord[] {
+  const copy = [...records];
+  if (forms.length === 0) {
+    copy.splice(start, count, ...replacement);
+    return copy;
+  }
+  const [index, ...rest] = forms as [number, ...number[]];
+  const form = copy[index]!;
+  copy[index] = {
+    ...form,
+    children: spliced(form.children ?? [], rest, start, count, replacement),
+  };
+  return copy;
+}
+
+/** Pixels of two same-sized RGBA renders whose colour differs beyond antialiasing. */
+function changedPixels(before: Uint8Array, after: Uint8Array): number {
+  let changed = 0;
+  for (let offset = 0; offset < before.length; offset += 4)
+    if (
+      Math.abs(before[offset]! - after[offset]!) > PIXEL_TOLERANCE ||
+      Math.abs(before[offset + 1]! - after[offset + 1]!) > PIXEL_TOLERANCE ||
+      Math.abs(before[offset + 2]! - after[offset + 2]!) > PIXEL_TOLERANCE
+    )
+      changed += 1;
+  return changed;
 }

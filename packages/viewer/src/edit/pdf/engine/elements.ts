@@ -7,10 +7,12 @@ import {
 } from "../schemas.js";
 import type { PdfElement, PdfShapeStyle, PdfTextStyle } from "../types.js";
 import {
+  concat,
   round,
   roundRect,
   unionRects,
   userRectToPage,
+  type Matrix,
   type PageGeometry,
 } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
@@ -20,6 +22,7 @@ import type { TableSpec } from "./tables.js";
 export const OBJECT_TEXT = 1;
 export const OBJECT_PATH = 2;
 export const OBJECT_IMAGE = 3;
+export const OBJECT_FORM = 5;
 
 /** Marked-content tag and parameter that carry web-doc's own elements. */
 export const MARK_NAME = "WebDoc";
@@ -48,12 +51,24 @@ export interface ObjectRecord {
    * would join the new object to this one.
    */
   readonly staleMarkId?: string;
+  /** A Form XObject's own objects, in its drawing order. */
+  readonly children?: readonly ObjectRecord[];
+}
+
+/** What a page scan found: its elements and who draws each character. */
+export interface PageScan {
+  readonly elements: PdfElement[];
+  /** Object handle → element id, in drawing order, text inside forms included. */
+  readonly byObject: Map<number, string>;
+  /** Text objects inside forms → the matrix that maps their form onto the page. */
+  readonly outer: Map<number, Matrix>;
 }
 
 /**
  * Reads the objects of a loaded page in drawing order and turns them into
  * elements: plain objects become one element each, objects tagged with the
- * same `WebDoc` mark become one composite element.
+ * same `WebDoc` mark become one composite element. Text inside Form
+ * XObjects becomes elements of its own, listed after its form.
  */
 export function scanPage(
   pdfium: Pdfium,
@@ -62,9 +77,10 @@ export function scanPage(
   pageIndex: number,
   geometry: PageGeometry,
   records: readonly ObjectRecord[],
-): { readonly elements: PdfElement[]; readonly byObject: Map<number, string> } {
+): PageScan {
   const { lib } = pdfium;
   const byObject = new Map<number, string>();
+  const outer = new Map<number, Matrix>();
   const elements: PdfElement[] = [];
   const groups = new Map<string, PdfElement[]>();
   const count = Math.min(lib.FPDFPage_CountObjects(page), records.length);
@@ -89,6 +105,15 @@ export function scanPage(
         elements.push(element); // placeholder keeps the group's z-order
       }
     } else elements.push(element);
+    if (record.children)
+      formTexts(pdfium, object, record.children, objectMatrix(pdfium, object), {
+        textPage,
+        pageIndex,
+        geometry,
+        byObject,
+        outer,
+        elements,
+      });
   }
   return {
     elements: elements.map((element) => {
@@ -100,7 +125,64 @@ export function scanPage(
         : element;
     }),
     byObject,
+    outer,
   };
+}
+
+/**
+ * Adds the text objects of a form, and of the forms inside it, as text
+ * elements; `matrix` maps the form's space onto the page. Other objects in
+ * forms stay part of their form's element.
+ */
+function formTexts(
+  pdfium: Pdfium,
+  form: number,
+  records: readonly ObjectRecord[],
+  matrix: Matrix,
+  scan: {
+    readonly textPage: number;
+    readonly pageIndex: number;
+    readonly geometry: PageGeometry;
+    readonly byObject: Map<number, string>;
+    readonly outer: Map<number, Matrix>;
+    readonly elements: PdfElement[];
+  },
+): void {
+  const { lib } = pdfium;
+  const count = Math.min(lib.FPDFFormObj_CountObjects(form), records.length);
+  const geometry = { ...scan.geometry, matrix };
+  for (let index = 0; index < count; index += 1) {
+    const object = lib.FPDFFormObj_GetObject(form, index);
+    const record = records[index]!;
+    if (record.type === OBJECT_TEXT) {
+      scan.byObject.set(object, record.id);
+      scan.outer.set(object, matrix);
+      const element = plainElement(
+        pdfium,
+        object,
+        scan.textPage,
+        record,
+        scan.pageIndex,
+        geometry,
+      );
+      if (element)
+        scan.elements.push({ ...element, operations: FORM_TEXT_OPERATIONS });
+    } else if (record.children)
+      formTexts(
+        pdfium,
+        object,
+        record.children,
+        concat(objectMatrix(pdfium, object), matrix),
+        scan,
+      );
+  }
+}
+
+/** An object's own matrix, identity when PDFium has none. */
+export function objectMatrix(pdfium: Pdfium, object: number): Matrix {
+  return (pdfium.readNumbers(6, "float", ([pointer]) =>
+    pdfium.lib.FPDFPageObj_GetMatrix(object, pointer!),
+  ) ?? [1, 0, 0, 1, 0, 0]) as unknown as Matrix;
 }
 
 /** The `WebDoc` mark of an object, if it carries a valid one. */
@@ -248,7 +330,7 @@ function plainElement(
         ...base,
         kind: "text",
         text: textOf(pdfium, object, textPage),
-        textStyle: textStyle(pdfium, object),
+        textStyle: textStyle(pdfium, object, geometry.matrix),
         operations: TEXT_OPERATIONS,
       };
     case OBJECT_IMAGE:
@@ -325,6 +407,13 @@ const SHAPE_OPERATIONS = Object.freeze([
   "setShapeStyle",
   ...TRANSFORM_OPERATIONS,
 ]);
+/** Text inside a form is rewritten with its form; stretching it is not offered. */
+const FORM_TEXT_OPERATIONS = Object.freeze([
+  "replaceText",
+  "setTextStyle",
+  "moveElement",
+  "deleteElement",
+]);
 const TABLE_OPERATIONS = Object.freeze([
   "setTableCell",
   "moveElement",
@@ -348,7 +437,12 @@ export function textScale(matrix: readonly number[] | undefined): number {
   return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
-export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
+/** The style a text object shows; `outer` maps the form it sits in onto the page. */
+export function textStyle(
+  pdfium: Pdfium,
+  object: number,
+  outer?: Matrix,
+): PdfTextStyle {
   const { lib } = pdfium;
   const font = lib.FPDFTextObj_GetFont(object);
   const baseName = pdfium.readUtf8String((buffer, bytes) =>
@@ -368,12 +462,10 @@ export function textStyle(pdfium: Pdfium, object: number): PdfTextStyle {
     pdfium.readNumbers(1, "float", ([pointer]) =>
       lib.FPDFTextObj_GetFontSize(object, pointer!),
     )?.[0] ?? 0;
-  const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
-    lib.FPDFPageObj_GetMatrix(object, pointer!),
-  );
+  const matrix = objectMatrix(pdfium, object);
   return {
     fontFamily: family,
-    fontSize: round(size * textScale(matrix)),
+    fontSize: round(size * textScale(outer ? concat(matrix, outer) : matrix)),
     bold:
       weight >= 600 ||
       (flags & FLAG_FORCE_BOLD) !== 0 ||
@@ -450,11 +542,8 @@ function objectRotation(
   object: number,
   geometry: PageGeometry,
 ): number {
-  const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
-    pdfium.lib.FPDFPageObj_GetMatrix(object, pointer!),
-  );
-  if (!matrix) return 0;
-  const [a, b] = matrix as [number, number, ...number[]];
+  const own = objectMatrix(pdfium, object);
+  const [a, b] = geometry.matrix ? concat(own, geometry.matrix) : own;
   // User space is y-up, so a positive angle there is counter-clockwise on
   // the displayed page; the page's own quarter turns add to it.
   const degrees = (-Math.atan2(b, a) * 180) / Math.PI + geometry.rotation * 90;

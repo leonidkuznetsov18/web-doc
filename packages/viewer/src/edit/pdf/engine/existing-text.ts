@@ -4,21 +4,27 @@ import type {
   ReplaceTextOperation,
   SetTextStyleOperation,
 } from "../types.js";
-import { objectBounds, OBJECT_TEXT, textScale } from "./elements.js";
+import {
+  objectBounds,
+  objectMatrix,
+  OBJECT_TEXT,
+  textScale,
+} from "./elements.js";
 import {
   firstNonWinAnsi,
   isStandardFamily,
   parseCmap,
   type CmapCoverage,
 } from "./fonts.js";
-import type {
-  ElementLocation,
-  Issue,
-  OperationContext,
-  OperationHandler,
-  OperationResult,
+import {
+  rewritable,
+  type ElementLocation,
+  type Issue,
+  type OperationContext,
+  type OperationHandler,
+  type OperationResult,
 } from "./operations.js";
-import { pageToUser } from "./geometry.js";
+import { concat, pageToUser, type Matrix } from "./geometry.js";
 import type { Pdfium } from "./pdfium.js";
 import {
   parseColor,
@@ -48,7 +54,7 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
       );
     }
     const target = textTarget(operation.target, context, issue);
-    if (!target) return;
+    if (!target || !rewritable(target.location, context, issue)) return;
     const whole = splice(target.element.text ?? "", operation, issue);
     if (whole === undefined) return;
     if (!validateScript(operation.text, issue)) return;
@@ -145,7 +151,8 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
   validate(operation, context, issue) {
     if (textBoxTarget(operation.target, context))
       return textBoxSetTextStyle.validate(operation, context, issue);
-    if (!textTarget(operation.target, context, issue)) return;
+    const target = textTarget(operation.target, context, issue);
+    if (!target || !rewritable(target.location, context, issue)) return;
     for (const field of [
       "fontFamily",
       "bold",
@@ -168,9 +175,9 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
     const { location } = target;
     if (operation.style.color !== undefined) {
       const [r, g, b] = parseColor(operation.style.color);
-      context.withPage(location.pageIndex, (page) => {
+      context.withHolder(location, (holder) => {
         lib.FPDFPageObj_SetFillColor(
-          lib.FPDFPage_GetObject(page, location.indexes[0]!),
+          lib.FPDFPage_GetObject(holder, location.indexes[0]!),
           r,
           g,
           b,
@@ -211,6 +218,16 @@ function textTarget(
   return { location, element };
 }
 
+/** What maps the element's holder onto the page; identity on the page itself. */
+function outerMatrix(
+  context: OperationContext,
+  location: ElementLocation,
+): Matrix {
+  return location.forms.length === 0
+    ? [1, 0, 0, 1, 0, 0]
+    : context.holderGeometry(location).matrix!;
+}
+
 /** Right-to-left scripts need shaping the MVP does not do. */
 function validateScript(text: string, issue: Issue): boolean {
   for (const character of text) {
@@ -244,8 +261,8 @@ function canKeepFont(
 ): boolean {
   const { pdfium } = context;
   const { lib } = pdfium;
-  return context.withPage(target.location.pageIndex, (page) => {
-    const object = lib.FPDFPage_GetObject(page, target.location.indexes[0]!);
+  const { location } = target;
+  return context.readObject(location, location.indexes[0]!, (object) => {
     const font = lib.FPDFTextObj_GetFont(object);
     if (!lib.FPDFFont_GetIsEmbedded(font)) {
       const base = pdfium.readUtf8String((buffer, bytes) =>
@@ -300,30 +317,22 @@ function replaceInPlace(
 ): boolean {
   const { pdfium } = context;
   const { lib } = pdfium;
-  const index = target.location.indexes[0]!;
+  const { location } = target;
+  const index = location.indexes[0]!;
   const previous = target.element.text ?? "";
-  context.withPage(target.location.pageIndex, (page) => {
-    setText(pdfium, lib.FPDFPage_GetObject(page, index), text);
+  context.withHolder(location, (holder) => {
+    setText(pdfium, lib.FPDFPage_GetObject(holder, index), text);
   });
-  const readBack = context.withPage(target.location.pageIndex, (page) => {
-    const textPage = lib.FPDFText_LoadPage(page);
-    try {
-      return pdfium.readWideString((buffer, bytes) =>
-        lib.FPDFTextObj_GetText(
-          lib.FPDFPage_GetObject(page, index),
-          textPage,
-          buffer,
-          bytes,
-        ),
-      );
-    } finally {
-      lib.FPDFText_ClosePage(textPage);
-    }
-  });
+  // Read from the page as written, so the font's encoding is part of the check.
+  const readBack = context.readObject(location, index, (object, textPage) =>
+    pdfium.readWideString((buffer, bytes) =>
+      lib.FPDFTextObj_GetText(object, textPage, buffer, bytes),
+    ),
+  );
   if (readBack === text) return true;
   // Put the old text back so the fallback path starts from a known state.
-  context.withPage(target.location.pageIndex, (page) => {
-    setText(pdfium, lib.FPDFPage_GetObject(page, index), previous);
+  context.withHolder(location, (holder) => {
+    setText(pdfium, lib.FPDFPage_GetObject(holder, index), previous);
   });
   return false;
 }
@@ -354,16 +363,15 @@ function splitAround(
     text: middle,
   });
   const createdIds: string[] = [];
-  const written = context.withPage(location.pageIndex, (page) => {
+  const outer = outerMatrix(context, location);
+  const written = context.withHolder(location, (page) => {
     const old = lib.FPDFPage_GetObject(page, index);
     const oldFont = lib.FPDFTextObj_GetFont(old);
-    const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
-      lib.FPDFPageObj_GetMatrix(old, pointer!),
-    ) ?? [1, 0, 0, 1, 0, 0];
+    const matrix = objectMatrix(pdfium, old);
     const size =
       pdfium.readNumbers(1, "float", ([pointer]) =>
         lib.FPDFTextObj_GetFontSize(old, pointer!),
-      )?.[0] ?? style.fontSize / textScale(matrix);
+      )?.[0] ?? style.fontSize / textScale(concat(matrix, outer));
     const [a, b, c, d, e, f] = matrix as [
       number,
       number,
@@ -444,7 +452,7 @@ function splitAround(
     createdIds.push(id);
     return { id, type: OBJECT_TEXT };
   });
-  context.spliceObjects(location.pageIndex, index, 1, records);
+  context.spliceObjects(location.pageIndex, index, 1, records, location.forms);
   return {
     createdIds,
     changedPages: [location.pageIndex],
@@ -477,15 +485,14 @@ function replaceWithFallback(
     italic: style.italic,
     text,
   });
-  context.withPage(location.pageIndex, (page) => {
+  const outer = outerMatrix(context, location);
+  context.withHolder(location, (page) => {
     const old = lib.FPDFPage_GetObject(page, index);
-    const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
-      lib.FPDFPageObj_GetMatrix(old, pointer!),
-    ) ?? [1, 0, 0, 1, 0, 0];
+    const matrix = objectMatrix(pdfium, old);
     const size =
       pdfium.readNumbers(1, "float", ([pointer]) =>
         lib.FPDFTextObj_GetFontSize(old, pointer!),
-      )?.[0] ?? style.fontSize / textScale(matrix);
+      )?.[0] ?? style.fontSize / textScale(concat(matrix, outer));
     const object = lib.FPDFPageObj_CreateTextObj(
       context.document,
       font.handle,
@@ -507,9 +514,13 @@ function replaceWithFallback(
     lib.FPDFPageObj_Destroy(old);
     lib.FPDFPage_InsertObjectAtIndex(page, object, index);
   });
-  context.spliceObjects(location.pageIndex, index, 1, [
-    { id: location.record.id, type: OBJECT_TEXT },
-  ]);
+  context.spliceObjects(
+    location.pageIndex,
+    index,
+    1,
+    [{ id: location.record.id, type: OBJECT_TEXT }],
+    location.forms,
+  );
   return {
     createdIds: [],
     changedPages: [location.pageIndex],
@@ -538,9 +549,10 @@ function resize(
   const { lib } = pdfium;
   const { location } = target;
   const index = location.indexes[0]!;
-  const geometry = context.geometry(location.pageIndex);
+  const geometry = context.holderGeometry(location);
+  const outer = geometry.matrix ?? [1, 0, 0, 1, 0, 0];
   const before = target.element.bounds;
-  context.withPage(location.pageIndex, (page) => {
+  context.withHolder(location, (page) => {
     const old = lib.FPDFPage_GetObject(page, index);
     const textPage = lib.FPDFText_LoadPage(page);
     let text: string;
@@ -551,9 +563,7 @@ function resize(
     } finally {
       lib.FPDFText_ClosePage(textPage);
     }
-    const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
-      lib.FPDFPageObj_GetMatrix(old, pointer!),
-    ) ?? [1, 0, 0, 1, 0, 0];
+    const matrix = objectMatrix(pdfium, old);
     const color = pdfium.readNumbers(4, "i32", ([r, g, b, a]) =>
       lib.FPDFPageObj_GetFillColor(old, r!, g!, b!, a!),
     ) ?? [0, 0, 0, 255];
@@ -562,7 +572,7 @@ function resize(
     const object = lib.FPDFPageObj_CreateTextObj(
       context.document,
       lib.FPDFTextObj_GetFont(old),
-      fontSize / textScale(matrix),
+      fontSize / textScale(concat(matrix, outer)),
     );
     setText(pdfium, object, text);
     lib.FPDFPageObj_SetFillColor(
@@ -584,7 +594,7 @@ function resize(
     lib.FPDFPage_RemoveObject(page, old);
     lib.FPDFPageObj_Destroy(old);
     lib.FPDFPage_InsertObjectAtIndex(page, object, index);
-    // Anchor the top-left corner where it was.
+    // Anchor the top-left corner where it was; the geometry maps a form's space.
     const after = objectBounds(pdfium, object, geometry);
     if (after) {
       const from = pageToUser(geometry, 0, 0);
@@ -600,9 +610,13 @@ function resize(
       );
     }
   });
-  context.spliceObjects(location.pageIndex, index, 1, [
-    { id: location.record.id, type: OBJECT_TEXT },
-  ]);
+  context.spliceObjects(
+    location.pageIndex,
+    index,
+    1,
+    [{ id: location.record.id, type: OBJECT_TEXT }],
+    location.forms,
+  );
 }
 
 function result(location: ElementLocation): OperationResult {
