@@ -110,6 +110,14 @@ test("keeps visible paint order for renderer-produced overflow hits", async ({
             paragraphs: [[]],
             fill: '<a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>',
           }),
+          textShape({
+            id: 4,
+            x: 40 * unit,
+            y: 100 * unit,
+            cx: 100 * unit,
+            cy: 20 * unit,
+            paragraphs: [[{ text: "Top", rPr: 'sz="1200"' }]],
+          }),
         ],
       },
     ],
@@ -185,6 +193,7 @@ test("keeps visible paint order for renderer-produced overflow hits", async ({
       uncoveredInk,
       text: (await reopened.getElement("sld1:2")).item?.text,
       foregroundX: (await reopened.getElement("sld1:3")).item?.bounds.x,
+      untouched: (await reopened.getElement("sld1:4")).item?.text,
     };
   });
   expect(result.covered).toEqual(["sld1:3", "sld1:2"]);
@@ -193,6 +202,7 @@ test("keeps visible paint order for renderer-produced overflow hits", async ({
   expect(result.uncoveredInk).toBeGreaterThan(10);
   expect(result.text).toBe("Edited visible text");
   expect(result.foregroundX).toBe(520);
+  expect(result.untouched).toBe("Top");
 });
 
 test("starts the OOXML worker only on edit() and lists every shape with the renderer's geometry", async ({

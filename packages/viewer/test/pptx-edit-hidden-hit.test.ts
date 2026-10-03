@@ -130,6 +130,7 @@ describe("PPTX elementsAt: only drawn elements are hit", () => {
         run(504, { x: 40, y: 450 }),
         // The hidden shape's text is not drawn, whatever the runs say.
         run(104, { x: 40, y: 100 }),
+        { ...run(154, { x: 40, y: 100 }), shapeId: "3", shapeSource: "slide" },
       ],
     ]);
     try {
@@ -141,6 +142,10 @@ describe("PPTX elementsAt: only drawn elements are hit", () => {
       assert.deepEqual(
         ids((await session.elementsAt(0, { x: 60, y: 110 })).items),
         ["sld1:2"],
+      );
+      assert.deepEqual(
+        (await session.elementsAt(0, { x: 60, y: 160 })).items,
+        [],
       );
     } finally {
       await end();

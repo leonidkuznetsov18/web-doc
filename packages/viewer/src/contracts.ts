@@ -300,6 +300,10 @@ export interface TextRun {
    * past its frame, wrapped below a short box, still names its shape.
    */
   readonly shapeOrigin?: { readonly x: number; readonly y: number };
+  /** PPTX: the renderer's source `p:cNvPr/@id`, scoped to `shapeSource`. */
+  readonly shapeId?: string;
+  /** PPTX: which part supplied the run; only slide-owned text is editable. */
+  readonly shapeSource?: "slide" | "layout" | "master";
 }
 
 export type HyperlinkTarget =

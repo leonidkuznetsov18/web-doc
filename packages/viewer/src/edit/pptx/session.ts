@@ -169,18 +169,53 @@ export class PptxSession implements PptxEditSession {
     )) as ReadResult<PptxElement>;
     const access = this.#access;
     if (!access) return framed;
-    const origins = (await access.getTextRuns(pageIndex, options?.signal))
-      .filter((run) => run.shapeOrigin && runHolds(run, point))
-      .map((run) => run.shapeOrigin!);
-    if (origins.length === 0) return framed;
+    const runs = (await access.getTextRuns(pageIndex, options?.signal)).filter(
+      (run) => runHolds(run, point),
+    );
+    if (runs.length === 0) return framed;
     const all = (await this.getElements({ pageIndex }, options)).items;
     const byId = new Map(all.map((element) => [element.id, element]));
-    const painted = all.filter(
+    const visibleText = all.filter(
+      (element) => element.text !== undefined && isDrawn(element, byId),
+    );
+    // The edit ID is sld<part-number>:<cNvPr-id>[#duplicate-occurrence].
+    // Index every element, including hidden ones: a malformed duplicate ID
+    // cannot safely be bound to whichever visible occurrence comes first.
+    const owners = new Map<string, PptxElement | undefined>();
+    for (const element of all) {
+      const sourceId = /:(\d+)(?:#\d+)?$/.exec(element.id)?.[1];
+      if (sourceId !== undefined)
+        owners.set(sourceId, owners.has(sourceId) ? undefined : element);
+    }
+    const paintedIds = new Set<string>();
+    for (const run of runs) {
+      if (run.shapeId !== undefined || run.shapeSource !== undefined) {
+        // Layout/master IDs may equal a slide ID. Missing, stale or ambiguous
+        // native ownership must not fall back to a coincident origin.
+        if (
+          run.shapeSource !== "slide" ||
+          run.shapeId === undefined ||
+          !/^\d+$/.test(run.shapeId) ||
+          !Number.isSafeInteger(Number(run.shapeId))
+        )
+          continue;
+        const owner = owners.get(String(Number(run.shapeId)));
+        if (owner && visibleText.includes(owner)) paintedIds.add(owner.id);
+        continue;
+      }
+      // Legacy providers report only geometry. A shared origin cannot prove
+      // which shape painted the text, so keep ordinary frame hits in that case.
+      const origin = run.shapeOrigin;
+      const candidates = origin
+        ? visibleText.filter((element) => originOf(element, origin))
+        : [];
+      const candidate = candidates[0];
+      if (candidate && candidates.length === 1) paintedIds.add(candidate.id);
+    }
+    const painted = visibleText.filter(
       (element) =>
-        element.text !== undefined &&
-        isDrawn(element, byId) &&
-        !framed.items.some((hit) => hit.id === element.id) &&
-        origins.some((origin) => originOf(element, origin)),
+        paintedIds.has(element.id) &&
+        !framed.items.some((hit) => hit.id === element.id),
     );
     if (painted.length === 0) return framed;
     // Elements are listed back to front; whatever is drawn after a shape

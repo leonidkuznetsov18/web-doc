@@ -253,6 +253,8 @@ describe("OfficeDocumentAdapter", () => {
               inShapeY: 5,
               shapeX: 10,
               shapeY: 20,
+              shapeId: "2",
+              origin: "slide",
               w: 60,
               h: 18,
               hyperlink: { kind: "internal", ref: "next" },
@@ -268,6 +270,8 @@ describe("OfficeDocumentAdapter", () => {
     assert.equal((await adapter.getInfo(handle)).unit, "slide");
     assert.equal(runs[0]?.x, 14);
     assert.equal(runs[0]?.y, 25);
+    assert.equal(runs[0]?.shapeId, "2");
+    assert.equal(runs[0]?.shapeSource, "slide");
     assert.equal(runs[0]?.direction, "rtl");
     assert.equal(
       runs[0]?.hyperlink?.kind === "internal"
