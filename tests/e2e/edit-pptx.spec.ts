@@ -690,80 +690,87 @@ test("inserts, duplicates, moves and deletes slides that the renderer paints in 
   expect(result.dirty).toBe(true);
 });
 
-test("applies an edit within the budget on 10-, 100- and 500-slide decks", async ({
-  page,
-}) => {
-  test.setTimeout(180_000);
-  const timings: Record<string, number[]> = {};
-  for (const count of [10, 100, 500]) {
-    await loadDeck(page, syntheticDeck(count), `deck-${count}.pptx`);
-    timings[count] = await page.evaluate(async () => {
-      const viewer = (window as unknown as { __viewer: any }).__viewer;
-      const session = await viewer.edit();
-      const out: number[] = [];
-      for (const text of ["First edit", "Second edit"]) {
-        const started = performance.now();
-        await session.replaceText({ target: "sld1:3", text });
-        out.push(performance.now() - started);
-      }
-      const started = performance.now();
-      await session.insertTextBox({
-        pageIndex: viewer.state.pageCount - 1,
-        rect: { x: 50, y: 50, width: 300, height: 40 },
-        text: "Last slide",
-      });
-      out.push(performance.now() - started);
-      return out;
-    });
-    console.log(
-      `pptx apply ${count} slides: replaceText ${timings[count]![0]!.toFixed(0)} ms then ${timings[count]![1]!.toFixed(0)} ms, insertTextBox on the last slide ${timings[count]![2]!.toFixed(0)} ms`,
-    );
-    for (const value of timings[count]!) expect(value).toBeLessThan(3000);
-  }
-});
-
-test("spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout", async ({
-  page,
-}) => {
-  test.setTimeout(180_000);
-  const decks = [10, 100, 500].map(
-    (count) => [count, syntheticDeck(count)] as const,
-  );
-  await page.goto("/");
-  const timings = await page.evaluate(
-    async ({ decks, renderer }) => {
-      const { PptxPresentation } = (await import(renderer)) as any;
-      const out: Record<string, number> = {};
-      for (const [count, data] of decks)
-        for (const progressive of [false, true]) {
-          const buffer = new Uint8Array(data).buffer;
+test(
+  "applies an edit within the budget on 10-, 100- and 500-slide decks",
+  { tag: "@performance" },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const timings: Record<string, number[]> = {};
+    for (const count of [10, 100, 500]) {
+      await loadDeck(page, syntheticDeck(count), `deck-${count}.pptx`);
+      timings[count] = await page.evaluate(async () => {
+        const viewer = (window as unknown as { __viewer: any }).__viewer;
+        const session = await viewer.edit();
+        const out: number[] = [];
+        for (const text of ["First edit", "Second edit"]) {
           const started = performance.now();
-          const presentation = await PptxPresentation.load(buffer, {
-            useGoogleFonts: false,
-            mode: "main",
-            progressiveLayout: progressive,
-          });
-          const loaded = performance.now() - started;
-          const canvas = document.createElement("canvas");
-          await presentation.renderSlide(canvas, 0, { width: 960, dpr: 1 });
-          const painted = performance.now() - started;
-          await presentation.waitUntilLayoutComplete?.();
-          const complete = performance.now() - started;
-          presentation.destroy();
-          out[`${count}/${progressive ? "progressive" : "full"}/load`] = loaded;
-          out[`${count}/${progressive ? "progressive" : "full"}/firstPaint`] =
-            painted;
-          out[`${count}/${progressive ? "progressive" : "full"}/complete`] =
-            complete;
+          await session.replaceText({ target: "sld1:3", text });
+          out.push(performance.now() - started);
         }
-      return out;
-    },
-    {
-      decks: decks.map(([count, bytes]) => [count, Array.from(bytes)] as const),
-      renderer: RENDERER,
-    },
-  );
-  for (const [key, value] of Object.entries(timings))
-    console.log(`pptx renderer ${key}: ${value.toFixed(1)} ms`);
-  expect(timings["500/full/load"]).toBeLessThan(10_000);
-});
+        const started = performance.now();
+        await session.insertTextBox({
+          pageIndex: viewer.state.pageCount - 1,
+          rect: { x: 50, y: 50, width: 300, height: 40 },
+          text: "Last slide",
+        });
+        out.push(performance.now() - started);
+        return out;
+      });
+      console.log(
+        `pptx apply ${count} slides: replaceText ${timings[count]![0]!.toFixed(0)} ms then ${timings[count]![1]!.toFixed(0)} ms, insertTextBox on the last slide ${timings[count]![2]!.toFixed(0)} ms`,
+      );
+      for (const value of timings[count]!) expect(value).toBeLessThan(3000);
+    }
+  },
+);
+
+test(
+  "spike: renderer load time for 10, 100 and 500 slides, with and without progressive layout",
+  { tag: "@performance" },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const decks = [10, 100, 500].map(
+      (count) => [count, syntheticDeck(count)] as const,
+    );
+    await page.goto("/");
+    const timings = await page.evaluate(
+      async ({ decks, renderer }) => {
+        const { PptxPresentation } = (await import(renderer)) as any;
+        const out: Record<string, number> = {};
+        for (const [count, data] of decks)
+          for (const progressive of [false, true]) {
+            const buffer = new Uint8Array(data).buffer;
+            const started = performance.now();
+            const presentation = await PptxPresentation.load(buffer, {
+              useGoogleFonts: false,
+              mode: "main",
+              progressiveLayout: progressive,
+            });
+            const loaded = performance.now() - started;
+            const canvas = document.createElement("canvas");
+            await presentation.renderSlide(canvas, 0, { width: 960, dpr: 1 });
+            const painted = performance.now() - started;
+            await presentation.waitUntilLayoutComplete?.();
+            const complete = performance.now() - started;
+            presentation.destroy();
+            out[`${count}/${progressive ? "progressive" : "full"}/load`] =
+              loaded;
+            out[`${count}/${progressive ? "progressive" : "full"}/firstPaint`] =
+              painted;
+            out[`${count}/${progressive ? "progressive" : "full"}/complete`] =
+              complete;
+          }
+        return out;
+      },
+      {
+        decks: decks.map(
+          ([count, bytes]) => [count, Array.from(bytes)] as const,
+        ),
+        renderer: RENDERER,
+      },
+    );
+    for (const [key, value] of Object.entries(timings))
+      console.log(`pptx renderer ${key}: ${value.toFixed(1)} ms`);
+    expect(timings["500/full/load"]).toBeLessThan(10_000);
+  },
+);
