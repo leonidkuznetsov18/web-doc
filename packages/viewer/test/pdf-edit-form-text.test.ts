@@ -7,6 +7,7 @@ import { extractPageText, fixturePdfium } from "./fixtures/pdf-builder.js";
 import { pdfSession } from "./fixtures/pdf-session.js";
 import {
   clippedTranslucentFormsPdf,
+  deeplyNestedFormPdf,
   formGraphicsStatePdf,
   groupedFormPdf,
   nestedFormPdf,
@@ -242,6 +243,261 @@ describe("PDF text inside Form XObjects", () => {
       );
     } finally {
       model.dispose();
+    }
+  });
+
+  it("keeps nested targets after sibling deletion and checkpoint Undo/Redo", async () => {
+    const { session, end } = await pdfSession(sharedFormPdf());
+    const first = "p0:o1/2/1";
+    const second = "p0:o1/3/1";
+    try {
+      await session.apply([{ op: "deleteElement", target: "p0:o1/1" }]);
+      await session.createCheckpoint("after sibling deletion");
+      const original = (await session.getElements({ pageIndex: 0 })).items;
+      const firstX = original.find((element) => element.id === first)!.bounds.x;
+      const secondX = original.find((element) => element.id === second)!.bounds
+        .x;
+      assert.ok(Math.abs(firstX - 72.784) < 0.01);
+      assert.ok(Math.abs(secondX - 312.784) < 0.01);
+
+      await session.setTextStyle({
+        target: first,
+        style: { color: "#ff0000" },
+      });
+      await session.undo();
+      await session.redo();
+      const edited = (await session.getElements({ pageIndex: 0 })).items;
+      assert.equal(
+        edited.find((element) => element.bounds.x === firstX)?.textStyle?.color,
+        "#ff0000",
+      );
+      assert.equal(
+        edited.find((element) => element.bounds.x === secondX)?.textStyle
+          ?.color,
+        "#000000",
+      );
+      assert.equal(
+        edited.find((element) => element.id === first)?.bounds.x,
+        firstX,
+      );
+      assert.equal(
+        edited.find((element) => element.id === second)?.bounds.x,
+        secondX,
+      );
+
+      const saved = await session.save();
+      const reopened = await open(saved.bytes);
+      try {
+        assert.equal(reopened.getElement(first)?.bounds.x, firstX);
+        assert.equal(reopened.getElement(first)?.textStyle?.color, "#ff0000");
+        assert.equal(reopened.getElement(second)?.bounds.x, secondX);
+        assert.equal(reopened.getElement(second)?.textStyle?.color, "#000000");
+      } finally {
+        reopened.dispose();
+      }
+    } finally {
+      await end();
+    }
+  });
+
+  it("keeps fallback-created form children through checkpoint restoration", async () => {
+    const { session, end } = await pdfSession(nestedFormPdf(), {
+      fallbackFont: true,
+    });
+    const target = "p0:o1/0/0";
+    try {
+      const receipt = await session.replaceText({
+        target,
+        range: {
+          start: { elementId: target, offset: 7 },
+          end: { elementId: target, offset: 11 },
+        },
+        text: "Ж",
+      });
+      assert.equal(receipt.createdIds.length, 2);
+      const inserted = receipt.createdIds[0]!;
+      await session.createCheckpoint("after native run split");
+      await session.setTextStyle({
+        target: inserted,
+        style: { color: "#ff0000" },
+      });
+      await session.undo();
+      await session.redo();
+      const elements = (
+        await session.getElements({ pageIndex: 0, kinds: ["text"] })
+      ).items;
+      assert.equal(
+        elements.find((element) => element.id === inserted)?.text?.trim(),
+        "Ж",
+      );
+      assert.equal(
+        elements.find((element) => element.id === inserted)?.textStyle?.color,
+        "#ff0000",
+      );
+      const reopened = await open((await session.save()).bytes);
+      try {
+        assert.equal(reopened.getElement(inserted)?.text?.trim(), "Ж");
+        assert.equal(
+          reopened.getElement(receipt.createdIds[1]!)?.text?.trim(),
+          "text",
+        );
+      } finally {
+        reopened.dispose();
+      }
+    } finally {
+      await end();
+    }
+  });
+
+  it("ignores damaged, stale, oversized and colliding form identities", async () => {
+    const inner = (id: string) => ({
+      id,
+      type: 5,
+      children: [
+        { id: `${id}/0`, type: 2 },
+        { id: `${id}/1`, type: 1 },
+      ],
+    });
+    const tree = {
+      id: "p0:o1",
+      type: 5,
+      children: [
+        { id: "p0:o1/0", type: 2 },
+        { id: "p0:o1/1", type: 1 },
+        inner("p0:o1/2"),
+        inner("p0:o1/3"),
+      ],
+    };
+    const invalid = [
+      "{",
+      JSON.stringify({ ...tree, children: tree.children.slice(1) }),
+      JSON.stringify({
+        ...tree,
+        children: [{ id: "p0:o1/0", type: 1 }, ...tree.children.slice(1)],
+      }),
+      JSON.stringify({
+        ...tree,
+        children: [{ id: "p0:o1/1", type: 2 }, ...tree.children.slice(1)],
+      }),
+      JSON.stringify({
+        ...tree,
+        children: [{ id: "p0:o0", type: 2 }, ...tree.children.slice(1)],
+      }),
+      JSON.stringify({
+        ...tree,
+        children: [{ id: "p9:o0", type: 2 }, ...tree.children.slice(1)],
+      }),
+      JSON.stringify("x".repeat(600_000)),
+    ];
+    const pdfium = await fixturePdfium();
+    const cases = [
+      ...invalid.map((raw) => ({ raw, stale: false })),
+      { raw: invalid[4]!, stale: true },
+    ];
+    for (const { raw, stale } of cases) {
+      const document = pdfium.openDocument(sharedFormPdf());
+      const page = pdfium.lib.FPDF_LoadPage(document.handle, 0);
+      let bytes: Uint8Array;
+      try {
+        if (stale) {
+          const control = pdfium.lib.FPDFPage_GetObject(page, 0);
+          const staleMark = pdfium.lib.FPDFPageObj_AddMark(control, "WebDoc");
+          assert.ok(
+            pdfium.setMarkString(
+              document.handle,
+              control,
+              staleMark,
+              "webdoc",
+              JSON.stringify({
+                kind: "textBox",
+                id: "p0:n7.0.0",
+                rect: { x: 72, y: 200, width: 300, height: 40 },
+                text: "Template",
+                style: {
+                  fontFamily: "Helvetica",
+                  fontSize: 12,
+                  bold: false,
+                  italic: false,
+                  color: "#000000",
+                  align: "left",
+                  lineHeight: 1.2,
+                },
+              }),
+            ),
+          );
+        }
+        const object = pdfium.lib.FPDFPage_GetObject(page, 1);
+        const mark = pdfium.lib.FPDFPageObj_AddMark(object, "WebDocFormIds");
+        assert.ok(
+          pdfium.setMarkString(document.handle, object, mark, "ids", raw),
+        );
+        assert.ok(pdfium.lib.FPDFPage_GenerateContent(page));
+        bytes = document.save("full");
+      } finally {
+        pdfium.lib.FPDF_ClosePage(page);
+        document.close();
+      }
+      const model = await open(bytes);
+      try {
+        assert.equal(model.getElement("p0:o0")?.text, "Top-level control text");
+        assert.equal(
+          model.getElement("p0:o1/2/1")?.text?.trim(),
+          "Shared inner",
+        );
+        assert.equal(
+          model.getElement("p0:o1/3/1")?.text?.trim(),
+          "Shared inner",
+        );
+      } finally {
+        model.dispose();
+      }
+    }
+  });
+
+  it("retains a deeply nested form identity when an earlier page object is removed", async () => {
+    const model = await open(deeplyNestedFormPdf());
+    try {
+      model.apply([{ op: "deleteElement", target: "p0:o0" }]);
+      const reopened = await open(model.materialize("save"));
+      try {
+        assert.equal(reopened.getElement("p0:o1")?.kind, "other");
+        assert.equal(reopened.getElement("p0:o0"), undefined);
+      } finally {
+        reopened.dispose();
+      }
+    } finally {
+      model.dispose();
+    }
+  });
+
+  it("binds saved form identities to the page a drawing moves onto", async () => {
+    const { session, end } = await pdfSession(sharedFormPdf());
+    try {
+      await session.setTextStyle({
+        target: "p0:o1/2/1",
+        style: { color: "#ff0000" },
+      });
+      await session.apply([
+        { op: "insertPage", index: 0, size: { width: 612, height: 792 } },
+      ]);
+      const reopened = await open((await session.save()).bytes);
+      try {
+        const target = "p1:p0:o1/2/1";
+        assert.equal(reopened.getElement(target)?.pageIndex, 1);
+        assert.equal(reopened.getElement(target)?.textStyle?.color, "#ff0000");
+        await apply(reopened, [
+          { op: "setTextStyle", target, style: { color: "#00ff00" } },
+        ]);
+        assert.equal(reopened.getElement(target)?.textStyle?.color, "#00ff00");
+        assert.equal(
+          reopened.getElement("p1:p0:o1/3/1")?.textStyle?.color,
+          "#000000",
+        );
+      } finally {
+        reopened.dispose();
+      }
+    } finally {
+      await end();
     }
   });
 

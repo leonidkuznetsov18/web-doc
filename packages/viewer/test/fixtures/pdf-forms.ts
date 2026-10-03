@@ -56,6 +56,31 @@ export function nestedFormPdf(): Uint8Array {
   ]);
 }
 
+/** A Form chain reaches the engine's bounded identity enumeration depth. */
+export function deeplyNestedFormPdf(): Uint8Array {
+  const forms = Array.from({ length: 17 }, (_, index) =>
+    index === 16
+      ? stream(
+          "BT /F1 24 Tf 0 10 Td (Deep text) Tj ET",
+          "/Type /XObject /Subtype /Form /BBox [0 0 400 40] /Resources << /Font << /F1 4 0 R >> >>",
+        )
+      : stream(
+          "/Inner Do",
+          `/Type /XObject /Subtype /Form /BBox [0 0 400 40] /Resources << /XObject << /Inner ${index + 7} 0 R >> >>`,
+        ),
+  );
+  return pdf([
+    CATALOG,
+    PAGES,
+    page("/Outer 6 0 R"),
+    HELVETICA,
+    stream(
+      "BT /F1 18 Tf 72 720 Td (Top-level control text) Tj ET\nq 1 0 0 1 72 650 cm /Outer Do Q",
+    ),
+    ...forms,
+  ]);
+}
+
 /**
  * Form Outer, scaled 2× by its /Matrix and drawn at (72, 600): a red bar its
  * /BBox cuts off, "Outer own text", and form Inner drawn twice. Inner holds
