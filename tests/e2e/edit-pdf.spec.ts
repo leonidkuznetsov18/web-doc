@@ -14,6 +14,237 @@ const EDIT_ASSETS = [
   "/assets/pdfium/pdfium.wasm",
 ];
 
+test("publishes initial and edited PDF rasters when text layers fail", async ({
+  page,
+}) => {
+  const original = await buildPdf(["The PDF raster remains visible"]);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto("/");
+  const fixture = await page.evaluateHandle(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const container = document.createElement("div");
+    Object.assign(container.style, {
+      position: "fixed",
+      inset: "0",
+      overflow: "hidden",
+    });
+    document.body.append(container);
+    const client = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href).href,
+    });
+    const adapter = client.registry.resolve("pdf");
+    const render = adapter.render.bind(adapter);
+    const getTextMap = adapter.getTextMap?.bind(adapter);
+    if (!getTextMap) throw new Error("Expected native PDF text extraction");
+    let failText = Promise.withResolvers<void>();
+    let held = Promise.withResolvers<void>();
+    let textReads = 0;
+    let holdRaster = true;
+    let failBuilding = false;
+    let targetCanvas: HTMLCanvasElement | OffscreenCanvas | undefined;
+    let renderOutcome = "pending";
+    adapter.getTextMap = async (handle, pageIndex, signal) => {
+      textReads += 1;
+      // Font preparation reads real native text; only the parallel viewport
+      // extraction fails, while its real PDF.js raster is explicitly held.
+      if (holdRaster && !failBuilding && textReads === 2) {
+        await failText.promise;
+        throw new Error("Text layer extraction failed");
+      }
+      return getTextMap(handle, pageIndex, signal);
+    };
+    adapter.render = async (handle, target, viewport, signal) => {
+      targetCanvas = target;
+      try {
+        await render(handle, target, viewport, signal);
+        renderOutcome = "completed";
+      } catch (error) {
+        renderOutcome = "failed";
+        throw error;
+      }
+    };
+    const dpr = window.devicePixelRatio || 1;
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    const cancelFrame = window.cancelAnimationFrame.bind(window);
+    const append = Element.prototype.append;
+    Element.prototype.append = function (...nodes) {
+      append.apply(this, nodes);
+      if (
+        failBuilding &&
+        !this.isConnected &&
+        nodes.some(
+          (node) =>
+            node instanceof HTMLSpanElement && node.dataset.pageIndex === "0",
+        )
+      ) {
+        failBuilding = false;
+        throw new Error("Text layer construction failed");
+      }
+    };
+    const frames = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    let zoom = 1;
+    window.requestAnimationFrame = (callback) => {
+      if (!holdRaster || targetCanvas?.width !== Math.ceil(612 * zoom * dpr))
+        return requestFrame(callback);
+      const id = --frameId;
+      frames.set(id, callback);
+      held.resolve();
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (!frames.delete(id)) cancelFrame(id);
+    };
+    const resumeRaster = () => {
+      holdRaster = false;
+      for (const callback of frames.values()) requestFrame(callback);
+      frames.clear();
+    };
+    const viewer = client.createViewer({
+      container,
+      ui: false,
+      initialZoom: zoom,
+    });
+    await viewer.load(new Uint8Array(data), { fileName: "text-failure.pdf" });
+    return {
+      dpr,
+      async failTextLayer() {
+        await held.promise;
+        failText.resolve();
+      },
+      resumeRaster,
+      async waitForRaster() {
+        await held.promise;
+      },
+      recover() {
+        zoom = 1.25;
+        viewer.setZoom(zoom);
+      },
+      async highlight() {
+        await viewer.search("raster");
+      },
+      async edit() {
+        const session = await viewer.edit();
+        if (session.format !== "pdf") throw new Error("Expected PDF editing");
+        failText = Promise.withResolvers<void>();
+        held = Promise.withResolvers<void>();
+        textReads = 0;
+        targetCanvas = undefined;
+        renderOutcome = "pending";
+        holdRaster = true;
+        failBuilding = true;
+        await session.apply([
+          {
+            op: "replaceText",
+            target: "p0:o0",
+            text: "The edited PDF raster is blue",
+          },
+          { op: "setTextStyle", target: "p0:o0", style: { color: "#0000ff" } },
+        ]);
+      },
+      snapshot() {
+        const slot = container.querySelector<HTMLElement>(
+          '[data-page-index="0"]',
+        );
+        const canvas = slot?.querySelector("canvas");
+        const pixels = canvas
+          ?.getContext("2d")
+          ?.getImageData(0, 0, canvas.width, canvas.height).data;
+        let ink = 0;
+        let blue = 0;
+        if (pixels)
+          for (let at = 0; at < pixels.length; at += 4) {
+            if ((pixels[at + 3] ?? 0) > 0 && (pixels[at] ?? 255) < 128)
+              ink += 1;
+            if (
+              (pixels[at + 3] ?? 0) > 0 &&
+              (pixels[at] ?? 255) < 128 &&
+              (pixels[at + 2] ?? 0) > 200
+            )
+              blue += 1;
+          }
+        return {
+          renderOutcome,
+          ink,
+          blue,
+          width: canvas?.width,
+          height: canvas?.height,
+          error: slot?.dataset.renderError ?? "",
+          text:
+            slot?.querySelector('[data-zrimo-layer="text"]')?.textContent ?? "",
+          highlights:
+            slot?.querySelector('[data-zrimo-layer="highlight"]')
+              ?.childElementCount ?? 0,
+        };
+      },
+      async close() {
+        failText.resolve();
+        resumeRaster();
+        window.requestAnimationFrame = requestFrame;
+        window.cancelAnimationFrame = cancelFrame;
+        Element.prototype.append = append;
+        await viewer.destroy();
+        await client.destroy();
+        container.remove();
+      },
+    };
+  }, Array.from(original));
+  try {
+    const dpr = await fixture.evaluate((f) => f.dpr);
+    await fixture.evaluate((f) => f.failTextLayer());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot().error))
+      .toBe("Text layer extraction failed");
+    await fixture.evaluate((f) => f.resumeRaster());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot()))
+      .toMatchObject({
+        renderOutcome: "completed",
+        width: Math.ceil(612 * dpr),
+        height: Math.ceil(792 * dpr),
+        error: "Text layer extraction failed",
+        text: "",
+        highlights: 0,
+      });
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot().ink))
+      .toBeGreaterThan(50 * dpr * dpr);
+    await fixture.evaluate((f) => f.recover());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot()))
+      .toMatchObject({
+        text: "The PDF raster remains visible",
+        error: "",
+      });
+    await fixture.evaluate((f) => f.highlight());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot().highlights))
+      .toBeGreaterThan(0);
+    await fixture.evaluate((f) => f.edit());
+    await fixture.evaluate((f) => f.waitForRaster());
+    await fixture.evaluate((f) => f.resumeRaster());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot()))
+      .toMatchObject({
+        renderOutcome: "completed",
+        width: Math.ceil(612 * 1.25 * dpr),
+        height: Math.ceil(792 * 1.25 * dpr),
+        error: "Text layer construction failed",
+        text: "",
+        highlights: 0,
+      });
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot().blue))
+      .toBeGreaterThan(50 * dpr * dpr);
+  } finally {
+    await fixture.evaluate((f) => f.close());
+    await fixture.dispose();
+  }
+  expect(pageErrors).toEqual([]);
+});
+
 async function loadPdf(page: Page, bytes: Uint8Array): Promise<void> {
   await page.goto("/");
   await page.evaluate(async (data) => {

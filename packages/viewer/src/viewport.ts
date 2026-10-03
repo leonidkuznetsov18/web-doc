@@ -656,19 +656,36 @@ export class ViewerViewport {
           pageIndex === this.#host.state.pageIndex ? "visible" : "adjacent",
         signal: controller.signal,
       });
-      const [, runs] = await Promise.all([
-        rendering,
-        this.#host.getTextRuns(pageIndex, controller.signal),
-      ]);
-      if (!isCurrent()) return;
-      await this.#buildTextLayers(
-        textLayer,
-        highlightLayer,
-        pageIndex,
-        runs,
-        zoom,
-        controller.signal,
-      );
+      const preparingText = this.#host
+        .getTextRuns(pageIndex, controller.signal)
+        .then(async (runs) => {
+          await rendering;
+          if (!isCurrent()) return;
+          await this.#buildTextLayers(
+            textLayer,
+            highlightLayer,
+            pageIndex,
+            runs,
+            zoom,
+            controller.signal,
+          );
+        })
+        .then(
+          () => true,
+          (error: unknown) => {
+            if (isCurrent())
+              slot.root.dataset.renderError =
+                error instanceof Error ? error.message : String(error);
+            // A valid raster still publishes without unavailable geometry.
+            // Never retain partial or previous text/highlight hit targets.
+            for (const layer of [textLayer, highlightLayer]) {
+              layer.replaceChildren();
+              resetOverlay(layer);
+            }
+            return false;
+          },
+        );
+      const [, textReady] = await Promise.all([rendering, preparingText]);
       if (!isCurrent()) return;
       const context = slot.canvas.getContext("2d");
       if (!context) throw new Error("Canvas 2D context is unavailable");
@@ -683,7 +700,7 @@ export class ViewerViewport {
       const cssHeight = canvas.height / devicePixelRatio;
       slot.root.style.width = `${cssWidth}px`;
       slot.root.style.height = `${cssHeight}px`;
-      delete slot.root.dataset.renderError;
+      if (textReady) delete slot.root.dataset.renderError;
       this.#markPainted(pageIndex, contentRevision);
     } catch (error) {
       if (isCurrent()) {
