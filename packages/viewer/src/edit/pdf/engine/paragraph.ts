@@ -63,6 +63,7 @@ interface Row {
 
 const MIN_CONTINUATION_FILL = 0.9;
 const MAX_CONNECTED_EDGE_GAP = 0.65;
+const MAX_LEFT_ALIGNMENT_DELTA = 1;
 // Public PDF geometry is canonicalized to thousandths of a point. This only
 // absorbs native floating-point rounding, not visible tracking or kerning.
 const GLYPH_POSITION_PRECISION = 0.001;
@@ -90,10 +91,17 @@ export function discoverParagraphs(
 ): ReadonlyMap<string, ParagraphTarget> {
   const result = new Map<string, ParagraphTarget>();
   if (geometry.rotation !== 0) return result;
+  const indexesById = new Map<string, number[]>();
+  records.forEach((record, index) => {
+    const indexes = indexesById.get(record.id) ?? [];
+    indexes.push(index);
+    indexesById.set(record.id, indexes);
+  });
+  const elementsById = new Map<string, PdfElement>();
+  for (const element of elements)
+    if (!elementsById.has(element.id)) elementsById.set(element.id, element);
   for (const element of elements) {
-    const indexes = records.flatMap((record, index) =>
-      record.id === element.id ? [index] : [],
-    );
+    const indexes = indexesById.get(element.id) ?? [];
     const spec = paragraphSpecOf(records[indexes[0] ?? -1]?.mark);
     if (!spec) continue;
     const paragraph: PdfTextParagraph = {
@@ -181,7 +189,7 @@ export function discoverParagraphs(
       record.id.includes("/")
     )
       return;
-    const element = elements.find((item) => item.id === record.id);
+    const element = elementsById.get(record.id);
     if (
       !element?.textStyle ||
       !element.text?.trim() ||
@@ -251,9 +259,14 @@ export function discoverParagraphs(
     });
   });
   rows.sort((a, b) => a.baseline - b.baseline || a.x - b.x);
+  // Every candidate containing one of these rows is already rejected by the
+  // shared-row check below: its overlapping neighbor cannot belong to the same
+  // styled/aligned group. Keep rows in `aligned` so leading inference is exact.
+  const blockedRows = overlappingIncompatibleRows(rows, elements);
   const used = new Set<string>();
   for (const first of rows) {
-    if (used.has(first.element.id)) continue;
+    if (used.has(first.element.id) || blockedRows.has(first.element.id))
+      continue;
     const aligned = rows.filter(
       (row) =>
         !used.has(row.element.id) &&
@@ -282,7 +295,11 @@ export function discoverParagraphs(
         break;
       group.push(row);
     }
-    if (group.length < 2) continue;
+    if (
+      group.length < 2 ||
+      group.some((row) => blockedRows.has(row.element.id))
+    )
+      continue;
     const bounds = unionRects(group.map((row) => row.element.bounds));
     const rect = roundRect({
       x: first.x,
@@ -331,7 +348,7 @@ export function discoverParagraphs(
     )
       continue;
     const id = `${first.element.id}:paragraph`;
-    if (elements.some((element) => element.id === id)) continue;
+    if (elementsById.has(id)) continue;
     let text = "";
     const members = group.map((row) => {
       if (text) text += " ";
@@ -376,16 +393,60 @@ export function discoverParagraphs(
 }
 
 function compatible(a: Row, b: Row): boolean {
+  return (
+    Math.abs(a.x - b.x) <= MAX_LEFT_ALIGNMENT_DELTA && sameTypography(a, b)
+  );
+}
+
+function sameTypography(a: Row, b: Row): boolean {
   const x = a.element.textStyle!;
   const y = b.element.textStyle!;
   return (
-    Math.abs(a.x - b.x) <= 1 &&
     a.font === b.font &&
     x.fontSize === y.fontSize &&
     x.color === y.color &&
     x.bold === y.bold &&
     x.italic === y.italic
   );
+}
+
+function overlappingIncompatibleRows(
+  rows: readonly Row[],
+  elements: readonly PdfElement[],
+): ReadonlySet<string> {
+  const rowsById = new Map(rows.map((row) => [row.element.id, row]));
+  const texts = elements
+    .filter((element) => element.text?.trim())
+    .sort((a, b) => a.bounds.y - b.bounds.y);
+  const blocked = new Set<string>();
+  let active: PdfElement[] = [];
+  for (const element of texts) {
+    active = active.filter(
+      (other) => other.bounds.y + other.bounds.height > element.bounds.y,
+    );
+    const row = rowsById.get(element.id);
+    for (const other of active) {
+      if (
+        element.id === other.id ||
+        element.bounds.y + element.bounds.height <= other.bounds.y
+      )
+        continue;
+      const otherRow = rowsById.get(other.id);
+      // Alignment is relative to the group's first row, not pairwise. Two
+      // continuation rows may lie on opposite sides of that ±1pt tolerance.
+      if (
+        row &&
+        otherRow &&
+        Math.abs(row.x - otherRow.x) <= 2 * MAX_LEFT_ALIGNMENT_DELTA &&
+        sameTypography(row, otherRow)
+      )
+        continue;
+      if (row) blocked.add(row.element.id);
+      if (otherRow) blocked.add(otherRow.element.id);
+    }
+    active.push(element);
+  }
+  return blocked;
 }
 
 function hasDefaultAdvances(

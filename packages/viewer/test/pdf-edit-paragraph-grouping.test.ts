@@ -20,6 +20,30 @@ function rows(lines: readonly string[]): FixtureText[] {
 }
 
 describe("conservative imported PDF paragraph recognition", () => {
+  it("compares each continuation's alignment with the first row, not pairwise", async () => {
+    const original = await buildPdf([
+      {
+        texts: rows(wrappedLines).map((row, index) => ({
+          ...row,
+          x: index === 0 ? 72 : index === 1 ? 71 : 73,
+          // Native ink overlaps vertically at this valid compact leading.
+          y: 700 - index * 9,
+        })),
+      },
+    ]);
+    const { session, end } = await pdfSession(original);
+    try {
+      const first = (await session.getElements({ pageIndex: 0 })).items[0];
+      assert.ok(first);
+      const paragraph = (await session.getTextParagraph(first.id)).item;
+      assert.ok(paragraph);
+      assert.equal(paragraph.text, wrappedLines.join(" "));
+      assert.equal(paragraph.memberIds.length, 3);
+    } finally {
+      await end();
+    }
+  });
+
   const refused: readonly {
     name: string;
     texts: readonly FixtureText[];
