@@ -77,7 +77,6 @@ interface PdfJsDocument {
   getPage(pageNumber: number): Promise<PdfJsPage>;
   getDestination(name: string): Promise<readonly unknown[] | null>;
   getPageIndex(reference: unknown): Promise<number>;
-  cleanup(): Promise<void>;
 }
 
 interface PdfJsPage {
@@ -253,6 +252,7 @@ class PdfJsBackend implements PdfBackend {
   readonly #module: PdfJsModule;
   readonly #document: PdfJsDocument;
   readonly #worker: PdfJsWorker;
+  readonly #workerPort: Worker;
   readonly #loadingTask: { destroy(): Promise<void> };
   readonly #maxPixels: number;
   readonly #pages = new Map<number, Promise<PdfJsPage>>();
@@ -262,12 +262,14 @@ class PdfJsBackend implements PdfBackend {
     module: PdfJsModule,
     document: PdfJsDocument,
     worker: PdfJsWorker,
+    workerPort: Worker,
     loadingTask: { destroy(): Promise<void> },
     maxPixels: number,
   ) {
     this.#module = module;
     this.#document = document;
     this.#worker = worker;
+    this.#workerPort = workerPort;
     this.#loadingTask = loadingTask;
     this.#maxPixels = maxPixels;
     this.pageCount = document.numPages;
@@ -350,6 +352,7 @@ class PdfJsBackend implements PdfBackend {
         module,
         document,
         worker,
+        workerPort,
         loadingTask,
         context.limits.maxDecodedPixels,
       );
@@ -370,9 +373,12 @@ class PdfJsBackend implements PdfBackend {
     devicePixelRatio: number,
     signal?: AbortSignal,
   ): Promise<void> {
-    this.#assertOpen();
-    const page = await this.#page(pageIndex);
-    if (signal?.aborted) throw abortError();
+    if (this.#closed || signal?.aborted) throw abortError();
+    const page = await this.#page(pageIndex).catch((error: unknown) => {
+      if (this.#closed || signal?.aborted) throw abortError();
+      throw error;
+    });
+    if (this.#closed || signal?.aborted) throw abortError();
     const viewport = page.getViewport({ scale: CSS_UNITS * zoom });
     const dpr = Math.max(1, devicePixelRatio);
     const width = Math.max(1, viewport.width);
@@ -408,9 +414,10 @@ class PdfJsBackend implements PdfBackend {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       await renderTask.promise;
-      if (signal?.aborted) throw abortError();
+      if (this.#closed || signal?.aborted) throw abortError();
     } catch (error) {
       if (
+        this.#closed ||
         signal?.aborted ||
         error instanceof this.#module.RenderingCancelledException ||
         (error instanceof Error && error.name === "RenderingCancelledException")
@@ -461,10 +468,13 @@ class PdfJsBackend implements PdfBackend {
     this.#closed = true;
     this.#pages.clear();
     try {
-      await this.#document.cleanup();
+      // Destroy cancels and awaits active renders. PDF.js cleanup is only
+      // safe while idle, so it must not run before retiring this document.
       await this.#loadingTask.destroy();
     } finally {
       this.#worker.destroy();
+      // PDFWorker does not terminate an externally supplied port; we own it.
+      this.#workerPort.terminate();
     }
   }
 

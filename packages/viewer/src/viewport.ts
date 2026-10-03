@@ -300,6 +300,14 @@ export class ViewerViewport {
     changedPages?: readonly number[],
     revision?: number,
   ): void {
+    // The viewer retires the old adapter after this synchronous handoff.
+    // Unfinished paints still belong to that adapter, even on unchanged pages.
+    for (const slot of this.#slots.values()) {
+      if (!slot.controller) continue;
+      slot.controller.abort();
+      delete slot.controller;
+      delete slot.renderKey;
+    }
     const previous = this.#info;
     const painted = this.#painted.get(this.#contentRevision);
     this.#painted.clear();
@@ -722,6 +730,7 @@ export class ViewerViewport {
       await rendering?.catch(() => undefined);
       canvas.width = 0;
       canvas.height = 0;
+      if (slot.controller === controller) delete slot.controller;
     }
   }
 

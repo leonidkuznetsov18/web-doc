@@ -324,6 +324,327 @@ test("publishes initial and edited PDF rasters when text layers fail", async ({
   expect(pageErrors).toEqual([]);
 });
 
+test("repaints an unchanged mounted page when an edit retires its pending zoom render", async ({
+  page,
+}) => {
+  const original = await buildPdf([
+    "Original first page",
+    "Unchanged second page",
+  ]);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto("/");
+  const fixture = await page.evaluateHandle(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const container = document.createElement("div");
+    Object.assign(container.style, {
+      position: "fixed",
+      inset: "0",
+      height: "1800px",
+      overflow: "hidden",
+    });
+    document.body.append(container);
+    const client = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href).href,
+    });
+    const adapter = client.registry.resolve("pdf");
+    const render = adapter.render.bind(adapter);
+    let secondPaint: HTMLCanvasElement | OffscreenCanvas | undefined;
+    adapter.render = (handle, target, viewport, signal) => {
+      if (viewport.pageIndex === 1 && viewport.zoom === 1.5)
+        secondPaint = target;
+      return render(handle, target, viewport, signal);
+    };
+    const viewer = client.createViewer({
+      container,
+      ui: false,
+      initialZoom: 1,
+    });
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    const cancelFrame = window.cancelAnimationFrame.bind(window);
+    const frames = new Map<number, FrameRequestCallback>();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    let frameId = 0;
+    const slot = (index: number) =>
+      container.querySelector<HTMLElement>(`[data-page-index="${index}"]`);
+    const snapshot = (index: number) => {
+      const root = slot(index);
+      const canvas = root?.querySelector("canvas");
+      const pixels = canvas
+        ?.getContext("2d")
+        ?.getImageData(0, 0, canvas.width, canvas.height).data;
+      let ink = 0;
+      if (pixels)
+        for (let at = 0; at < pixels.length; at += 4)
+          if ((pixels[at + 3] ?? 0) > 0 && (pixels[at] ?? 255) < 128) ink += 1;
+      return {
+        width: canvas?.width,
+        height: canvas?.height,
+        ink,
+        error: root?.dataset.renderError ?? "",
+        text:
+          root?.querySelector('[data-zrimo-layer="text"]')?.textContent ?? "",
+      };
+    };
+    const restore = () => {
+      window.requestAnimationFrame = requestFrame;
+      window.cancelAnimationFrame = cancelFrame;
+      for (const callback of frames.values()) requestFrame(callback);
+      frames.clear();
+    };
+    await viewer.load(new Uint8Array(data), {
+      fileName: "mounted-retirement.pdf",
+    });
+    const session = await viewer.edit();
+    if (session.format !== "pdf") throw new Error("Expected PDF editing");
+    const target = (await session.getElements({ pageIndex: 0 })).items[0];
+    if (!target) throw new Error("Missing first-page text");
+    return {
+      dpr,
+      snapshot,
+      async editDuringZoom() {
+        const held = Promise.withResolvers<void>();
+        window.requestAnimationFrame = (callback) => {
+          // Hold the native PDF.js continuation only once page two has begun
+          // painting its new-size canvas. Earlier viewport frames run normally.
+          if (secondPaint?.width !== Math.ceil(918 * dpr))
+            return requestFrame(callback);
+          const id = --frameId;
+          frames.set(id, callback);
+          held.resolve();
+          return id;
+        };
+        window.cancelAnimationFrame = (id) => {
+          if (!frames.delete(id)) cancelFrame(id);
+        };
+        viewer.setZoom(1.5);
+        await held.promise;
+        await session.replaceText({
+          target: target.id,
+          text: "Updated first page",
+        });
+        restore();
+      },
+      async close() {
+        restore();
+        await viewer.destroy();
+        container.remove();
+      },
+    };
+  }, Array.from(original));
+  try {
+    const dpr = await fixture.evaluate((f) => f.dpr);
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot(1)))
+      .toMatchObject({
+        width: Math.ceil(612 * dpr),
+        height: Math.ceil(792 * dpr),
+        error: "",
+        text: "Unchanged second page",
+      });
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot(1).ink))
+      .toBeGreaterThan(50 * dpr * dpr);
+    await fixture.evaluate((f) => f.editDuringZoom());
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot(1)))
+      .toMatchObject({
+        width: Math.ceil(918 * dpr),
+        height: Math.ceil(1188 * dpr),
+        error: "",
+        text: "Unchanged second page",
+      });
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot(1).ink))
+      .toBeGreaterThan(100 * dpr * dpr);
+    await expect
+      .poll(() => fixture.evaluate((f) => f.snapshot(0).text))
+      .toBe("Updated first page");
+  } finally {
+    await fixture.evaluate((f) => f.close());
+    await fixture.dispose();
+  }
+  await expect.poll(() => page.workers().length).toBe(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test("aborts real PDF renders retired during getPage and before queued execution", async ({
+  page,
+}) => {
+  const original = await buildPdf(["Transport retirement"]);
+  await page.goto("/");
+  const result = await page.evaluate(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const client = ViewerClient.create({ limits: { maxConcurrentRenders: 1 } });
+    const adapter = client.registry.resolve("pdf");
+    const context = {
+      format: "pdf" as const,
+      signal: new AbortController().signal,
+      limits: client.limits,
+      assetBaseUrl: new URL("/", location.href),
+      reportProgress() {},
+      reportWarning() {},
+    };
+    const viewport = { pageIndex: 0, zoom: 1, devicePixelRatio: 1 };
+    const outcome = (promise: Promise<void>) =>
+      promise.then(
+        () => "completed",
+        (error: unknown) =>
+          error instanceof Error && "code" in error
+            ? String(error.code)
+            : String(error),
+      );
+    const handle = await adapter.open(new Uint8Array(data), context);
+    // Opening the adapter directly leaves getPage uncached: render must cross
+    // the real PDF.js transport while close destroys that same transport.
+    const inGetPage = outcome(
+      adapter.render(handle, document.createElement("canvas"), viewport),
+    );
+    await adapter.close(handle);
+    const other = await adapter.open(new Uint8Array(data), context);
+    const scheduler = client.renderScheduler;
+    const gate = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    const active = scheduler.run(
+      "visible",
+      controller.signal,
+      () => gate.promise,
+    );
+    const queued = outcome(
+      scheduler.run("visible", controller.signal, () =>
+        adapter.render(other, document.createElement("canvas"), viewport),
+      ),
+    );
+    await adapter.close(other);
+    gate.resolve();
+    await active;
+    const result = { inGetPage: await inGetPage, queued: await queued };
+    await client.destroy();
+    return result;
+  }, Array.from(original));
+  expect(result).toEqual({ inGetPage: "aborted", queued: "aborted" });
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
+test("retires an actively rendering PDF after an edit and releases its workers", async ({
+  page,
+}) => {
+  const original = await buildPdf(["Original native text"]);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto("/");
+  const result = await page.evaluate(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const viewer = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href).href,
+    }).createViewer();
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    const cancelFrame = window.cancelAnimationFrame.bind(window);
+    const heldFrames = new Map<number, FrameRequestCallback>();
+    const paused = Promise.withResolvers<void>();
+    const failed = Promise.withResolvers<{ readonly error: string }>();
+    const controller = new AbortController();
+    const canvas = document.createElement("canvas");
+    const onError = (event: ErrorEvent) =>
+      failed.resolve({ error: event.message });
+    window.addEventListener("error", onError);
+    let frameId = 0;
+    const restoreFrames = () => {
+      window.requestAnimationFrame = requestFrame;
+      window.cancelAnimationFrame = cancelFrame;
+      for (const callback of heldFrames.values()) requestFrame(callback);
+      heldFrames.clear();
+    };
+    try {
+      await viewer.load(new Uint8Array(data), { fileName: "cleanup.pdf" });
+      const session = await viewer.edit();
+      if (session.format !== "pdf") throw new Error("Expected PDF editing");
+      const target = (await session.getElements({ pageIndex: 0 })).items[0];
+      if (!target) throw new Error("Fixture text is missing");
+      // Drain the viewer's own notification frame before holding the native
+      // PDF.js render. No viewport is mounted in this headless public viewer.
+      await new Promise<void>((resolve) => requestFrame(() => resolve()));
+      window.requestAnimationFrame = (callback) => {
+        const id = --frameId;
+        heldFrames.set(id, callback);
+        // PDF.js sizes the target before registering its active render task.
+        if (canvas.width === 612) paused.resolve();
+        return id;
+      };
+      window.cancelAnimationFrame = (id) => {
+        if (!heldFrames.delete(id)) cancelFrame(id);
+      };
+      const rendering = viewer
+        .renderPage(0, canvas, {
+          signal: controller.signal,
+          devicePixelRatio: 1,
+        })
+        .then(
+          () => ({ render: "completed" }),
+          (error: unknown) => ({
+            render:
+              error instanceof Error && "code" in error
+                ? String(error.code)
+                : String(error),
+          }),
+        );
+      await paused.promise;
+      // Showing the edited bytes retires the original PDF while its render is
+      // still suspended, exactly as a quick formatting change can in the UI.
+      await session.replaceText({
+        target: target.id,
+        text: "Updated native text",
+      });
+      const retired = await Promise.race([rendering, failed.promise]);
+      restoreFrames();
+      const updated = document.createElement("canvas");
+      await viewer.renderPage(0, updated);
+      const text = await viewer.getPageText(0);
+      return {
+        retired,
+        text,
+        painted: updated.width > 0 && updated.height > 0,
+      };
+    } finally {
+      controller.abort();
+      restoreFrames();
+      window.removeEventListener("error", onError);
+      await viewer.close();
+    }
+  }, Array.from(original));
+  expect(result).toEqual({
+    retired: { render: "aborted" },
+    text: "Updated native text",
+    painted: true,
+  });
+  expect(pageErrors).toEqual([]);
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
+test("releases the owned PDF worker when an untouched document closes", async ({
+  page,
+}) => {
+  const original = await buildPdf(["Close without editing"]);
+  await page.goto("/");
+  await page.evaluate(async (data) => {
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+    const viewer = ViewerClient.create({
+      assetBaseUrl: new URL("/", location.href).href,
+    }).createViewer();
+    try {
+      await viewer.load(new Uint8Array(data), { fileName: "close.pdf" });
+      await viewer.getPageText(0);
+    } finally {
+      await viewer.close();
+    }
+  }, Array.from(original));
+  await expect.poll(() => page.workers().length).toBe(0);
+});
+
 async function loadPdf(page: Page, bytes: Uint8Array): Promise<void> {
   await page.goto("/");
   await page.evaluate(async (data) => {
