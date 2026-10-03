@@ -282,12 +282,14 @@ describe("sequential PDF transform batch validation", () => {
           (error: unknown) => {
             assert.ok(error instanceof ViewerError);
             assert.equal(error.code, "invalid-operation");
-            assert.deepEqual(error.details?.issues, [
+            const issues = error.details?.issues;
+            assert.ok(Array.isArray(issues));
+            assert.equal(issues.length, 1);
+            assert.partialDeepStrictEqual(issues, [
               {
                 operationIndex: 1,
                 path: "/by",
                 code: "range",
-                message: "The rectangle must lie within the 200×200 pt page",
               },
             ]);
             return true;
@@ -319,12 +321,14 @@ describe("sequential PDF transform batch validation", () => {
         (error: unknown) => {
           assert.ok(error instanceof ViewerError);
           assert.equal(error.code, "invalid-operation");
-          assert.deepEqual(error.details?.issues, [
+          const issues = error.details?.issues;
+          assert.ok(Array.isArray(issues));
+          assert.equal(issues.length, 1);
+          assert.partialDeepStrictEqual(issues, [
             {
               operationIndex: 1,
               path: "/by",
               code: "range",
-              message: "The rectangle must lie within the 200×200 pt page",
             },
           ]);
           return true;

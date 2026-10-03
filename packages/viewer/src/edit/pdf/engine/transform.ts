@@ -50,6 +50,7 @@ export const moveElement: OperationHandler<MoveElementOperation> = {
       context.geometry(target.location.pageIndex),
       issue,
       operation.to ? "/to" : "/by",
+      target.element.bounds,
     );
   },
   apply(operation, context) {
@@ -107,6 +108,8 @@ export const resizeElement: OperationHandler<ResizeElementOperation> = {
       operation.rect,
       context.geometry(target.location.pageIndex),
       issue,
+      "/rect",
+      target.element.bounds,
     );
   },
   apply(operation, context) {

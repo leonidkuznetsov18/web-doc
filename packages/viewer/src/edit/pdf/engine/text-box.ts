@@ -469,18 +469,41 @@ export function validateRect(
   geometry: PageGeometry,
   issue: Issue,
   path = "/rect",
+  current?: PageRect,
 ): void {
   const size = displayedSize(geometry);
   const tolerance = 0.01;
+  // Imported objects may already bleed outside the visible crop. Transforms
+  // can keep or reduce that overflow; the page tolerance must not accumulate
+  // on their current edges and permit repeated small outward steps.
+  const left = Math.min(-tolerance, current?.x ?? 0);
+  const top = Math.min(-tolerance, current?.y ?? 0);
+  const right = Math.max(
+    size.width + tolerance,
+    current ? current.x + current.width : 0,
+  );
+  const bottom = Math.max(
+    size.height + tolerance,
+    current ? current.y + current.height : 0,
+  );
+  const missesPage =
+    current !== undefined &&
+    (rect.x >= size.width ||
+      rect.y >= size.height ||
+      rect.x + rect.width <= 0 ||
+      rect.y + rect.height <= 0);
   if (
-    rect.x < -tolerance ||
-    rect.y < -tolerance ||
-    rect.x + rect.width > size.width + tolerance ||
-    rect.y + rect.height > size.height + tolerance
+    rect.x < left ||
+    rect.y < top ||
+    rect.x + rect.width > right ||
+    rect.y + rect.height > bottom ||
+    missesPage
   )
     issue(
       path,
       "range",
-      `The rectangle must lie within the ${size.width}×${size.height} pt page`,
+      current
+        ? `The rectangle must preserve or reduce existing overflow and remain partly visible within the ${size.width}×${size.height} pt page`
+        : `The rectangle must lie within the ${size.width}×${size.height} pt page`,
     );
 }
