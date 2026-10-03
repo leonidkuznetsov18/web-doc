@@ -704,7 +704,11 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
       body:
         '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Bold heading </w:t></w:r>' +
         '<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">italic phrase </w:t></w:r>' +
-        `<w:r><w:t xml:space="preserve">plain tail.${addition}</w:t></w:r></w:p>` +
+        '<w:r><w:t xml:space="preserve">plain tail.</w:t></w:r>' +
+        (addition
+          ? `<w:r><w:rPr><w:b/><w:i/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">${addition}</w:t></w:r>`
+          : "") +
+        "</w:p>" +
         paragraph("Following paragraph must move below the expanded draft") +
         sectPr({ width: 7200, height: 15840, margin: 720 }),
     });
@@ -767,6 +771,7 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
         {
           target: first.id,
           text: inserted,
+          insertionStyle: { bold: true, italic: true, underline: true },
           range: {
             start: { elementId: first.id, offset: originalText.length },
             end: { elementId: first.id, offset: originalText.length },
@@ -877,9 +882,184 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
         (run.fontStyle === "italic" || run.font?.includes("italic")),
     ),
   ).toBe(true);
+  expect(
+    result.mixedRuns.some(
+      (run) =>
+        run.text.includes("Native") &&
+        (run.fontWeight === 700 || run.font?.includes("bold")) &&
+        (run.fontStyle === "italic" || run.font?.includes("italic")),
+    ),
+  ).toBe(true);
   expect(result.layoutLines).toBeGreaterThan(3);
   expect(result.followingYAfter).toBeGreaterThan(result.followingYBefore);
   expect(result.followingYAfter).toBeGreaterThanOrEqual(
     result.lastDraftLineBottom - 1,
   );
+});
+
+test("read-only DOCX leading newline preview paints the native split and retains its empty B/I/U mark", async ({
+  page,
+}, testInfo) => {
+  const originalProperties =
+    '<w:pPr><w:spacing w:after="160"/><w:jc w:val="center"/><w:rPr><w:u w:val="none"/></w:rPr></w:pPr>';
+  const original = buildDocx({
+    body:
+      "<w:p>" +
+      originalProperties +
+      "<w:r><w:t>AB</w:t></w:r></w:p>" +
+      paragraph("Following paragraph") +
+      sectPr(),
+  });
+  // Authored separately from the native edit writer: a new first mark is styled,
+  // the original last mark and unaffected AB run keep their properties.
+  const expected = buildDocx({
+    body:
+      '<w:p><w:pPr><w:spacing w:after="160"/><w:jc w:val="center"/><w:rPr><w:b/><w:bCs/><w:i/><w:iCs/><w:u w:val="single"/></w:rPr></w:pPr></w:p>' +
+      "<w:p>" +
+      originalProperties +
+      '<w:r><w:rPr><w:b/><w:bCs/><w:i/><w:iCs/><w:u w:val="single"/></w:rPr><w:t>X</w:t></w:r><w:r><w:t>AB</w:t></w:r></w:p>' +
+      paragraph("Following paragraph") +
+      sectPr(),
+  });
+  await loadDocument(page, original, "leading-split.docx");
+  const result = await page.evaluate(
+    async ({ expectedBytes, originalBytes }) => {
+      const viewer = (window as unknown as { __viewer: Viewer }).__viewer;
+      const session = await viewer.edit();
+      if (session.format !== "docx") throw new Error("Expected DOCX session");
+      const target = (await session.getElements({ pageIndex: 0 })).items.find(
+        (element) => element.text === "AB",
+      );
+      if (!target) throw new Error("Original paragraph missing");
+      const fields = {
+        target: target.id,
+        text: "\nX",
+        range: {
+          start: { elementId: target.id, offset: 0 },
+          end: { elementId: target.id, offset: 0 },
+        },
+        insertionStyle: { bold: true, italic: true, underline: true },
+      };
+      const stateBefore = session.state;
+      const changes: string[] = [];
+      viewer.on("documentchange", () => changes.push("documentchange"));
+      viewer.on("editstatechange", () => changes.push("editstatechange"));
+      const draftCanvas = document.createElement("canvas");
+      const pages = await session.previewTextPages(fields, {
+        pages: [{ pageIndex: 0, target: draftCanvas }],
+        zoom: 1,
+        devicePixelRatio: 1,
+      });
+      const bytePreview = await session.previewText(fields);
+      if (!bytePreview.item) throw new Error("Draft bytes missing");
+      const module = (await import("/main.js")) as {
+        ViewerClient: typeof ViewerClient;
+      };
+      const client = module.ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href),
+        fontPolicy: { mode: "offline" },
+      });
+      const draftViewer = client.createViewer();
+      const expectedViewer = client.createViewer();
+      try {
+        await draftViewer.load(bytePreview.item, { fileName: "draft.docx" });
+        const draftSession = await draftViewer.edit();
+        if (draftSession.format !== "docx")
+          throw new Error("Expected draft DOCX session");
+        const elements = (await draftSession.getElements()).items;
+        const empty = elements.find((element) => element.id === target.id);
+        const last = elements.find((element) => element.text === "XAB");
+        if (!empty || !last) throw new Error("Split paragraphs missing");
+        const emptyStyle = (
+          await draftSession.getTextStyle({ target: empty.id })
+        ).item;
+        const insertedStyle = (
+          await draftSession.getTextStyle({
+            target: last.id,
+            range: {
+              start: { elementId: last.id, offset: 0 },
+              end: { elementId: last.id, offset: 1 },
+            },
+          })
+        ).item;
+        const tailStyle = (
+          await draftSession.getTextStyle({
+            target: last.id,
+            range: {
+              start: { elementId: last.id, offset: 1 },
+              end: { elementId: last.id, offset: 3 },
+            },
+          })
+        ).item;
+        await expectedViewer.load(new Uint8Array(expectedBytes), {
+          fileName: "independent-split.docx",
+        });
+        const expectedCanvas = document.createElement("canvas");
+        await expectedViewer.renderPage(0, expectedCanvas, {
+          zoom: 1,
+          devicePixelRatio: 1,
+        });
+        const bytesCanvas = document.createElement("canvas");
+        await draftViewer.renderPage(0, bytesCanvas, {
+          zoom: 1,
+          devicePixelRatio: 1,
+        });
+        const saved = await session.save();
+        return {
+          draftPixels: draftCanvas.toDataURL(),
+          expectedPixels: expectedCanvas.toDataURL(),
+          bytesPixels: bytesCanvas.toDataURL(),
+          emptyStyle,
+          insertedStyle,
+          tailStyle,
+          paragraphs: elements.map((element) => element.text),
+          pageCount: pages.item?.pageCount,
+          stateBefore,
+          stateAfter: session.state,
+          changes,
+          originalBytesUnchanged:
+            saved.bytes.length === originalBytes.length &&
+            saved.bytes.every((byte, index) => byte === originalBytes[index]),
+        };
+      } finally {
+        await draftViewer.destroy();
+        await expectedViewer.destroy();
+        await client.destroy();
+      }
+    },
+    {
+      expectedBytes: Array.from(expected),
+      originalBytes: Array.from(original),
+    },
+  );
+  for (const [name, pixels] of [
+    ["native-leading-split", result.draftPixels],
+    ["independent-leading-split", result.expectedPixels],
+  ]) {
+    const path = testInfo.outputPath(`${name}.png`);
+    await writeFile(path, Buffer.from(pixels.split(",")[1] ?? "", "base64"));
+    await testInfo.attach(name, { path, contentType: "image/png" });
+  }
+  expect(result.draftPixels === result.expectedPixels).toBe(true);
+  expect(result.draftPixels === result.bytesPixels).toBe(true);
+  expect(result.emptyStyle).toMatchObject({
+    bold: true,
+    italic: true,
+    underline: true,
+  });
+  expect(result.insertedStyle).toMatchObject({
+    bold: true,
+    italic: true,
+    underline: true,
+  });
+  expect(result.tailStyle).toMatchObject({
+    bold: false,
+    italic: false,
+    underline: false,
+  });
+  expect(result.paragraphs).toEqual(["", "XAB", "Following paragraph"]);
+  expect(result.pageCount).toBe(1);
+  expect(result.originalBytesUnchanged).toBe(true);
+  expect(result.stateAfter).toEqual(result.stateBefore);
+  expect(result.changes).toEqual([]);
 });
