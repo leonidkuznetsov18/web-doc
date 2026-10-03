@@ -1,7 +1,7 @@
 /*
  * Minimal CFF font programs for tests, written byte by byte: named glyphs
- * with advance widths and no outlines, the shape a PDF's FontFile3 /Type1C
- * subset has. Every number is written as a five-byte integer, so the top
+ * with advance widths and, where asked, a box for an outline, the shape a
+ * PDF's FontFile3 /Type1C subset has. Every number is written as a five-byte integer, so the top
  * DICT has the same size whatever offsets it holds.
  */
 
@@ -22,6 +22,8 @@ export interface CffGlyph {
   readonly width?: number;
   /** The width is pushed before a call to a global subroutine that ends the glyph. */
   readonly viaSubroutine?: boolean;
+  /** The height of a box drawn on the baseline, inset 50 units from each side; none without one. */
+  readonly ink?: number;
 }
 
 export function cffFont({
@@ -55,14 +57,16 @@ export function cffFont({
   ];
   const charStrings = [
     [14], // .notdef: endchar
-    ...glyphs.map((glyph) =>
-      glyph.width === undefined
-        ? [14]
-        : glyph.viaSubroutine
-          ? // Subroutine 0 is numbered -107 with the bias of a small set: callgsubr.
-            [...number(glyph.width - nominalWidth, "charstring"), 32, 29]
-          : [...number(glyph.width - nominalWidth, "charstring"), 14],
-    ),
+    ...glyphs.map((glyph) => [
+      ...(glyph.width === undefined
+        ? []
+        : number(glyph.width - nominalWidth, "charstring")),
+      ...(glyph.ink === undefined
+        ? []
+        : box(glyph.width ?? defaultWidth, glyph.ink)),
+      // Subroutine 0 is numbered -107 with the bias of a small set: callgsubr.
+      ...(glyph.viaSubroutine ? [32, 29] : [14]),
+    ]),
   ];
   const privateDict = [
     ...number(defaultWidth),
@@ -150,6 +154,19 @@ interface Layout {
   readonly charStringsAt: number;
   readonly fdArrayAt: number;
   readonly privateAt: number;
+}
+
+/** A closed box from x 50 to `width - 50` and y 0 to `height`: rmoveto, then rlineto. */
+function box(width: number, height: number): number[] {
+  const side = width - 100;
+  return [
+    ...[50, 0].flatMap((value) => number(value, "charstring")),
+    21,
+    ...[side, 0, 0, height, -side, 0].flatMap((value) =>
+      number(value, "charstring"),
+    ),
+    5,
+  ];
 }
 
 /** A DICT operand as a five-byte integer, or a charstring operand as its own 255 form (16.16). */

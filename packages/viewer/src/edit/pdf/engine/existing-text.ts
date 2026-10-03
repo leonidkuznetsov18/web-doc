@@ -9,7 +9,7 @@ import {
   replaceParagraphText,
 } from "./paragraph-edit.js";
 import { objectBounds, OBJECT_TEXT } from "./elements.js";
-import { fontCanDraw, validateScript } from "./fonts.js";
+import { fontCanRewrite, validateScript } from "./fonts.js";
 import type {
   ElementLocation,
   Issue,
@@ -227,9 +227,9 @@ function textTarget(
 
 /**
  * Whether the object's own font can draw `text`: a standard font for WinAnsi
- * text, or an embedded TrueType program whose cmap covers every character
- * (which also answers for subsets, since their cmaps hold only what they
- * kept).
+ * text, or an embedded TrueType or bare CFF program with a glyph for every
+ * character (which also answers for subsets, since they hold only what they
+ * kept), each with a width in the PDF.
  */
 function canKeepFont(
   context: OperationContext,
@@ -241,7 +241,7 @@ function canKeepFont(
       page,
       target.location.indexes[0]!,
     );
-    return fontCanDraw(
+    return fontCanRewrite(
       context.pdfium,
       context.pdfium.lib.FPDFTextObj_GetFont(object),
       text,

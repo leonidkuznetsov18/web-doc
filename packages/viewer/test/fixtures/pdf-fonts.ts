@@ -52,6 +52,48 @@ export function cffTextPdf(): Uint8Array {
   ]);
 }
 
+/**
+ * Three lines in an inked CFF subset: "AB", "BA" and "A B". The PDF gives
+ * widths to the space, "0", "A" and "B"; the program has glyphs for the
+ * space, "A", "B" and "a". So "0" has a width and no glyph, and "a" a glyph
+ * and no width.
+ */
+export function cffInkTextPdf(): Uint8Array {
+  const program = cffFont({
+    name: "ABCDEF+InkFace",
+    glyphs: [
+      { name: "space", width: 250 },
+      { name: "A", width: 600, ink: 700 },
+      { name: "B", width: 550, ink: 400, viaSubroutine: true },
+      { name: "a", width: 500, ink: 300 },
+    ],
+  });
+  const widths = Array.from({ length: 35 }, (_, offset) =>
+    offset === 0
+      ? 250
+      : offset === 16
+        ? 500
+        : offset === 33
+          ? 600
+          : offset === 34
+            ? 550
+            : 0,
+  );
+  return pdf([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>",
+    `<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+InkFace /FirstChar 32 /LastChar 66 /Widths [${widths.join(" ")}] /Encoding /WinAnsiEncoding /FontDescriptor 5 0 R >>`,
+    descriptor("ABCDEF+InkFace"),
+    stream(program, "/Subtype /Type1C"),
+    stream(
+      latin1(
+        "BT /F1 24 Tf 72 700 Td (AB) Tj ET\nBT /F1 24 Tf 72 650 Td (BA) Tj ET\nBT /F1 24 Tf 72 600 Td (A B) Tj ET",
+      ),
+    ),
+  ]);
+}
+
 /** One line in a CID-keyed CFF font through Identity-H. */
 export function cidTextPdf(): Uint8Array {
   const program = cffFont({
