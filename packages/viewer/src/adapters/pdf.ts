@@ -373,9 +373,12 @@ class PdfJsBackend implements PdfBackend {
     devicePixelRatio: number,
     signal?: AbortSignal,
   ): Promise<void> {
-    this.#assertOpen();
-    const page = await this.#page(pageIndex);
-    if (signal?.aborted) throw abortError();
+    if (this.#closed || signal?.aborted) throw abortError();
+    const page = await this.#page(pageIndex).catch((error: unknown) => {
+      if (this.#closed || signal?.aborted) throw abortError();
+      throw error;
+    });
+    if (this.#closed || signal?.aborted) throw abortError();
     const viewport = page.getViewport({ scale: CSS_UNITS * zoom });
     const dpr = Math.max(1, devicePixelRatio);
     const width = Math.max(1, viewport.width);
@@ -411,9 +414,10 @@ class PdfJsBackend implements PdfBackend {
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       await renderTask.promise;
-      if (signal?.aborted) throw abortError();
+      if (this.#closed || signal?.aborted) throw abortError();
     } catch (error) {
       if (
+        this.#closed ||
         signal?.aborted ||
         error instanceof this.#module.RenderingCancelledException ||
         (error instanceof Error && error.name === "RenderingCancelledException")

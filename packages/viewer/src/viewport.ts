@@ -300,6 +300,14 @@ export class ViewerViewport {
     changedPages?: readonly number[],
     revision?: number,
   ): void {
+    // The viewer retires the old adapter after this synchronous handoff.
+    // Unfinished paints still belong to that adapter, even on unchanged pages.
+    for (const slot of this.#slots.values()) {
+      if (!slot.controller) continue;
+      slot.controller.abort();
+      delete slot.controller;
+      delete slot.renderKey;
+    }
     const previous = this.#info;
     this.#info = info;
     this.#contentRevision = revision ?? this.#contentRevision + 1;
@@ -624,6 +632,7 @@ export class ViewerViewport {
 
   async #renderSlot(pageIndex: number, slot: PageSlot): Promise<void> {
     slot.controller?.abort();
+    delete slot.root.dataset.renderError;
     const controller = new AbortController();
     slot.controller = controller;
     const generation = ++slot.generation;
@@ -666,6 +675,10 @@ export class ViewerViewport {
         slot.root.dataset.renderError =
           error instanceof Error ? error.message : String(error);
       }
+      // A text-layer failure may occur while the raster is still rendering.
+      controller.abort();
+    } finally {
+      if (slot.controller === controller) delete slot.controller;
     }
   }
 

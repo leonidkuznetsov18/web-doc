@@ -135,7 +135,11 @@ A batch is applied completely or not at all. When `apply()` resolves, every
 read API — `getDocumentInfo()`, `renderPage()`, `getPageText()`, `search()`,
 `selectText()` — already reflects the new content, and the viewport repaints
 the pages in `changedPages` while keeping zoom, fit and scroll position;
-untouched pages keep their bitmaps. The painted geometry follows at the next
+untouched pages keep their completed bitmaps. A mounted viewport cancels unfinished
+paints and retries those pages against the new document at the current zoom;
+cancellation is not a permanent page error. For PDFs, outstanding renders of the
+replaced document reject with `aborted`, including renders queued before the swap.
+The painted geometry follows at the next
 frame: `layoutchange` says when the view-geometry helpers describe the new
 revision. Search results and the selection are cleared, with `searchchange`
 and `selectionchange` set to `null`.
