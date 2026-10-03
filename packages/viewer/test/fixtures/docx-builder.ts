@@ -29,10 +29,12 @@ export interface DocxOptions {
   readonly styles?: string;
   /** Major and minor Latin faces of a theme part, when the document should have one. */
   readonly theme?: { readonly major: string; readonly minor: string };
-  /** Media parts referenced from the body. */
+  /** Media parts referenced from the body: rId9 for the first, rId10 on. */
   readonly media?: readonly {
     readonly name: string;
     readonly data: Uint8Array;
+    /** `image/png` for `.png` and `image/jpeg` otherwise when absent. */
+    readonly contentType?: string;
   }[];
 }
 
@@ -143,16 +145,17 @@ export function buildDocx(options: DocxOptions): Uint8Array {
     '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
     '<Default Extension="xml" ContentType="application/xml"/>',
   ];
-  for (const media of options.media ?? []) {
+  for (const [index, media] of (options.media ?? []).entries()) {
     files.push({ name: media.name, data: media.data, method: 0 });
     const extension = media.name.slice(media.name.lastIndexOf(".") + 1);
-    const type = extension === "png" ? "image/png" : "image/jpeg";
+    const type =
+      media.contentType ?? (extension === "png" ? "image/png" : "image/jpeg");
     if (!defaults.some((item) => item.includes(`Extension="${extension}"`)))
       defaults.push(
         `<Default Extension="${extension}" ContentType="${type}"/>`,
       );
     rels.push({
-      id: "rId9",
+      id: `rId${9 + index}`,
       type: `${R}/image`,
       target: media.name.replace(/^word\//, ""),
     });

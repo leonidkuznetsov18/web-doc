@@ -100,6 +100,33 @@ export function samplePng(width = 24, height = 16): Uint8Array {
   return encodePng({ width, height, rgba });
 }
 
+/**
+ * Whether a PNG is whole: the signature, then chunks from IHDR to IEND that
+ * each fit the file and pass their CRC. A stand-in for the browser's decoder
+ * in Node: Chromium's createImageBitmap rejects the picture of
+ * tests/fixtures/docx/everything.docx, whose IDAT fails its checksum.
+ */
+export function pngChecksumsHold(bytes: Uint8Array): boolean {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (!signature.every((byte, index) => bytes[index] === byte)) return false;
+  let offset = 8;
+  let first = true;
+  while (offset + 12 <= bytes.length) {
+    const length = view.getUint32(offset);
+    if (offset + 12 + length > bytes.length) return false;
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    const stored = view.getUint32(offset + 8 + length);
+    if (crc32(bytes.subarray(offset + 4, offset + 8 + length)) !== stored)
+      return false;
+    if (first && type !== "IHDR") return false;
+    first = false;
+    offset += 12 + length;
+    if (type === "IEND") return offset === bytes.length;
+  }
+  return false;
+}
+
 function chunk(type: string, data: Uint8Array): Uint8Array {
   const out = new Uint8Array(12 + data.length);
   const view = new DataView(out.buffer);

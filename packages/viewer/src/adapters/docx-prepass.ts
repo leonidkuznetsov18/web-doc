@@ -33,6 +33,10 @@ export {
  *    model paragraphs but does not read `w14:paraId`. An editor that walks
  *    the same paragraphs in the same order computes the same ids from the
  *    original bytes.
+ * 3. When the caller passes a decoder, the pictures it cannot decode are
+ *    left out, their references kept: `@silurus/ooxml` 0.88 fails a whole
+ *    page when one picture does not decode, but leaves the box of a missing
+ *    picture empty and paints the rest.
  */
 
 const WP_NS =
@@ -60,6 +64,20 @@ export interface DocxPrepassResult {
   readonly markedParagraphs: number;
   /** Of those, paragraphs whose id was generated (no `w14:paraId` in the file). */
   readonly generatedIds: number;
+  /** Picture parts left out because the decoder rejected them. */
+  readonly droppedPictures: readonly string[];
+}
+
+export interface DocxPrepassOptions {
+  /**
+   * Whether the browser decodes a picture, asked about every image part the
+   * renderer hands to the browser's decoder. Decoding costs what painting
+   * does, so the viewer asks only after a page failed on a picture.
+   */
+  readonly decodable?: (
+    bytes: Uint8Array,
+    contentType: string,
+  ) => Promise<boolean>;
 }
 
 /**
@@ -70,12 +88,14 @@ export async function prepareDocxForDisplay(
   bytes: Uint8Array,
   limits: ResourceLimits,
   signal?: AbortSignal,
+  options: DocxPrepassOptions = {},
 ): Promise<DocxPrepassResult> {
   const unchanged = {
     bytes,
     scaledImages: 0,
     markedParagraphs: 0,
     generatedIds: 0,
+    droppedPictures: [],
   };
   let pkg: OoxmlPackage;
   try {
@@ -119,13 +139,23 @@ export async function prepareDocxForDisplay(
       const items = paragraphIdPatches(part, state, counted);
       if (items.length > 0) transaction.patch(part, items);
     }
-    if (scaledImages === 0 && markedParagraphs === 0) return unchanged;
+    const droppedPictures = options.decodable
+      ? await undecodablePictures(pkg, options.decodable, signal)
+      : [];
+    for (const name of droppedPictures) transaction.removePart(name);
+    if (
+      scaledImages === 0 &&
+      markedParagraphs === 0 &&
+      droppedPictures.length === 0
+    )
+      return unchanged;
     await transaction.commit(signal);
     return {
       bytes: await pkg.save({}, signal),
       scaledImages,
       markedParagraphs,
       generatedIds,
+      droppedPictures,
     };
   } catch {
     return unchanged;
@@ -319,4 +349,51 @@ function paragraphIdPatches(
   }
   count(paragraphs.length, generated);
   return items;
+}
+
+/** The image parts, by name, that the renderer would hand to a decoder that rejects them. */
+async function undecodablePictures(
+  pkg: OoxmlPackage,
+  decodable: NonNullable<DocxPrepassOptions["decodable"]>,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const types = await pkg.contentTypes();
+  const rejected: string[] = [];
+  for (const name of [...pkg.currentPartNames].sort()) {
+    const contentType = types.typeOf(name)?.toLowerCase();
+    if (!contentType?.startsWith("image/")) continue;
+    const bytes = await pkg.part(name, signal);
+    if (drawnByRenderer(bytes, contentType)) continue;
+    if (!(await decodable(bytes, contentType))) rejected.push(name);
+  }
+  return rejected;
+}
+
+/**
+ * Pictures `@silurus/ooxml` draws without the browser's decoder: SVG by its
+ * content type, TIFF with its own codec (or a placeholder), EMF and WMF
+ * metafiles recognised by their headers, as the renderer recognises them.
+ */
+function drawnByRenderer(bytes: Uint8Array, contentType: string): boolean {
+  if (
+    contentType === "image/svg+xml" ||
+    contentType === "image/tiff" ||
+    contentType === "image/x-tiff"
+  )
+    return true;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const word = (offset: number, little = true): number | undefined =>
+    offset + 2 <= bytes.length ? view.getUint16(offset, little) : undefined;
+  const long = (offset: number): number | undefined =>
+    offset + 4 <= bytes.length ? view.getUint32(offset, true) : undefined;
+  const tiff =
+    (bytes[0] === 0x49 && bytes[1] === 0x49 && word(2) === 42) ||
+    (bytes[0] === 0x4d && bytes[1] === 0x4d && word(2, false) === 42);
+  // EMR_HEADER: record type 1, then the " EMF" signature at byte 40.
+  const emf = long(0) === 1 && long(40) === 0x464d4520;
+  // A placeable WMF's key, or a standard header: type 1 or 2, 9 words long.
+  const wmf =
+    long(0) === 0x9ac6cdd7 ||
+    (bytes.length >= 18 && (word(0) === 1 || word(0) === 2) && word(2) === 9);
+  return tiff || emf || wmf;
 }
