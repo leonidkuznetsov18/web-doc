@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.14.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.14.0...v0.14.1) (2026-10-03)
+
+### Bug fixes
+
+* **viewer:** edit pdf text inside form xobjects ([f7c9275](https://github.com/leonidkuznetsov18/web-doc/commit/f7c92750a94e2c1989362d3e5fc63c48ed8a368f))
+
 ## [0.14.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.13.1...v0.14.0) (2026-10-03)
 
 ### Features
