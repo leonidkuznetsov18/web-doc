@@ -26,6 +26,17 @@ import type { Pdfium } from "./pdfium.js";
  * is the reading order web-doc writes them in.
  */
 
+/** One Unicode character, which PDFium may expose as one scalar or two surrogate records. */
+export interface TextCharacter {
+  /** First native character index and the number of native records it occupies. */
+  readonly index: number;
+  readonly count: 1 | 2;
+  readonly object: number;
+  readonly text: string;
+  /** Generated page separators have no element anchor. */
+  readonly position?: TextPosition;
+}
+
 /** A loaded page with its text page and the character-to-element mapping. */
 export interface TextPageScan {
   readonly page: number;
@@ -34,14 +45,14 @@ export interface TextPageScan {
   /** Object handle → element id, in drawing order. */
   readonly byObject: ReadonlyMap<number, string>;
   readonly elements: readonly PdfElement[];
-  /** Per character of the text page: its element and offset, when an object draws it. */
-  readonly offsets: readonly (TextPosition | undefined)[];
+  readonly characters: readonly TextCharacter[];
   /** Element id → the rectangle its text is laid out in, for text boxes. */
   readonly frames?: ReadonlyMap<string, PageRect>;
 }
 
 interface Glyph {
   readonly index: number;
+  readonly count: 1 | 2;
   readonly object: number;
   readonly position: TextPosition;
   readonly char: string;
@@ -137,7 +148,9 @@ export function positionIn(
     HIT_TOLERANCE,
     HIT_TOLERANCE,
   );
-  let glyph = glyphs.find((entry) => entry.index === hit);
+  let glyph = glyphs.find(
+    (entry) => hit >= entry.index && hit < entry.index + entry.count,
+  );
   if (!glyph) {
     let best = Number.POSITIVE_INFINITY;
     for (const entry of glyphs) {
@@ -149,10 +162,11 @@ export function positionIn(
     }
   }
   // Past the glyph's middle along the reading direction, the caret goes after it.
-  const after = alongReading(point, glyph!.box, scan.geometry.rotation) > 0.5;
+  if (!glyph) return undefined;
+  const after = alongReading(point, glyph.box, scan.geometry.rotation) > 0.5;
   return {
-    elementId: glyph!.position.elementId,
-    offset: glyph!.position.offset + (after ? 1 : 0),
+    elementId: glyph.position.elementId,
+    offset: glyph.position.offset + (after ? glyph.char.length : 0),
   };
 }
 
@@ -182,12 +196,10 @@ function glyphsOf(
   keep: (position: TextPosition) => boolean,
 ): Glyph[] {
   const { lib } = pdfium;
-  const { textPage, geometry, offsets } = scan;
+  const { textPage, geometry, characters } = scan;
   const glyphs: Glyph[] = [];
-  for (let index = 0; index < offsets.length; index += 1) {
-    const position = offsets[index];
+  for (const { index, count, object, text, position } of characters) {
     if (!position || !keep(position)) continue;
-    const object = lib.FPDFText_GetTextObject(textPage, index);
     const tight = pdfium.readNumbers(4, "double", ([l, r, b, t]) =>
       lib.FPDFText_GetCharBox(textPage, index, l!, r!, b!, t!),
     );
@@ -211,9 +223,10 @@ function glyphsOf(
         : [looseLeft, looseRight, looseBottom, looseTop];
     glyphs.push({
       index,
+      count,
       object,
       position,
-      char: String.fromCodePoint(lib.FPDFText_GetUnicode(textPage, index)),
+      char: text,
       box: roundRect(userRectToPage(geometry, left, bottom, right, top)),
       loose: roundRect(
         userRectToPage(geometry, looseLeft, looseBottom, looseRight, looseTop),
@@ -242,19 +255,25 @@ function linesOf(
     const members = byObject.get(object);
     if (!members) continue;
     members.sort((a, b) => a.position.offset - b.position.offset);
+    const first = members[0];
+    const last = members.at(-1);
+    if (!first || !last) continue;
     const style = textStyle(pdfium, object);
-    const { elementId } = members[0]!.position;
+    const { elementId } = first.position;
     lines.push({
       range: {
-        start: { elementId, offset: members[0]!.position.offset },
-        end: { elementId, offset: members.at(-1)!.position.offset + 1 },
+        start: { elementId, offset: first.position.offset },
+        end: {
+          elementId,
+          offset: last.position.offset + last.char.length,
+        },
       },
       text: members.map((glyph) => glyph.char).join(""),
       bounds: roundRect(unionRects(members.map((glyph) => glyph.box))),
       // PDFium's loose boxes run from each origin to origin plus advance,
       // ascent to descent: their union is the line a text field must hold.
       advanceBounds: roundRect(unionRects(members.map((glyph) => glyph.loose))),
-      baseline: members[0]!.origin,
+      baseline: first.origin,
       glyphs: members.map(({ position, box, advance, origin }) => ({
         offset: position.offset,
         box,

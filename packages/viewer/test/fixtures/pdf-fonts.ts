@@ -92,6 +92,37 @@ export function cffInkTextPdf(
   ]);
 }
 
+/** One visible astral glyph between A and B, encoded through names or a ToUnicode map. */
+export function astralTextPdf(
+  encoding: "glyph-names" | "to-unicode",
+): Uint8Array {
+  const program = cffFont({
+    name: "TestAstral",
+    glyphs: [
+      { name: "A", width: 600, ink: 650 },
+      { name: "u1F600", width: 1000, ink: 700 },
+      { name: "B", width: 550, ink: 400 },
+    ],
+  });
+  const cmap = `/CIDInit /ProcSet findresource begin
+12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /AstralUnicode def /CMapType 2 def
+1 begincodespacerange <00> <FF> endcodespacerange
+3 beginbfchar <41> <0041> <42> <D83DDE00> <43> <0042> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end`;
+  return pdf([
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>",
+    `<< /Type /Font /Subtype /Type1 /BaseFont /TestAstral /FirstChar 65 /LastChar 67 /Widths [600 1000 550] /Encoding << /Type /Encoding /Differences [65 /A /u1F600 /B] >> /FontDescriptor 5 0 R ${encoding === "to-unicode" ? "/ToUnicode 8 0 R" : ""} >>`,
+    descriptor("TestAstral"),
+    stream(program, "/Subtype /Type1C"),
+    stream(latin1("BT /F1 24 Tf 72 700 Td (ABC) Tj ET")),
+    stream(latin1(cmap)),
+  ]);
+}
+
 /** One line in a CID-keyed CFF font through Identity-H. */
 export function cidTextPdf(): Uint8Array {
   const program = cffFont({

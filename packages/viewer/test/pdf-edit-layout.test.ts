@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { PdfEditDocument } from "../src/edit/pdf/engine/document.js";
 import type { PageRect, PdfOperation, TextLayout } from "../src/index.js";
 import { buildPdf, fixturePdfium } from "./fixtures/pdf-builder.js";
+import { astralTextPdf } from "./fixtures/pdf-fonts.js";
 import { pdfSession } from "./fixtures/pdf-session.js";
 
 /*
@@ -107,13 +108,18 @@ async function fontMetrics(
 }
 
 /** A one-page PDF whose content stream is `content`, with Helvetica as /F1. */
-function rawPdf(content: string): Uint8Array {
+function rawPdf(content: string, toUnicode?: string): Uint8Array {
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica ${toUnicode ? "/ToUnicode 6 0 R" : ""} >>`,
     `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+    ...(toUnicode
+      ? [
+          `<< /Length ${Buffer.byteLength(toUnicode)} >>\nstream\n${toUnicode}\nendstream`,
+        ]
+      : []),
   ];
   let pdf = "%PDF-1.7\n";
   const offsets: number[] = [];
@@ -690,4 +696,175 @@ describe("text field frame (ACTION-922)", () => {
       close();
     }
   });
+});
+
+describe("PDF UTF-16 positions", () => {
+  it("keeps source spans when case folding expands a BMP character", async () => {
+    const cmap = `/CIDInit /ProcSet findresource begin
+12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /CaseUnicode def /CMapType 2 def
+1 begincodespacerange <00> <FF> endcodespacerange
+1 beginbfchar <49> <0130> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end`;
+    const { session, end } = await pdfSession(
+      rawPdf("BT /F1 24 Tf 72 700 Td (IB) Tj ET", cmap),
+    );
+    try {
+      assert.equal((await session.getElement("p0:o0")).item?.text, "İB");
+      for (const [query, text, from, to] of [
+        ["i", "İ", 0, 1],
+        ["B", "B", 1, 2],
+        ["İB", "İB", 0, 2],
+      ] as const) {
+        const [match] = (await session.findText(query)).items;
+        assert.equal(match?.text, text, query);
+        assert.deepEqual(match?.ranges, [
+          {
+            start: { elementId: "p0:o0", offset: from },
+            end: { elementId: "p0:o0", offset: to },
+          },
+        ]);
+      }
+      assert.deepEqual(
+        (await session.findText("i", { caseSensitive: true })).items,
+        [],
+      );
+    } finally {
+      await end();
+    }
+  });
+  for (const encoding of ["glyph-names", "to-unicode"] as const) {
+    it(`keeps one astral glyph and complete caret boundaries with ${encoding}`, async () => {
+      const { session, end } = await pdfSession(astralTextPdf(encoding));
+      try {
+        const element = (await session.getElement("p0:o0")).item;
+        assert.equal(element?.text, "A😀B");
+        const layout = (await session.getTextLayout("p0:o0")).item;
+        assert.ok(layout);
+        const [line] = layout.lines;
+        assert.ok(line);
+        assert.equal(line.text, "A😀B");
+        assert.equal(
+          line.range.end.offset,
+          4,
+          "line ranges count UTF-16 code units",
+        );
+        assert.deepEqual(
+          line.glyphs.map((glyph) => glyph.offset),
+          [0, 1, 3],
+        );
+        assert.ok(
+          Math.abs(
+            line.glyphs.reduce((sum, glyph) => sum + glyph.advance, 0) - 51.6,
+          ) < 0.01,
+          "one physical advance per glyph",
+        );
+        const emoji = line.glyphs[1];
+        const following = line.glyphs[2];
+        assert.ok(emoji);
+        assert.ok(following);
+        for (const [glyph, before, after] of [
+          [emoji, 1, 3],
+          [following, 3, 4],
+        ] as const) {
+          assert.equal(
+            (await session.positionAt(0, along(glyph.box, 0, 0.25))).item
+              ?.offset,
+            before,
+          );
+          assert.equal(
+            (await session.positionAt(0, along(glyph.box, 0, 0.75))).item
+              ?.offset,
+            after,
+          );
+        }
+        const range = (start: number, end: number) => ({
+          start: { elementId: "p0:o0", offset: start },
+          end: { elementId: "p0:o0", offset: end },
+        });
+        assert.deepEqual((await session.rangeRects(range(1, 3))).items, [
+          emoji.box,
+        ]);
+        assert.deepEqual((await session.rangeRects(range(3, 4))).items, [
+          following.box,
+        ]);
+      } finally {
+        await end();
+      }
+    });
+
+    it(`returns the exact UTF-16 search target after an astral glyph with ${encoding}`, async () => {
+      const { session, end } = await pdfSession(astralTextPdf(encoding), {
+        fallbackFont: true,
+      });
+      try {
+        for (const [query, start, finish] of [
+          ["😀", 1, 3],
+          ["B", 3, 4],
+          ["😀B", 1, 4],
+        ] as const) {
+          const result = await session.findText(query);
+          assert.equal(result.items.length, 1, `one match for ${query}`);
+          const [match] = result.items;
+          assert.ok(match);
+          assert.equal(match.text, query);
+          assert.deepEqual(match.ranges, [
+            {
+              start: { elementId: "p0:o0", offset: start },
+              end: { elementId: "p0:o0", offset: finish },
+            },
+          ]);
+        }
+        assert.deepEqual(
+          (await session.findText("\ud83d")).items,
+          [],
+          "no half-surrogate match",
+        );
+        const [match] = (await session.findText("B")).items;
+        const range = match?.ranges[0];
+        assert.ok(range);
+        await session.replaceText({ target: "p0:o0", text: "A", range });
+        assert.equal(
+          (await session.getElements({ pageIndex: 0 })).items
+            .map((element) => element.text ?? "")
+            .join(""),
+          "A😀A",
+        );
+        const reopened = await pdfSession((await session.save()).bytes);
+        try {
+          assert.equal(
+            (await reopened.session.getElements({ pageIndex: 0 })).items
+              .map((element) => element.text ?? "")
+              .join(""),
+            "A😀A",
+          );
+          assert.deepEqual((await reopened.session.findText("B")).items, []);
+          const [saved] = (await reopened.session.findText("😀")).items;
+          assert.equal(saved?.text, "😀");
+          assert.deepEqual(saved?.ranges, [
+            {
+              start: { elementId: "p0:o0", offset: 1 },
+              end: { elementId: "p0:o0", offset: 3 },
+            },
+          ]);
+          const layout = (await reopened.session.getTextLayout("p0:o0")).item;
+          assert.deepEqual(
+            layout?.lines[0]?.glyphs.map((glyph) => glyph.offset),
+            [0, 1],
+          );
+          assert.equal(layout?.lines[0]?.range.end.offset, 3);
+        } finally {
+          await reopened.end();
+        }
+        await session.undo();
+        assert.equal((await session.getElement("p0:o0")).item?.text, "A😀B");
+        assert.deepEqual((await session.findText("B")).items[0]?.ranges, [
+          range,
+        ]);
+      } finally {
+        await end();
+      }
+    });
+  }
 });
