@@ -22,6 +22,14 @@ import type {
   EditSessionCore,
 } from "../engine.js";
 import type { DocxEngineReads } from "./engine.js";
+import {
+  canvasMeasurer,
+  caretAt,
+  layParagraph,
+  unionRects,
+  type LaidLine,
+  type TextMeasurer,
+} from "./layout.js";
 import { spanOnTarget } from "../range-style.js";
 import type {
   ApplyOptions,
@@ -40,6 +48,8 @@ import type {
   ReadOptions,
   ReadResult,
   SavedDocument,
+  TextLayout,
+  TextPosition,
   TextRange,
   TextTarget,
 } from "../types.js";
@@ -80,6 +90,8 @@ export class DocxSession implements DocxEditSession {
   readonly #core: EditSessionCore;
   #tools: ToolSet | undefined;
   readonly #access: EditSessionAccess;
+  /** Measures the runs' fonts; null where no canvas exists. */
+  #measurer: TextMeasurer | null | undefined;
 
   constructor(core: EditSessionCore, access: EditSessionAccess) {
     this.#core = core;
@@ -296,6 +308,140 @@ export class DocxSession implements DocxEditSession {
     );
   }
 
+  getTextLayout(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextLayout>> {
+    return this.#core.readItem(options, async (engine, signal) => {
+      const paragraph = await paragraphOf(engine, elementId, signal);
+      // A paragraph without visible text draws no run on any page: no
+      // page needs reading to say so.
+      if (!paragraph || INVISIBLE.test(paragraph.text ?? "")) return undefined;
+      const runs = this.#runLoader(signal);
+      const holds = async (pageIndex: number): Promise<boolean> =>
+        (await runs(pageIndex)).some(
+          (run) => run.paragraphId === paragraphIdOf(elementId),
+        );
+      const pageCount = this.#core.state.pageCount;
+      const candidates = [
+        ...[...this.#access.cachedPages()].sort((a, b) => a - b),
+        ...range(0, pageCount - 1, pageCount),
+      ];
+      const pageIndex = await firstPageHolding(candidates, holds);
+      if (pageIndex === undefined) return undefined;
+      const lines = this.#lay(paragraph, [
+        { pageIndex, runs: await runs(pageIndex) },
+      ]);
+      if (lines.length === 0) return undefined;
+      const colors = await docxReads(engine).textColors(
+        elementId,
+        lines.map((line) => ({
+          start: line.range.start.offset,
+          end: line.range.end.offset,
+        })),
+        signal,
+      );
+      return {
+        elementId,
+        pageIndex,
+        frame: unionRects(lines.map((line) => line.box)),
+        lines: lines.map(
+          ({ pageIndex: _page, box: _box, ends: _ends, ...line }, index) => ({
+            ...line,
+            color: colors?.[index] ?? "#000000",
+          }),
+        ),
+      };
+    });
+  }
+
+  positionAt(
+    pageIndex: number,
+    point: PagePoint,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextPosition>> {
+    return this.#core.readItem(options, async (engine, signal) => {
+      const runs = this.#runLoader(signal);
+      const ids = new Set(
+        (await runs(pageIndex))
+          .map((run) => run.paragraphId)
+          .filter((id): id is string => id !== undefined),
+      );
+      if (ids.size === 0) return undefined;
+      const paragraphs = (await engine.getElements(
+        { kinds: ["paragraph"] },
+        signal,
+      )) as readonly DocxElement[];
+      const lines: LaidLine[] = [];
+      for (const paragraph of paragraphs) {
+        const paragraphId = paragraphIdOf(paragraph.id);
+        if (!ids.has(paragraphId)) continue;
+        // Offsets continue from the pages the paragraph starts on.
+        const pages = [pageIndex];
+        while (
+          pages[0]! > 0 &&
+          (await runs(pages[0]! - 1)).some(
+            (run) => run.paragraphId === paragraphId,
+          )
+        )
+          pages.unshift(pages[0]! - 1);
+        const laid = this.#lay(
+          paragraph,
+          await Promise.all(
+            pages.map(async (page) => ({
+              pageIndex: page,
+              runs: await runs(page),
+            })),
+          ),
+        );
+        lines.push(...laid.filter((line) => line.pageIndex === pageIndex));
+      }
+      return caretAt(lines, point);
+    });
+  }
+
+  /** Text runs per page, each page read once per call. */
+  #runLoader(
+    signal: AbortSignal,
+  ): (pageIndex: number) => Promise<readonly TextRun[]> {
+    const pages = new Map<number, Promise<readonly TextRun[]>>();
+    return (pageIndex) => {
+      let runs = pages.get(pageIndex);
+      if (!runs) {
+        runs = this.#access.getTextRuns(pageIndex, signal);
+        pages.set(pageIndex, runs);
+      }
+      return runs;
+    };
+  }
+
+  /** The lines a paragraph's runs on the given pages draw. */
+  #lay(
+    paragraph: DocxElement,
+    pages: readonly {
+      readonly pageIndex: number;
+      readonly runs: readonly TextRun[];
+    }[],
+  ): LaidLine[] {
+    const paragraphId = paragraphIdOf(paragraph.id);
+    const placed = pages.flatMap(({ pageIndex, runs }) =>
+      runs
+        .filter((run) => run.paragraphId === paragraphId)
+        .map((run) => ({ run, pageIndex })),
+    );
+    this.#measurer ??= canvasMeasurer() ?? null;
+    return layParagraph(
+      paragraph.id,
+      paragraph.text ?? "",
+      placed,
+      {
+        fontFamily: paragraph.textStyle?.fontFamily ?? "",
+        fontSize: paragraph.textStyle?.fontSize ?? DEFAULT_FONT_SIZE,
+      },
+      this.#measurer ?? undefined,
+    );
+  }
+
   replaceText(
     fields: DocxFields<DocxReplaceTextOperation>,
     options?: ApplyOptions,
@@ -489,6 +635,45 @@ export class DocxSession implements DocxEditSession {
     }
     return out;
   }
+}
+
+/** Word's default run size, in points, for a paragraph whose style says none. */
+const DEFAULT_FONT_SIZE = 10;
+
+/** The id a paragraph's runs carry: its element id without the `p:` prefix. */
+function paragraphIdOf(elementId: string): string {
+  return elementId.slice(2);
+}
+
+/** The paragraph an element id names, when it is one. */
+async function paragraphOf(
+  engine: EditEngine,
+  elementId: string,
+  signal: AbortSignal,
+): Promise<DocxElement | undefined> {
+  if (!elementId.startsWith("p:")) return undefined;
+  const elements = (await engine.getElements(
+    { kinds: ["paragraph"] },
+    signal,
+  )) as readonly DocxElement[];
+  return elements.find((element) => element.id === elementId);
+}
+
+/**
+ * The first page that holds a paragraph: the first candidate found to hold
+ * it, then the pages before it as long as they hold it too.
+ */
+async function firstPageHolding(
+  candidates: readonly number[],
+  holds: (pageIndex: number) => Promise<boolean>,
+): Promise<number | undefined> {
+  for (const candidate of new Set(candidates)) {
+    if (!(await holds(candidate))) continue;
+    let first = candidate;
+    while (first > 0 && (await holds(first - 1))) first -= 1;
+    return first;
+  }
+  return undefined;
 }
 
 function range(first: number, last: number, pageCount: number): number[] {
@@ -725,7 +910,8 @@ function docxReads(engine: EditEngine): DocxEngineReads {
   const candidate = engine as Partial<DocxEngineReads>;
   if (
     typeof candidate.revisions !== "function" ||
-    typeof candidate.textStyle !== "function"
+    typeof candidate.textStyle !== "function" ||
+    typeof candidate.textColors !== "function"
   )
     throw new ViewerError(
       "edit-unsupported",

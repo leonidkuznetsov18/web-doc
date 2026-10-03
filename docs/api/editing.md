@@ -997,6 +997,11 @@ element's `text` reads back normalized) and a range may not split a
 surrogate pair (`invalid-range`). Slide-space coordinates are bounded to
 ±2.8 billion pixels (DrawingML's own limit) by the schemas.
 
+The PDF and DOCX overlay reads `getTextLayout` and `positionAt` are not yet
+available for decks: the renderer's slide runs carry no font, no size and no
+link to the shape's text, so offsets and baselines cannot be derived from
+them. A host places a field on the shape's `frame` instead.
+
 ### What stays unchanged
 
 Everything an operation does not touch keeps its bytes: other shapes, other
@@ -1071,6 +1076,8 @@ sizes and spacing are points.
 | `setTableCell({ target, row, column, text })`            | Replaces a cell's text in its first paragraph (properties and first run style kept, newlines as line breaks) and removes the cell's other paragraphs; a row or column outside the table is a `range` issue. Cells are counted as the file lists them, merged cells included.                                                                                                                                                                                                                                                                              |
 | `getRevisions(elementId, options?)`                      | A read: the tracked changes a paragraph holds, in document order (`ins`, `del`, `moveFrom`, `moveTo`, `rPrChange`, `pPrChange` with `id`, `author`, `date`, `scope` and the text they cover); empty for other elements.                                                                                                                                                                                                                                                                                                                                   |
 | `getTextStyle({ target, range? }, options?)`             | A read: the style a range of a paragraph shows, each property every run it covers shares and one they differ on left out; the whole paragraph without a range, the run before a collapsed range, the paragraph mark for an empty paragraph. `undefined` past the text or for other elements.                                                                                                                                                                                                                                                              |
+| `getTextLayout(elementId, options?)`                     | A read: the `TextLayout` of a paragraph on its first page, the same type the PDF session returns; see [Overlay reads](#overlay-reads). `undefined` for other elements and for a paragraph that draws no text on any page.                                                                                                                                                                                                                                                                                                                                 |
+| `positionAt(pageIndex, point, options?)`                 | A read: the `TextPosition` nearest to a page-space point; see [Overlay reads](#overlay-reads). `undefined` on a page without text.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 A table is named after its first paragraph, so an insertion, a move or a
 deletion that changes which paragraph comes first in its first cell
@@ -1159,6 +1166,56 @@ paragraph text, else the paragraph's runs on its first page. `pageRange`
 bounds the matches by the page they are placed on, and `maxResults`
 counts the matches on those pages. Page space is CSS pixels at 96 dpi,
 the unit of `DocumentInfo.pageSizes` for documents.
+
+### Overlay reads
+
+`getTextLayout` and `positionAt` answer what the [PDF overlay
+primitives](#overlay-primitives) of the same names answer, with the same
+types, so a host sizes its inline text field and maps a pointer to a caret
+with one code path for both formats. They read the renderer's text runs, as
+the rest of the geometry does: page space is CSS pixels at 96 dpi.
+
+`getTextLayout(elementId)` takes a paragraph and returns its lines on the
+first page that holds it (found among the pages the viewer has laid out,
+then page by page). Lines the paragraph continues with on later pages are
+left out; `positionAt` on those pages reaches them. Each line is one line as
+the renderer laid it out:
+
+- `range` and `text`: the part of the paragraph's `text` the line draws. Run
+  text is aligned with the paragraph's logical text, so every glyph's
+  `offset` names its character; what the text does not hold (list numbering,
+  a bullet, a tab drawn as nothing) has no glyph and does not widen the line.
+- `glyphs`: per character its pen `origin` on the baseline, its `advance`
+  and its `box`, the advance from the font's ascent to its descent; the
+  renderer reports no glyph outlines, so a line's `bounds` match its
+  `advanceBounds` except where raised or lowered text reaches past it. Advances are the run's font measured on a canvas and
+  scaled to fill the advance the renderer drew the run with; where no canvas
+  exists they are even shares of it.
+- `advanceBounds`: from the first glyph's origin to the last glyph's origin
+  plus its advance, and from the ascent to the descent of the line's largest
+  text. `baseline` lies inside it at the ascent: the renderer's ascent box
+  divided at the font's measured ascent share, or, when the renderer reports
+  none, the font centred in the line box as CSS centres a line of that
+  height.
+- `fontFamily` is the face the renderer drew with; `fontSize` is in page
+  space, CSS pixels (the document's points × 4/3), so it scales with the
+  page like the boxes; `color` is the `#RRGGBB` of the line's first run, a
+  theme colour resolved through the theme and Word's automatic colour as
+  black.
+
+`frame` is the union of the lines' boxes, each from the line's top to its
+bottom by the line pitch: the paragraph's rectangle on that page without its
+spacing before and after. A field with `line-height` set to the line pitch
+(the step between neighbouring baselines) and placed on `frame` lines up
+with the drawn lines and stops above the next paragraph. It is as wide as
+the widest line, not the column, so set the field's text unwrapped per line
+or give it the column's width.
+
+`positionAt(pageIndex, point)` finds the line nearest to the point among the
+paragraphs drawn on the page (vertically first, then horizontally) and the
+caret in it: before the glyph under the point, after it past the glyph's
+middle, at the line's end past its last glyph. Offsets on a continuation page
+continue from the pages before it.
 
 ### What stays unchanged
 

@@ -52,6 +52,14 @@ export class DocxEditEngineClient
     return this.request("edit-docx-text-style", { id, span }, signal);
   }
 
+  textColors(
+    id: string,
+    spans: readonly TextSpan[],
+    signal: AbortSignal,
+  ): Promise<readonly string[] | undefined> {
+    return this.request("edit-docx-text-colors", { id, spans }, signal);
+  }
+
   async start(original: Uint8Array): Promise<void> {
     const data = original.slice().buffer;
     const open: EditWorkerOpenPayload = {

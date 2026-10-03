@@ -5,11 +5,14 @@ import type {
   EditElement,
   EditReceipt,
   EditSessionBase,
+  PagePoint,
   ReadItem,
   ReadOptions,
   ReadResult,
   SavedDocument,
   SaveOptions,
+  TextLayout,
+  TextPosition,
   TextRange,
 } from "../types.js";
 
@@ -273,6 +276,27 @@ export interface DocxEditSession extends EditSessionBase<
     fields: { readonly target: string; readonly range?: TextRange },
     options?: ReadOptions,
   ): Promise<ReadItem<Partial<DocxTextStyle>>>;
+  /**
+   * The lines a paragraph draws on its first page, from the renderer's runs:
+   * offsets into its text, baselines, advance boxes, font and colour, and
+   * `frame`, the union of the line boxes. Lines it continues with on later
+   * pages are left out. `undefined` for another element and for a paragraph
+   * that draws no text on any page.
+   */
+  getTextLayout(
+    elementId: string,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextLayout>>;
+  /**
+   * The caret position nearest to a page-space point, in the paragraph whose
+   * line is nearest; past a glyph's middle the caret goes after it.
+   * `undefined` on a page without text.
+   */
+  positionAt(
+    pageIndex: number,
+    point: PagePoint,
+    options?: ReadOptions,
+  ): Promise<ReadItem<TextPosition>>;
   /** Replaces the whole text of a paragraph, or the part a range covers. */
   replaceText(
     fields: DocxFields<DocxReplaceTextOperation>,

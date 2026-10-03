@@ -295,6 +295,18 @@ export interface TextRun {
    */
   readonly paragraphId?: string;
   /**
+   * DOCX: the box the run's advances fill from the font's ascent to its
+   * descent around the baseline, in the run coordinate space, where `y` and
+   * `height` are the line's box (its top and the line pitch). The renderer
+   * falls back to the line's box when it knows no metrics for the face.
+   */
+  readonly advanceBounds?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  /**
    * PPTX: the top-left corner of the frame of the shape the run was laid out
    * in, in the run coordinate space (slide CSS pixels). Text a shape paints
    * past its frame, wrapped below a short box, still names its shape.
