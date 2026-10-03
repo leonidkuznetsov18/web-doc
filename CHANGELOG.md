@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.13.0...v0.13.1) (2026-10-03)
+
+### Bug fixes
+
+* **viewer:** preserve imported pdf bleed [linear:action-931] ([4399526](https://github.com/leonidkuznetsov18/web-doc/commit/439952691eec81fb231385debe8e77b63a80420e))
+
+### Performance
+
+* **viewer:** regenerate a pdf page once per edit ([de8eb78](https://github.com/leonidkuznetsov18/web-doc/commit/de8eb784840144cab4442d6494c83e7ba69d9872))
+
 ## [0.13.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.12.1...v0.13.0) (2026-10-03)
 
 ### Features
