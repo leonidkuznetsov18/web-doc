@@ -407,7 +407,7 @@ Every method takes the operation's fields and the usual `ApplyOptions`
 | `insertTextBox`        | `pageIndex`, `rect`, `text` (1–20 000 chars), `style?: PdfTextBoxStyle`                                                    | Wraps the text inside `rect`; the new element's id is `createdIds[0]`.                                                                                                                                                                                                                                                                         |
 | `replaceText`          | `target` (a `text`, `textBox` or canonical `paragraph`), `text`, `range?: TextRange` inside the target                     | A text box is laid out again; a canonical paragraph uses `replaceParagraphText`; a text object keeps its font, size, colour and baseline. With `range` only that part changes: a text object is split around it when only a fallback font can draw the new text, the first part keeping the id (`invalid-range` for a range outside the text). |
 | `replaceParagraphText` | `target` (a canonical `paragraph` id), `text` (up to 20 000 chars, empty clears), `range?: TextRange` inside the paragraph | Reflows the complete logical paragraph as one atomic Undo entry; overlap with neighboring content or the page edge is refused.                                                                                                                                                                                                                 |
-| `setTextStyle`         | `target` (a `text`, `textBox` or `paragraph`), `style: PdfTextBoxStyle`                                                    | Fields left out keep their value. Existing text objects and paragraphs accept `color`, `fontSize`, `bold`, `italic` and `underline`; they do not accept font-family, alignment or leading changes.                                                                                                                                                                                                                                                    |
+| `setTextStyle`         | `target` (a `text`, `textBox` or `paragraph`), `style: PdfTextBoxStyle`                                                    | Fields left out keep their value. Existing text objects and paragraphs accept `color`, `fontSize`, `bold`, `italic` and `underline`; they do not accept font-family, alignment or leading changes.                                                                                                                                             |
 | `insertImage`          | `pageIndex`, `rect`, `data: BinaryData`, `mimeType: "image/png" \| "image/jpeg"`                                           | JPEG bytes are embedded as they are; PNG is decoded and stored losslessly with its alpha channel.                                                                                                                                                                                                                                              |
 | `insertShape`          | `pageIndex`, `shape: "rectangle" \| "ellipse"` with `rect`, or `shape: "line"` with `from` and `to`; `stroke?`, `fill?`    | A rectangle or ellipse needs a stroke, a fill or both; a line needs a stroke.                                                                                                                                                                                                                                                                  |
 | `setShapeStyle`        | `target` (a `shape`), `stroke?: PdfStroke \| null`, `fill?: PdfFill \| null`                                               | `null` removes; absent keeps. A shape keeps at least one of the two.                                                                                                                                                                                                                                                                           |
@@ -488,15 +488,15 @@ interface PdfTextStyle {
 }
 ```
 
-| Kind        | What it is                                                                                                      | Accepts                                                                                 |
-| ----------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `text`      | One text object as stored in the file — often a word, a line or a run                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`          |
-| `image`     | An image object                                                                                                 | `moveElement`, `resizeElement`, `deleteElement`                                         |
-| `shape`     | A path object                                                                                                   | `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement`                        |
-| `textBox`   | A box created by `insertTextBox`; its lines are listed as one element                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`          |
+| Kind        | What it is                                                                                                      | Accepts                                                                                                       |
+| ----------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `text`      | One text object as stored in the file — often a word, a line or a run                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`                                |
+| `image`     | An image object                                                                                                 | `moveElement`, `resizeElement`, `deleteElement`                                                               |
+| `shape`     | A path object                                                                                                   | `setShapeStyle`, `moveElement`, `resizeElement`, `deleteElement`                                              |
+| `textBox`   | A box created by `insertTextBox`; its lines are listed as one element                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`                                |
 | `paragraph` | A confidently recognized homogeneous imported paragraph; native rows become one persisted element when reflowed | `replaceText`, `replaceParagraphText`, `setTextStyle` (color/fontSize/bold/italic/underline), `deleteElement` |
-| `table`     | A table created by `insertTable`; `text` joins cells by tab and newline                                         | `setTableCell`, `moveElement`, `deleteElement`                                          |
-| `other`     | Shadings, form XObjects and anything else                                                                       | `moveElement`, `resizeElement`, `deleteElement`                                         |
+| `table`     | A table created by `insertTable`; `text` joins cells by tab and newline                                         | `setTableCell`, `moveElement`, `deleteElement`                                                                |
+| `other`     | Shadings, form XObjects and anything else                                                                       | `moveElement`, `resizeElement`, `deleteElement`                                                               |
 
 Ids look like `p0:o3` for objects of the original file and `p0:n2.0.0` for
 elements an operation created. A file saved by an earlier session already
@@ -609,9 +609,20 @@ only those validated paths. This supports axis-aligned and quarter-turned text
 matrices; arbitrary rotations/skew are rejected because their native advance
 boxes cannot provide faithful line geometry. The new B/I/U styles require filled
 text: invisible OCR, stroked or clipping text is refused rather than changing
-its visibility. There is no range-style API. Empty imported paragraphs remain
-editable; the existing `replaceText` nonempty constraint for single rows and
-textboxes is unchanged.
+its visibility. There is no range-style API.
+
+`replaceText({ text: "", range })` deletes the selected span; an empty replacement
+without a range clears the target. Filled imported rows and authored textboxes
+remain editable when cleared, including after Undo/Redo and Save/reopen. They use
+validated non-painting native geometry, never an exported placeholder character.
+Imported rows retain their native frame, matrix, colour and face intent; empty
+textboxes retain their authored frame. Native row fonts are resolved through the
+existing font library when typing resumes: an unavailable original embedded
+subset can require an explicit `font-substitution` warning. No original-font
+fidelity is promised after all its glyph owners have been removed. Full clearing
+of stroked, invisible OCR or clipping text is refused atomically because an empty
+anchor cannot preserve those rendering semantics. Partial deletions still use the
+existing native row replacement path.
 
 An unknown `fontFamily` is an issue coded `unknown-font`; text no available
 font covers is `font-unavailable`; right-to-left and complex-script text is

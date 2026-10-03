@@ -17,6 +17,8 @@ import {
   textScale,
   clearWebDocMark,
   writeWebDocMark,
+  emptyTextMarkOf,
+  type EmptyTextMark,
   type MarkParams,
 } from "./elements.js";
 import { fontCanRewrite, validateScript, type ResolvedFont } from "./fonts.js";
@@ -67,6 +69,18 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
     if (!target) return;
     const whole = splice(target.element.text ?? "", operation, issue);
     if (whole === undefined) return;
+    if (whole === "") {
+      if (
+        !emptyTextMarkOf(target.location.record.mark) &&
+        !isFilledText(context, target.location)
+      )
+        issue(
+          "/target",
+          "unsupported-target",
+          "Only filled text can retain an editable empty target",
+        );
+      return;
+    }
     if (!validateScript(operation.text, issue)) return;
     if (canKeepFont(context, target, whole)) return;
     const request = {
@@ -105,7 +119,10 @@ export const replaceText: OperationHandler<ReplaceTextOperation> = {
       );
     const target = textTarget(operation.target, context)!;
     const underlined = target.element.textStyle?.underline === true;
-    if (underlined) removeUnderline(context, target);
+    const empty = emptyTextMarkOf(target.location.record.mark);
+    if (splice(target.element.text ?? "", operation) === "")
+      return empty ? result(target.location) : clearText(context, target);
+    if (underlined && !empty) removeUnderline(context, target);
     const changed = replaceNativeText(operation, context, target);
     if (underlined)
       for (const id of [operation.target, ...changed.createdIds])
@@ -121,6 +138,8 @@ function replaceNativeText(
 ): OperationResult {
   const previous = target.element.text ?? "";
   const whole = splice(previous, operation)!;
+  if (emptyTextMarkOf(target.location.record.mark))
+    return replaceWithFallback(context, target, whole);
   if (canKeepFont(context, target, whole)) {
     const kept = replaceInPlace(context, target, whole);
     if (kept) return result(target.location);
@@ -200,21 +219,38 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
           "unsupported-style",
           `Existing text accepts color, fontSize, bold, italic and underline; ${field} cannot`,
         );
+    if (emptyTextMarkOf(target.location.record.mark)) {
+      if (operation.style.underline === true) {
+        const supported = context.readPage(
+          target.location.pageIndex,
+          (page) => {
+            const matrix = context.pdfium.readNumbers(6, "float", ([pointer]) =>
+              context.pdfium.lib.FPDFPageObj_GetMatrix(
+                context.pdfium.lib.FPDFPage_GetObject(
+                  page,
+                  target.location.indexes[0]!,
+                ),
+                pointer!,
+              ),
+            );
+            return matrix && isAxisAlignedMatrix(matrix);
+          },
+        );
+        if (!supported)
+          issue(
+            "/style/underline",
+            "unsupported-style",
+            "Underline requires axis-aligned or quarter-turned text",
+          );
+      }
+      return;
+    }
     const style = target.element.textStyle;
     if (
       style &&
       (faceChanges(style, operation) || operation.style.underline === true)
     ) {
-      const filled = context.readPage(target.location.pageIndex, (page) => {
-        const index = target.location.indexes[0];
-        return (
-          index !== undefined &&
-          context.pdfium.lib.FPDFTextObj_GetTextRenderMode(
-            context.pdfium.lib.FPDFPage_GetObject(page, index),
-          ) === 0
-        );
-      });
-      if (!filled) {
+      if (!isFilledText(context, target.location)) {
         issue(
           "/style",
           "unsupported-style",
@@ -245,6 +281,31 @@ export const setTextStyle: OperationHandler<SetTextStyleOperation> = {
     const target = textTarget(operation.target, context)!;
     const { lib } = context.pdfium;
     const { location } = target;
+    const empty = emptyTextMarkOf(location.record.mark);
+    if (empty) {
+      context.withPage(location.pageIndex, (page) => {
+        const object = lib.FPDFPage_GetObject(page, location.indexes[0]!);
+        const matrix = context.pdfium.readNumbers(6, "float", ([pointer]) =>
+          lib.FPDFPageObj_GetMatrix(object, pointer!),
+        );
+        const next: EmptyTextMark = {
+          ...empty,
+          empty: {
+            ...empty.empty,
+            style: { ...empty.empty.style, ...operation.style },
+            fontSize:
+              operation.style.fontSize === undefined
+                ? empty.empty.fontSize
+                : operation.style.fontSize / textScale(matrix),
+          },
+        };
+        writeWebDocMark(context.pdfium, context.document, object, next);
+        context.spliceObjects(location.pageIndex, location.indexes[0]!, 1, [
+          { id: operation.target, type: OBJECT_PATH, mark: next },
+        ]);
+      });
+      return result(location);
+    }
     const underlined =
       operation.style.underline ?? target.element.textStyle?.underline ?? false;
     if (target.element.textStyle?.underline) removeUnderline(context, target);
@@ -367,6 +428,33 @@ interface TextTarget {
   readonly element: PdfElement;
 }
 
+function isFilledText(
+  context: OperationContext,
+  location: ElementLocation,
+): boolean {
+  return context.readPage(location.pageIndex, (page) => {
+    const index = location.indexes[0];
+    return (
+      index !== undefined &&
+      context.pdfium.lib.FPDFTextObj_GetTextRenderMode(
+        context.pdfium.lib.FPDFPage_GetObject(page, index),
+      ) === 0
+    );
+  });
+}
+
+function isAxisAlignedMatrix([
+  a = 0,
+  b = 0,
+  c = 0,
+  d = 0,
+]: readonly number[]): boolean {
+  return (
+    (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6) ||
+    (Math.abs(a) < 1e-6 && Math.abs(d) < 1e-6)
+  );
+}
+
 function textTarget(
   target: string,
   context: OperationContext,
@@ -378,7 +466,11 @@ function textTarget(
     issue("/target", "unknown-target", `No element ${target}`);
     return undefined;
   }
-  if (element.kind !== "text" || location.record.type !== OBJECT_TEXT) {
+  if (
+    element.kind !== "text" ||
+    (location.record.type !== OBJECT_TEXT &&
+      !emptyTextMarkOf(location.record.mark))
+  ) {
     issue(
       "/target",
       "unsupported-target",
@@ -400,6 +492,7 @@ function canKeepFont(
   target: TextTarget,
   text: string,
 ): boolean {
+  if (emptyTextMarkOf(target.location.record.mark)) return false;
   return context.readPage(target.location.pageIndex, (page) => {
     const object = context.pdfium.lib.FPDFPage_GetObject(
       page,
@@ -411,6 +504,108 @@ function canKeepFont(
       text,
     );
   });
+}
+
+/** Keep a cleared row's native frame and baseline without exporting a glyph. */
+function clearText(
+  context: OperationContext,
+  target: TextTarget,
+): OperationResult {
+  const { pdfium } = context;
+  const { lib } = pdfium;
+  const { location, element } = target;
+  const index = location.indexes[0]!;
+  const style = element.textStyle;
+  if (!style) throw new ViewerError("edit-failed", "The row has no text style");
+  context.withPage(location.pageIndex, (page) => {
+    const old = lib.FPDFPage_GetObject(page, index);
+    const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
+      lib.FPDFPageObj_GetMatrix(old, pointer!),
+    );
+    const size = pdfium.readNumbers(1, "float", ([pointer]) =>
+      lib.FPDFTextObj_GetFontSize(old, pointer!),
+    )?.[0];
+    if (!matrix || size === undefined || size <= 0)
+      throw new ViewerError(
+        "edit-failed",
+        "The row has no valid native geometry",
+      );
+    const [a = 0, b = 0, c = 0, d = 0, e = 0, f = 0] = matrix;
+    const determinant = a * d - b * c;
+    if (Math.abs(determinant) < 1e-9)
+      throw new ViewerError(
+        "invalid-operation",
+        "The row has a singular text transform",
+      );
+    const corners = location.indexes.flatMap((index) => {
+      const member = lib.FPDFPage_GetObject(page, index);
+      let quad = pdfium.readNumbers(8, "float", ([pointer]) =>
+        lib.FPDFPageObj_GetRotatedBounds(member, pointer!),
+      );
+      // PDFium exposes rotated bounds for text, not paths. Owned underlines
+      // are restricted to axis-aligned/quarter-turned rows, where their native
+      // axis-aligned bounds invert exactly rather than enlarging the frame.
+      if (
+        !quad &&
+        lib.FPDFPageObj_GetType(member) === OBJECT_PATH &&
+        isAxisAlignedMatrix(matrix)
+      ) {
+        const bounds = pdfium.readNumbers(
+          4,
+          "float",
+          ([left, bottom, right, top]) =>
+            lib.FPDFPageObj_GetBounds(member, left!, bottom!, right!, top!),
+        );
+        if (bounds) {
+          const [left = 0, bottom = 0, right = 0, top = 0] = bounds;
+          quad = [left, bottom, right, bottom, right, top, left, top];
+        }
+      }
+      if (!quad)
+        throw new ViewerError("edit-failed", "The row has no native frame");
+      return [0, 2, 4, 6].map((offset) => ({
+        x:
+          (d * (quad[offset]! - e) - c * (quad[offset + 1]! - f)) / determinant,
+        y:
+          (-b * (quad[offset]! - e) + a * (quad[offset + 1]! - f)) /
+          determinant,
+      }));
+    });
+    const left = Math.min(...corners.map((point) => point.x));
+    const bottom = Math.min(...corners.map((point) => point.y));
+    const width = Math.max(...corners.map((point) => point.x)) - left;
+    const height = Math.max(...corners.map((point) => point.y)) - bottom;
+    const object = lib.FPDFPageObj_CreateNewRect(left, bottom, width, height);
+    if (!object)
+      throw new ViewerError(
+        "edit-failed",
+        "PDFium could not retain the empty row",
+      );
+    lib.FPDFPageObj_Transform(object, a, b, c, d, e, f);
+    lib.FPDFPageObj_SetFillColor(object, 0, 0, 0, 0);
+    lib.FPDFPath_SetDrawMode(object, 1, false);
+    const opacity =
+      pdfium.readNumbers(4, "i32", ([r, g, bl, alpha]) =>
+        lib.FPDFPageObj_GetFillColor(old, r!, g!, bl!, alpha!),
+      )?.[3] ?? 255;
+    const mark: EmptyTextMark = {
+      kind: "text",
+      id: element.id,
+      empty: { style, fontSize: size, opacity },
+    };
+    writeWebDocMark(pdfium, context.document, object, mark);
+    for (const at of [...location.indexes].reverse()) {
+      const previous = lib.FPDFPage_GetObject(page, at);
+      lib.FPDFPage_RemoveObject(page, previous);
+      lib.FPDFPageObj_Destroy(previous);
+      context.spliceObjects(location.pageIndex, at, 1, []);
+    }
+    lib.FPDFPage_InsertObjectAtIndex(page, object, index);
+    context.spliceObjects(location.pageIndex, index, 0, [
+      { id: element.id, type: OBJECT_PATH, mark },
+    ]);
+  });
+  return result(location);
 }
 
 /** Sets the text and confirms PDFium reads it back; false means it must be replaced. */
@@ -623,15 +818,18 @@ function replaceWithFallback(
   const style = change?.style ?? element.textStyle!;
   const index = location.indexes[0]!;
   const font = change?.font ?? replacementFont(context, style, text);
+  const empty = emptyTextMarkOf(location.record.mark);
   context.withPage(location.pageIndex, (page) => {
     const old = lib.FPDFPage_GetObject(page, index);
     const matrix = pdfium.readNumbers(6, "float", ([pointer]) =>
       lib.FPDFPageObj_GetMatrix(old, pointer!),
     ) ?? [1, 0, 0, 1, 0, 0];
     const size =
+      empty?.empty.fontSize ??
       pdfium.readNumbers(1, "float", ([pointer]) =>
         lib.FPDFTextObj_GetFontSize(old, pointer!),
-      )?.[0] ?? style.fontSize / textScale(matrix);
+      )?.[0] ??
+      style.fontSize / textScale(matrix);
     const object = lib.FPDFPageObj_CreateTextObj(
       context.document,
       font.handle,
@@ -640,6 +838,7 @@ function replaceWithFallback(
     setText(pdfium, object, text);
     const [r, g, b] = parseColor(style.color);
     const alpha =
+      empty?.empty.opacity ??
       pdfium.readNumbers(
         4,
         "i32",
@@ -649,7 +848,8 @@ function replaceWithFallback(
           blue !== undefined &&
           opacity !== undefined &&
           lib.FPDFPageObj_GetFillColor(old, red, green, blue, opacity),
-      )?.[3] ?? 255;
+      )?.[3] ??
+      255;
     lib.FPDFPageObj_SetFillColor(object, r, g, b, alpha);
     const [a, bb, c, d, e, f] = matrix as [
       number,
@@ -671,7 +871,7 @@ function replaceWithFallback(
     createdIds: [],
     changedPages: [location.pageIndex],
     warnings:
-      change && !font.substitution
+      (change || empty) && !font.substitution
         ? []
         : [
             {

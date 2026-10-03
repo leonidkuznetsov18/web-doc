@@ -14,6 +14,133 @@ const EDIT_ASSETS = [
   "/assets/pdfium/pdfium.wasm",
 ];
 
+test("deletes native PDF text and resumes typing in cleared targets after reopening [ACTION-954]", async ({
+  page,
+}) => {
+  const neighbor = { text: "Neighbor", x: 72, y: 700 };
+  const original = await buildPdf([
+    {
+      texts: [
+        neighbor,
+        { text: "SECOND LINEX", x: 200, y: 400, matrix: [0, 1, -1, 0] },
+      ],
+    },
+  ]);
+  const baseline = await buildPdf([{ texts: [neighbor] }]);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  const result = await page.evaluate(
+    async ({ original, baseline }) => {
+      const { ViewerClient } =
+        (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
+      const host = document.createElement("div");
+      Object.assign(host.style, { width: "800px", height: "900px" });
+      document.body.replaceChildren(host);
+      const viewer = ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href).href,
+      }).createViewer({ container: host, initialZoom: 1 });
+      const paint = async () => {
+        const canvas = document.createElement("canvas");
+        await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+        return canvas.toDataURL();
+      };
+      try {
+        await viewer.load(new Uint8Array(baseline), {
+          fileName: "neighbor.pdf",
+        });
+        const neighborPaint = await paint();
+        await viewer.load(new Uint8Array(original), {
+          fileName: "deletion.pdf",
+        });
+        const session = await viewer.edit();
+        if (session.format !== "pdf")
+          throw new Error("Expected native PDF session");
+        const target = "p0:o1";
+        await session.setTextStyle({ target, style: { underline: true } });
+        const inserted = await session.insertTextBox({
+          pageIndex: 0,
+          rect: { x: 100, y: 200, width: 240, height: 60 },
+          text: "BOX",
+          style: { underline: true },
+        });
+        const box = inserted.createdIds[0];
+        if (!box) throw new Error("No inserted text box");
+        await session.replaceText({
+          target,
+          text: "",
+          range: {
+            start: { elementId: target, offset: 11 },
+            end: { elementId: target, offset: 12 },
+          },
+        });
+        const shortened = (await session.getElement(target)).item?.text;
+        await session.undo();
+        const undone = (await session.getElement(target)).item?.text;
+        await session.redo();
+        const redone = (await session.getElement(target)).item?.text;
+        await session.replaceText({ target, text: "" });
+        await session.replaceText({
+          target: box,
+          text: "",
+          range: {
+            start: { elementId: box, offset: 0 },
+            end: { elementId: box, offset: 3 },
+          },
+        });
+        const clearedPaint = await paint();
+        const saved = await session.save();
+        await viewer.load(saved.bytes, { fileName: "cleared.pdf" });
+        const reopened = await viewer.edit();
+        if (reopened.format !== "pdf")
+          throw new Error("Expected reopened PDF session");
+        const empty = await Promise.all(
+          [target, box].map(async (id) => (await reopened.getElement(id)).item),
+        );
+        const emptyText = await viewer.getPageText(0);
+        const reopenedPaint = await paint();
+        await reopened.replaceText({ target, text: "Resumed row" });
+        await reopened.replaceText({ target: box, text: "Resumed box" });
+        await reopened.undo();
+        const undoneBox = (await reopened.getElement(box)).item?.text;
+        await reopened.redo();
+        const written = await reopened.save();
+        await viewer.load(written.bytes, { fileName: "resumed.pdf" });
+        return {
+          shortened,
+          undone,
+          redone,
+          empty,
+          emptyText,
+          cleared: clearedPaint === neighborPaint,
+          roundtrip: reopenedPaint === neighborPaint,
+          undoneBox,
+          resumedText: await viewer.getPageText(0),
+        };
+      } finally {
+        await viewer.close();
+        host.remove();
+      }
+    },
+    { original: Array.from(original), baseline: Array.from(baseline) },
+  );
+  expect(result.shortened).toBe("SECOND LINE");
+  expect(result.undone).toBe("SECOND LINEX");
+  expect(result.redone).toBe("SECOND LINE");
+  expect(result.empty).toHaveLength(2);
+  for (const element of result.empty) {
+    expect(element).toMatchObject({ text: "", textStyle: { underline: true } });
+    expect(element?.operations).toContain("replaceText");
+  }
+  expect(result.emptyText.trim()).toBe("Neighbor");
+  expect(result.cleared).toBe(true);
+  expect(result.roundtrip).toBe(true);
+  expect(result.undoneBox).toBe("");
+  expect(result.resumedText).toContain("Resumed row");
+  expect(result.resumedText).toContain("Resumed box");
+  expect(errors).toEqual([]);
+});
+
 test("exports true native bold italic and underline through the PDF worker", async ({
   page,
 }) => {
