@@ -61,7 +61,6 @@ test("edits an imported paragraph through the native worker and reopens its stab
           ?.text;
         await session.redo();
         const saved = await session.save();
-        await session.end();
         await viewer.load(saved.bytes, { fileName: "saved-paragraph.pdf" });
         const reopened = await viewer.edit();
         if (reopened.format !== "pdf")
