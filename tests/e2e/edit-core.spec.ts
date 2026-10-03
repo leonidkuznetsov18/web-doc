@@ -23,6 +23,8 @@ declare global {
           readonly pageIndex: number;
           readonly panY: number;
         };
+        load(bytes: Uint8Array, options: { fileName: string }): Promise<void>;
+        getEditSession(): unknown;
         setZoom(zoom: number): void;
         panBy(x: number, y: number): void;
         search(query: string): Promise<unknown>;
@@ -49,6 +51,15 @@ declare global {
       /** Resolves with the next layoutchange event. */
       nextLayout(): Promise<{ revision: number; pages: number[] }>;
       pixel(pageIndex: number): string | undefined;
+      holdPaint(text: string): void;
+      holdFrames(): void;
+      releaseFrames(): void;
+      releasePaint(text: string): void;
+      failPaint(text: string): void;
+      paintStarted(text: string): boolean;
+      paintFinished(text: string): boolean;
+      expectedPixel(text: string): string;
+      loadDocument(pages: readonly string[]): Promise<void>;
       canvasRect(pageIndex: number): DOMRect | undefined;
       highlights(pageIndex: number): number;
       settle(): Promise<void>;
@@ -86,6 +97,42 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
       return `hsl(${hash % 360} 70% 60%)`;
     };
 
+    interface PaintGate {
+      started: boolean;
+      finished: boolean;
+      pending: Promise<void>;
+      release(): void;
+      fail(): void;
+    }
+    const requestFrame = window.requestAnimationFrame.bind(window);
+    const cancelFrame = window.cancelAnimationFrame.bind(window);
+    const heldFrames = new Map<number, FrameRequestCallback>();
+    const replayedFrames = new Map<number, number>();
+    let framesHeld = false;
+    window.requestAnimationFrame = (callback) => {
+      const id = requestFrame((time) => {
+        if (framesHeld) heldFrames.set(id, callback);
+        else callback(time);
+      });
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      heldFrames.delete(id);
+      cancelFrame(replayedFrames.get(id) ?? id);
+      replayedFrames.delete(id);
+    };
+    const releaseFrames = () => {
+      framesHeld = false;
+      for (const [id, callback] of heldFrames) {
+        const replayed = requestFrame((time) => {
+          replayedFrames.delete(id);
+          callback(time);
+        });
+        replayedFrames.set(id, replayed);
+      }
+      heldFrames.clear();
+    };
+    const paintGates = new Map<string, PaintGate>();
     const renders: number[] = [];
     const adapter = {
       id: "edit-fixture",
@@ -113,6 +160,17 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
         target.height = Math.ceil(400 * viewport.zoom * dpr);
         target.style.width = `${300 * viewport.zoom}px`;
         target.style.height = `${400 * viewport.zoom}px`;
+        // PDF.js also resets the target bitmap before its asynchronous paint.
+        // Hold that boundary explicitly; no wall-clock delay is involved.
+        const gate = paintGates.get(text);
+        if (gate) {
+          gate.started = true;
+          try {
+            await gate.pending;
+          } finally {
+            gate.finished = true;
+          }
+        }
         const context = target.getContext("2d")!;
         context.fillStyle = colour(text);
         context.fillRect(0, 0, target.width, target.height);
@@ -294,6 +352,51 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
           ).data;
         return `${data[0]},${data[1]},${data[2]}`;
       },
+      holdFrames() {
+        framesHeld = true;
+      },
+      releaseFrames,
+      holdPaint(text) {
+        const gate: PaintGate = {
+          started: false,
+          finished: false,
+          pending: Promise.resolve(),
+          release() {
+            throw new Error("Paint gate was not initialized");
+          },
+          fail() {
+            throw new Error("Paint gate was not initialized");
+          },
+        };
+        gate.pending = new Promise<void>((resolve, reject) => {
+          gate.release = resolve;
+          gate.fail = () => reject(new Error("Fixture repaint failed"));
+        });
+        paintGates.set(text, gate);
+      },
+      releasePaint(text) {
+        const gate = paintGates.get(text);
+        if (!gate) throw new Error(`No held paint for ${text}`);
+        gate.release();
+      },
+      failPaint(text) {
+        const gate = paintGates.get(text);
+        if (!gate) throw new Error(`No held paint for ${text}`);
+        gate.fail();
+      },
+      paintStarted: (text) => paintGates.get(text)?.started ?? false,
+      paintFinished: (text) => paintGates.get(text)?.finished ?? false,
+      expectedPixel(text) {
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Fixture canvas context is unavailable");
+        context.fillStyle = colour(text);
+        context.fillRect(0, 0, 1, 1);
+        const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+        return `${red},${green},${blue}`;
+      },
+      loadDocument: (pages) =>
+        viewer.load(encode(pages), { fileName: "replacement.pdf" }),
       canvasRect(pageIndex) {
         return slot(pageIndex)
           ?.querySelector("canvas")
@@ -312,7 +415,10 @@ async function setup(page: Page, options: SetupOptions): Promise<void> {
       },
     };
   }, options);
-  await page.waitForFunction(() => window.__editTest?.pixel(0) !== undefined);
+  await page.waitForFunction((text) => {
+    const fixture = window.__editTest;
+    return fixture && fixture.pixel(0) === fixture.expectedPixel(text);
+  }, options.pages[0] ?? "");
 }
 
 test("re-renders changed pages and keeps zoom, fit and scroll", async ({
@@ -501,4 +607,273 @@ test("view-geometry helpers agree with the painted canvas across zoom and scroll
       expect(result.unmounted).toBeUndefined();
     }
   }
+});
+
+test.describe("edit paint continuity", () => {
+  test("keeps the painted page visible until an edited frame is ready", async ({
+    page,
+  }) => {
+    await setup(page, { ui: false, pages: ["alpha", "beta"] });
+    const before = await page.evaluate(() => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdPaint("alpha edited");
+      return t.pixel(0);
+    });
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "alpha edited" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("alpha edited"),
+    );
+    const textLayer = page.locator(
+      '[data-page-index="0"] [data-zrimo-layer="text"]',
+    );
+    const whilePreparing = {
+      pixel: await page.evaluate(() => window.__editTest?.pixel(0)),
+      text: await textLayer.textContent(),
+    };
+    await page.evaluate(() => window.__editTest?.releasePaint("alpha edited"));
+    await expect
+      .poll(() => page.evaluate(() => window.__editTest?.pixel(0)))
+      .toBe(
+        await page.evaluate(() =>
+          window.__editTest?.expectedPixel("alpha edited"),
+        ),
+      );
+    await expect(textLayer).toHaveText("alpha edited");
+    expect(
+      whilePreparing,
+      "The last raster and matching text must stay visible until the new frame is ready",
+    ).toEqual({ pixel: before, text: "alpha" });
+  });
+
+  test("a late older paint cannot overwrite the newest edited frame", async ({
+    page,
+  }) => {
+    await setup(page, { ui: false, pages: ["alpha"] });
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdPaint("older edit");
+      t.holdPaint("newest edit");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "older edit" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("older edit"),
+    );
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "newest edit" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("newest edit"),
+    );
+    await page.evaluate(() => window.__editTest?.releasePaint("newest edit"));
+    const expected = await page.evaluate(() =>
+      window.__editTest?.expectedPixel("newest edit"),
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.__editTest?.pixel(0)))
+      .toBe(expected);
+    // A backend may complete work that was already dispatched before abort.
+    await page.evaluate(() => window.__editTest?.releasePaint("older edit"));
+    await page.waitForFunction(() =>
+      window.__editTest?.paintFinished("older edit"),
+    );
+    await page.evaluate(() => window.__editTest?.settle());
+    expect(await page.evaluate(() => window.__editTest?.pixel(0))).toBe(
+      expected,
+    );
+  });
+
+  test("rejects an obsolete completed frame before the next viewport frame starts", async ({
+    page,
+  }) => {
+    await setup(page, { ui: false, pages: ["alpha"] });
+    const original = await page.evaluate(() => window.__editTest?.pixel(0));
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdPaint("obsolete edit");
+      t.holdPaint("current edit");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "obsolete edit" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("obsolete edit"),
+    );
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdFrames();
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "current edit" },
+      ]);
+      t.releasePaint("obsolete edit");
+    });
+    // A separate browser task observes completion after its microtasks drain,
+    // while the next viewport frame is explicitly held rather than timed.
+    const beforeFrame = await page.evaluate(() => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      const snapshot = {
+        pixel: t.pixel(0),
+        obsoleteFinished: t.paintFinished("obsolete edit"),
+        currentStarted: t.paintStarted("current edit"),
+      };
+      t.releaseFrames();
+      return snapshot;
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("current edit"),
+    );
+    await page.evaluate(() => window.__editTest?.releasePaint("current edit"));
+    await expect
+      .poll(() => page.evaluate(() => window.__editTest?.pixel(0)))
+      .toBe(
+        await page.evaluate(() =>
+          window.__editTest?.expectedPixel("current edit"),
+        ),
+      );
+    expect(beforeFrame).toEqual({
+      pixel: original,
+      obsoleteFinished: true,
+      currentStarted: false,
+    });
+  });
+
+  test("an unchanged page can finish painting after another page is edited", async ({
+    page,
+  }) => {
+    await setup(page, { ui: false, pages: ["alpha", "beta"] });
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdPaint("beta edited");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 1, text: "beta edited" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("beta edited"),
+    );
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "alpha edited later" },
+      ]);
+    });
+    const expectedFirst = await page.evaluate(() =>
+      window.__editTest?.expectedPixel("alpha edited later"),
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.__editTest?.pixel(0)))
+      .toBe(expectedFirst);
+    await page.evaluate(() => window.__editTest?.releasePaint("beta edited"));
+    await expect
+      .poll(() => page.evaluate(() => window.__editTest?.pixel(1)))
+      .toBe(
+        await page.evaluate(() =>
+          window.__editTest?.expectedPixel("beta edited"),
+        ),
+      );
+    expect(await page.evaluate(() => window.__editTest?.pixel(0))).toBe(
+      expectedFirst,
+    );
+  });
+
+  test("a failed edit repaint leaves the last painted page visible", async ({
+    page,
+  }) => {
+    await setup(page, { ui: false, pages: ["alpha"] });
+    const before = await page.evaluate(() => window.__editTest?.pixel(0));
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdPaint("failed edit");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "failed edit" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("failed edit"),
+    );
+    await page.evaluate(() => window.__editTest?.failPaint("failed edit"));
+    await page.waitForFunction(() =>
+      window.__editTest?.paintFinished("failed edit"),
+    );
+    await page.evaluate(() => window.__editTest?.settle());
+    expect(await page.evaluate(() => window.__editTest?.pixel(0))).toBe(before);
+  });
+
+  test("a different document clears old pixels and rejects a late edit paint", async ({
+    page,
+  }) => {
+    await setup(page, { ui: false, pages: ["alpha"] });
+    const original = await page.evaluate(() => window.__editTest?.pixel(0));
+    await page.evaluate(async () => {
+      const t = window.__editTest;
+      if (!t) throw new Error("Edit fixture is unavailable");
+      t.holdPaint("old document edit");
+      t.holdPaint("replacement document");
+      const session = await t.viewer.edit();
+      await session.apply([
+        { op: "setText", pageIndex: 0, text: "old document edit" },
+      ]);
+    });
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("old document edit"),
+    );
+    await page.evaluate(() =>
+      window.__editTest?.loadDocument(["replacement document"]),
+    );
+    await page.waitForFunction(() =>
+      window.__editTest?.paintStarted("replacement document"),
+    );
+    expect(await page.evaluate(() => window.__editTest?.pixel(0))).not.toBe(
+      original,
+    );
+    expect(
+      await page.evaluate(() => window.__editTest?.viewer.getEditSession()),
+    ).toBeUndefined();
+    await page.evaluate(() =>
+      window.__editTest?.releasePaint("replacement document"),
+    );
+    const expected = await page.evaluate(() =>
+      window.__editTest?.expectedPixel("replacement document"),
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.__editTest?.pixel(0)))
+      .toBe(expected);
+    await page.evaluate(() =>
+      window.__editTest?.releasePaint("old document edit"),
+    );
+    await page.waitForFunction(() =>
+      window.__editTest?.paintFinished("old document edit"),
+    );
+    await page.evaluate(() => window.__editTest?.settle());
+    expect(await page.evaluate(() => window.__editTest?.pixel(0))).toBe(
+      expected,
+    );
+  });
 });
