@@ -1,0 +1,3 @@
+#!/bin/sh
+# Prettier and rustfmt over the staged files; see scripts/verify.mjs.
+exec node scripts/verify.mjs --staged

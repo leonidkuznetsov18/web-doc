@@ -1,0 +1,4 @@
+#!/bin/sh
+# The checks the pushed commits need, read from stdin; see scripts/verify.mjs.
+# WEB_DOC_VERIFY=full runs every check, WEB_DOC_VERIFY=quick only `npm run check`.
+exec node scripts/verify.mjs --push

@@ -12,16 +12,17 @@ npm run build
 npm run check
 ```
 
-Browser work should also run:
+## Checks
 
-```bash
-npm run test:e2e
-npm run test:e2e:matrix
-npm run test:e2e:performance
-```
+GitHub Actions run no checks; the only workflow that runs on its own is the release. Every check runs on your machine, from the git hooks that `npm ci` installs (`core.hooksPath` points at `.githooks`):
 
-The performance suite keeps the DOCX edit latency budget on every matrix
-browser and runs with one worker, after the parallel functional suites.
+- `commit-msg` checks the message with commitlint.
+- `pre-commit` checks the staged files with Prettier, and with rustfmt when Rust is staged.
+- `pre-push` runs what the pushed commits need (`scripts/verify.mjs`). `npm run check` always runs. Changes to the viewer, the Rust crates, the scripts or the dependencies add packaging, JS fuzzing, the size budget, the Pages build and all three browser suites; browser specs and examples add the browser suites; docs add the Pages build and its browser check; lockfiles add the vulnerability audit and the SBOM; Rust and fuzz targets add a short cargo-fuzz run.
+
+`WEB_DOC_VERIFY=full git push` runs every check, `WEB_DOC_VERIFY=quick git push` only `npm run check`, and `npm run verify` runs every check without pushing. Nothing else checks a change, so do not push with `--no-verify`.
+
+The full set needs the Playwright browsers (`npx playwright install chromium firefox webkit`), `cargo install cargo-audit --locked` for the vulnerability audit, and a nightly toolchain with `cargo install cargo-fuzz --locked` for the Rust fuzz run. The performance suite keeps the DOCX edit latency budget on every matrix browser and runs with one worker, after the parallel functional suites.
 
 Public qualification fixtures are downloaded into ignored `.cache/corpus/` with pinned hashes. User-provided regression files belong outside the repository or in ignored `.tmp/`; do not add them to tests, docs, screenshots or release artifacts.
 
@@ -50,7 +51,7 @@ BREAKING CHANGE: <what changed for integrators>
 - `feat` produces a minor release, `fix`/`perf`/`revert` a patch release, and a `BREAKING CHANGE:` footer (or `feat!:`) a major release. Only these types appear in `CHANGELOG.md`; everything else is release-neutral and hidden from it.
 - Pull request titles follow the same format: they become the commit subject on a squash merge.
 
-`npm ci` installs a `commit-msg` hook (`.githooks/commit-msg`) that checks the message locally; the `Commit messages` workflow repeats the check over every pull request commit and the title.
+The `commit-msg` hook checks every message locally; no workflow repeats it, so keep the hooks installed.
 
 Releases are automatic. On every push to `main`, the `Release` workflow runs [semantic-release](https://semantic-release.gitbook.io/): it derives the next version from the commits since the last tag, updates `CHANGELOG.md`, `packages/viewer/package.json`, `package-lock.json` and `release-status.json` in a `chore(release): x.y.z [skip ci]` commit, tags it `vx.y.z`, and publishes a GitHub release with the generated notes plus the verified `zrimo-viewer-x.y.z.tgz`, its `SHA256SUMS` and the package content report. No release is made when the commits since the last tag are all release-neutral. Consumers pin the tarball asset URL of a release as the `web-doc` dependency.
 
