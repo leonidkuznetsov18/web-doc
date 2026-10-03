@@ -294,6 +294,12 @@ export interface TextRun {
    * source paragraph.
    */
   readonly paragraphId?: string;
+  /**
+   * PPTX: the top-left corner of the frame of the shape the run was laid out
+   * in, in the run coordinate space (slide CSS pixels). Text a shape paints
+   * past its frame, wrapped below a short box, still names its shape.
+   */
+  readonly shapeOrigin?: { readonly x: number; readonly y: number };
 }
 
 export type HyperlinkTarget =

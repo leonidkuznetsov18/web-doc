@@ -301,7 +301,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
     createSession: (core, access) =>
       core.format === "docx"
         ? new DocxSession(core, access)
-        : new PptxSession(core),
+        : new PptxSession(core, access),
   };
   readonly formats = [...MODERN_FORMATS, ...LEGACY_FORMATS] as const;
   readonly #options: OfficeAdapterOptions;
@@ -627,6 +627,7 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
         y: run.shapeY + run.inShapeY,
         width: run.w,
         height: run.h,
+        shapeOrigin: { x: run.shapeX, y: run.shapeY },
         ...safeHyperlink(run.hyperlink, (ref) =>
           handle.backend.resolveInternalTarget?.(ref, pageIndex),
         ),

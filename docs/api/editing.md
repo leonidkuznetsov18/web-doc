@@ -799,7 +799,10 @@ no operations. Only the slide's own shapes are listed: what the renderer
 composes from the layout or master is not editable here.
 
 `elementsAt()` lists the elements under a point top-most first, groups after
-their children. `findText()` searches the text of every shape and table and
+their children. In a viewer it also lists, before them, a shape whose text
+is painted under the point past the shape's frame, as text wrapped below a
+short box is: the viewer's text runs name the frame they were laid out in
+(`TextRun.shapeOrigin`). `findText()` searches the text of every shape and table and
 returns the shape's bounds as the match rectangle: the engine has no glyph
 geometry, so the viewer's `search()` remains the source of word rectangles.
 
