@@ -96,7 +96,7 @@ export class DocxStyles {
     readonly colors: ThemeColors,
   ) {}
 
-  /** The `#RRGGBB` a `w:themeColor` name resolves to in this theme, when it has one. */
+  /** The `RRGGBB` (no `#`, as `w:val` takes it) a `w:themeColor` name resolves to in this theme, when it has one. */
   themeColor(name: string): string | undefined {
     const slot = THEME_SLOTS[name];
     return slot ? this.colors.get(slot) : undefined;

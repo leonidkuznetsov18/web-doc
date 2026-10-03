@@ -42,6 +42,7 @@ export type EditWorkerOperation =
   | "edit-pptx-layouts"
   | "edit-docx-revisions"
   | "edit-docx-text-style"
+  | "edit-docx-text-colors"
   | "edit-pptx-text-style"
   | "edit-dispose";
 

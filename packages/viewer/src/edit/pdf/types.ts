@@ -12,9 +12,16 @@ import type {
   ReadResult,
   SavedDocument,
   SaveOptions,
+  TextLayout,
   TextPosition,
   TextRange,
 } from "../types.js";
+
+/*
+ * The layout types are shared with DOCX and live with the common types;
+ * they stay importable from here for the PDF modules.
+ */
+export type { TextLayout, TextLayoutGlyph, TextLayoutLine } from "../types.js";
 
 export type PdfElementKind =
   | "text" // one text object as stored in the file (often a word or a line)
@@ -303,46 +310,6 @@ export interface PdfSaveOptions extends SaveOptions {
   readonly mode?: "full" | "incremental";
 }
 
-/** One drawn character of a layout line. */
-export interface TextLayoutGlyph {
-  /** Offset of the character in `EditElement.text`. */
-  readonly offset: number;
-  /** Tight box of the glyph in page space; a space takes its advance box. */
-  readonly box: PageRect;
-  /** Advance width along the baseline, in points. */
-  readonly advance: number;
-  /**
-   * Pen position on the baseline where the glyph starts, in page space. The
-   * steps between neighbours are the advances the file draws with, character
-   * and word spacing and TJ kerning included.
-   */
-  readonly origin?: PagePoint;
-}
-
-/** One line of a text element: one PDFium text object, as the file stores it. */
-export interface TextLayoutLine {
-  /** The part of the element's text the line draws, half-open. */
-  readonly range: TextRange;
-  readonly text: string;
-  /** Union of the glyph boxes, in page space. */
-  readonly bounds: PageRect;
-  /**
-   * The box the line's advances fill, the size a text field needs to hold the
-   * line unwrapped: from the first glyph's origin to the last glyph's origin
-   * plus its advance, and from the font's ascent to its descent at the line's
-   * size. It differs from `bounds` by the glyphs' side bearings, usually
-   * wider; in page space and axis-aligned like `bounds`, so it turns with the
-   * text.
-   */
-  readonly advanceBounds?: PageRect;
-  /** Start of the baseline, in page space. */
-  readonly baseline: PagePoint;
-  readonly glyphs: readonly TextLayoutGlyph[];
-  readonly fontFamily: string;
-  readonly fontSize: number;
-  readonly color: string;
-}
-
 /**
  * The font a PDF text element is drawn in, as a browser can load it: a host
  * typing over the element shows the text in the document's own glyphs and
@@ -378,21 +345,6 @@ export interface TextFont {
    */
   readonly missing?:
     "not-embedded" | "cid-keyed" | "type1" | "no-unicode" | "unreadable";
-}
-
-/** The drawn geometry of a `text`, `textBox`, `paragraph` or `table` element. */
-export interface TextLayout {
-  readonly elementId: string;
-  readonly pageIndex: number;
-  /**
-   * The box the element's text is laid out in, in page space: a text box's or
-   * a paragraph's own rectangle, otherwise the union of its lines'
-   * `advanceBounds`. Place an inline text field here rather than on the ink
-   * `bounds`, which a browser's advance-based layout outgrows.
-   */
-  readonly frame?: PageRect;
-  /** Lines in reading order: a text box's lines, a table's cells. */
-  readonly lines: readonly TextLayoutLine[];
 }
 
 /** Every text element of a page with its layout, plus the page's displayed size in points. */

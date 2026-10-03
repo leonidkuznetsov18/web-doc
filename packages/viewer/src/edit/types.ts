@@ -130,6 +130,81 @@ export interface TextRange {
   readonly end: TextPosition;
 }
 
+/*
+ * The drawn geometry of an element's text, as `getTextLayout` reports it
+ * for PDF and DOCX sessions alike: in page space, so a host places an
+ * inline text field with one code path whatever the format.
+ */
+
+/** One drawn character of a layout line. */
+export interface TextLayoutGlyph {
+  /** Offset of the character in `EditElement.text`. */
+  readonly offset: number;
+  /**
+   * Box of the glyph in page space. PDF: the tight box of its outline; a
+   * space takes its advance box. DOCX: its advance box from the font's ascent
+   * to its descent, since the renderer reports no outlines.
+   */
+  readonly box: PageRect;
+  /** Advance width along the baseline, in page-space units. */
+  readonly advance: number;
+  /**
+   * Pen position on the baseline where the glyph starts, in page space. The
+   * steps between neighbours are the advances the document draws with,
+   * character and word spacing and kerning included.
+   */
+  readonly origin?: PagePoint;
+}
+
+/**
+ * One line of a text element. PDF: one PDFium text object, as the file
+ * stores it. DOCX: one line of a paragraph as the renderer laid it out.
+ */
+export interface TextLayoutLine {
+  /** The part of the element's text the line draws, half-open. */
+  readonly range: TextRange;
+  readonly text: string;
+  /** Union of the glyph boxes, in page space. */
+  readonly bounds: PageRect;
+  /**
+   * The box the line's advances fill, the size a text field needs to hold the
+   * line unwrapped: from the first glyph's origin to the last glyph's origin
+   * plus its advance, and from the font's ascent to its descent at the line's
+   * size. In page space and axis-aligned like `bounds`, so it turns with the
+   * text. PDF: it differs from `bounds` by the glyphs' side bearings, usually
+   * wider. DOCX: it matches `bounds` but for raised or lowered text.
+   */
+  readonly advanceBounds?: PageRect;
+  /** Start of the baseline, in page space. */
+  readonly baseline: PagePoint;
+  readonly glyphs: readonly TextLayoutGlyph[];
+  readonly fontFamily: string;
+  /**
+   * In page-space units, the scale of the rest of the layout: points for PDF,
+   * CSS pixels for DOCX (the document's points × 4/3).
+   */
+  readonly fontSize: number;
+  /** `#RRGGBB`. */
+  readonly color: string;
+}
+
+/** The drawn geometry of a text element on one page. */
+export interface TextLayout {
+  readonly elementId: string;
+  readonly pageIndex: number;
+  /**
+   * The box the element's text is laid out in, in page space: a PDF text
+   * box's or paragraph's own rectangle, otherwise the union of its lines'
+   * `advanceBounds`; for a DOCX paragraph, the union of its lines' boxes on
+   * `pageIndex`, each from the line's top to its bottom by the line pitch.
+   * Place an inline text field here rather than on the ink `bounds`, which a
+   * browser's advance-based layout outgrows.
+   */
+  readonly frame?: PageRect;
+  /** Lines in reading order: a text box's or paragraph's lines, a table's cells. */
+  readonly lines: readonly TextLayoutLine[];
+}
+
 export interface ElementQuery {
   readonly pageIndex?: number;
   readonly kinds?: readonly string[];

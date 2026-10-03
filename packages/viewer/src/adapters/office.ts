@@ -64,6 +64,13 @@ interface DocxRun {
   readonly y: number;
   readonly w: number;
   readonly h: number;
+  /** The ascent-to-descent box over the run's advances. */
+  readonly highlightBounds?: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
   readonly fontSize: number;
   readonly font: string;
   /** The `w14:paraId` of the run's paragraph, when the engine reads one. */
@@ -618,6 +625,9 @@ export class OfficeDocumentAdapter implements DocumentAdapter<OfficeHandle> {
           font: run.font,
           fontSize: run.fontSize,
           ...(paragraphId === undefined ? {} : { paragraphId }),
+          ...(run.highlightBounds === undefined
+            ? {}
+            : { advanceBounds: { ...run.highlightBounds } }),
           ...(run.letterSpacingPx === undefined
             ? {}
             : { letterSpacingPx: run.letterSpacingPx }),

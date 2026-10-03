@@ -168,6 +168,13 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         const { id, span } = payload as TextStylePayload;
         return docx().textStyle(id, span, signal);
       }
+      case "edit-docx-text-colors": {
+        const { id, spans } = payload as {
+          readonly id: string;
+          readonly spans: readonly TextSpan[];
+        };
+        return docx().textColors(id, spans, signal);
+      }
       case "edit-pptx-text-style": {
         const { id, span } = payload as TextStylePayload;
         return pptx().textStyle(id, span, signal);

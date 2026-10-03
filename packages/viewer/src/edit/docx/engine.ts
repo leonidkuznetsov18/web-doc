@@ -90,7 +90,15 @@ export interface DocxEngineReads {
     span: TextSpan | undefined,
     signal: AbortSignal,
   ): Promise<Partial<DocxTextStyle> | undefined>;
+  textColors(
+    id: string,
+    spans: readonly TextSpan[],
+    signal: AbortSignal,
+  ): Promise<readonly string[] | undefined>;
 }
+
+/** Word's automatic text colour on a white page. */
+const AUTOMATIC_COLOR = "#000000";
 
 /** The tracked-change record of a batch, when it writes revisions. */
 function trackedOf(mode: BatchMode): TrackedChange | undefined {
@@ -446,6 +454,38 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
           )
         : [resolveTextStyle(model.styles, record.pPr, mark)],
     );
+  }
+
+  /**
+   * The `#RRGGBB` each span of a paragraph is drawn in: its first run's
+   * colour, a theme colour resolved through the theme and Word's automatic
+   * colour as black. None for another element or an unknown id.
+   */
+  async textColors(
+    id: string,
+    spans: readonly TextSpan[],
+    signal: AbortSignal,
+  ): Promise<readonly string[] | undefined> {
+    const model = await this.model(signal);
+    const record = model.byId.get(id);
+    if (!record || record.kind !== "paragraph") return undefined;
+    const { text, items } = record.text;
+    const mark = record.pPr?.children.find((child) => child.local === "rPr");
+    return spans.map((span) => {
+      const first = spanFits(span, text.length)
+        ? runsCovering(items, span)[0]
+        : undefined;
+      const { color } = resolveTextStyle(
+        model.styles,
+        record.pPr,
+        first ? first.rPr : mark,
+      );
+      if (typeof color !== "string") {
+        const value = model.styles.themeColor(color.theme);
+        return value ? `#${value}` : AUTOMATIC_COLOR;
+      }
+      return color === "auto" ? AUTOMATIC_COLOR : color.slice(0, 7);
+    });
   }
 
   async materialize(
