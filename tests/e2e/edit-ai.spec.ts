@@ -350,57 +350,59 @@ test("runs an agent turn on a Word document and keeps a tracked edit's accepted 
   expect(tracked.locked.issues![0]!.code).toBe("invalid-target");
 });
 
-test("describes 500 pages and 500 slides within the operation budget and records the latency", async ({
-  page,
-}) => {
-  test.setTimeout(300_000);
-  const timings: Record<string, number> = {};
-  const documents: [string, Uint8Array][] = [
-    ["docx", syntheticDocument(500)],
-    ["pptx", syntheticDeck(500)],
-    [
-      "pdf",
-      await buildPdf(Array.from({ length: 500 }, (_, i) => `Page ${i + 1}`)),
-    ],
-  ];
-  for (const [format, bytes] of documents) {
-    // Opening 500 pages for editing is the engine's work, not what this
-    // measures: a loaded CI runner may need more than the default budget
-    // for it, while `describe()` itself is still held to that budget.
-    await loadDocument(page, bytes, `large.${format}`, {
-      maxOperationMs: 180_000,
-    });
-    const result = await page.evaluate(async () => {
-      const viewer = (window as unknown as { __viewer: any }).__viewer;
-      const session = await viewer.edit();
-      const started = performance.now();
-      const description = await session.describe();
-      const elapsed = performance.now() - started;
-      const again = performance.now();
-      await session.describe();
-      const warm = performance.now() - again;
-      return {
-        elapsed,
-        warm,
-        pageCount: description.item.pageCount,
-        elementCount: description.item.elementCount,
-        chars: description.item.text.length,
-        truncated: description.item.truncated,
-        head: description.item.text.split("\n").slice(0, 2),
-      };
-    });
-    timings[format] = result.elapsed;
-    console.log(
-      `describe ${format} 500: ${result.elapsed.toFixed(0)} ms cold, ${result.warm.toFixed(0)} ms warm; ${result.elementCount} elements, ${result.chars} chars${result.truncated ? " (truncated)" : ""}`,
-    );
-    expect(result.pageCount).toBe(500);
-    expect(result.elementCount).toBeGreaterThanOrEqual(500);
-    // The 500-page PDF fits the default budget; the deck and the Word
-    // document do not.
-    expect(result.truncated).toBe(result.chars >= 49_000);
-    expect(result.head[0]).toMatch(
-      new RegExp(`^${format}: 500 (pages|slides), \\d+ elements$`),
-    );
-    expect(result.elapsed).toBeLessThan(30_000);
-  }
-});
+test(
+  "describes 500 pages and 500 slides within the operation budget and records the latency",
+  { tag: "@performance" },
+  async ({ page }) => {
+    test.setTimeout(300_000);
+    const timings: Record<string, number> = {};
+    const documents: [string, Uint8Array][] = [
+      ["docx", syntheticDocument(500)],
+      ["pptx", syntheticDeck(500)],
+      [
+        "pdf",
+        await buildPdf(Array.from({ length: 500 }, (_, i) => `Page ${i + 1}`)),
+      ],
+    ];
+    for (const [format, bytes] of documents) {
+      // Opening 500 pages for editing is the engine's work, not what this
+      // measures: a loaded CI runner may need more than the default budget
+      // for it, while `describe()` itself is still held to that budget.
+      await loadDocument(page, bytes, `large.${format}`, {
+        maxOperationMs: 180_000,
+      });
+      const result = await page.evaluate(async () => {
+        const viewer = (window as unknown as { __viewer: any }).__viewer;
+        const session = await viewer.edit();
+        const started = performance.now();
+        const description = await session.describe();
+        const elapsed = performance.now() - started;
+        const again = performance.now();
+        await session.describe();
+        const warm = performance.now() - again;
+        return {
+          elapsed,
+          warm,
+          pageCount: description.item.pageCount,
+          elementCount: description.item.elementCount,
+          chars: description.item.text.length,
+          truncated: description.item.truncated,
+          head: description.item.text.split("\n").slice(0, 2),
+        };
+      });
+      timings[format] = result.elapsed;
+      console.log(
+        `describe ${format} 500: ${result.elapsed.toFixed(0)} ms cold, ${result.warm.toFixed(0)} ms warm; ${result.elementCount} elements, ${result.chars} chars${result.truncated ? " (truncated)" : ""}`,
+      );
+      expect(result.pageCount).toBe(500);
+      expect(result.elementCount).toBeGreaterThanOrEqual(500);
+      // The 500-page PDF fits the default budget; the deck and the Word
+      // document do not.
+      expect(result.truncated).toBe(result.chars >= 49_000);
+      expect(result.head[0]).toMatch(
+        new RegExp(`^${format}: 500 (pages|slides), \\d+ elements$`),
+      );
+      expect(result.elapsed).toBeLessThan(30_000);
+    }
+  },
+);

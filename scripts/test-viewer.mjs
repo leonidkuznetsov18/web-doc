@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 
 const node = process.execPath;
+// Compile into a clean directory: a test compiled on another branch would
+// otherwise stay behind and run against code it was not written for.
+rmSync(".test-dist", { recursive: true, force: true });
 execFileSync(
   node,
   ["../../node_modules/typescript/bin/tsc", "-p", "tsconfig.test.json"],
