@@ -1214,6 +1214,47 @@ editable. `getRevisions(elementId)` lists a paragraph's revisions (kind,
 id, author, date, the text they cover) in document order; see
 [tracked changes](./ai-editing.md#tracked-changes).
 
+### Read-only text drafts
+
+`DocxEditSession.previewText(fields, options?)` returns display-only DOCX
+bytes with a proposed `replaceText` applied. Each preview starts from the
+current committed document and preserves unaffected runs and properties.
+It changes no revision, dirty state, paragraph ids, history or checkpoints.
+An invalid or cancelled preview leaves the live document usable.
+
+For an in-document editor, `previewTextPages(fields, render, options?)`
+also renders the draft through the viewer's document adapter. `render.pages`
+is a list of `{ pageIndex, target }` objects whose targets are detached,
+caller-owned canvases. Optional `zoom` and `devicePixelRatio` use the same
+units as `renderPage`. Only requested pages are rendered. Targets must have
+unique, valid page indices and satisfy the configured pixel limits.
+
+The read result contains `pageCount`, natural `pageSizes` when available,
+and requested pages with their renderer-provided text `runs`. Its optional
+`layout` describes the target paragraph on the first requested page that
+contains it. Layout supports caret and selection geometry; draft canvas
+pixels remain authoritative for mixed text styles. Both the paragraph
+metadata and pixels describe the same isolated draft. XML parsing stays in
+the edit worker; the session joins that metadata with rendered text runs.
+
+Preview rendering never replaces the live document, invalidates its text
+caches or emits viewer progress, layout or document-change events. The
+temporary adapter handle is closed before the read resolves or rejects.
+Pass an abort signal through `options` and publish only the newest completed
+preview whose session id and revision still match the editor. Each request
+should own separate detached canvases so a stale request cannot paint over
+the currently displayed document.
+
+```ts
+const canvas = document.createElement("canvas");
+const draft = await session.previewTextPages(
+  { target: paragraphId, text: insertedText, range },
+  { pages: [{ pageIndex, target: canvas }], zoom: 1, devicePixelRatio: 2 },
+  { signal: controller.signal },
+);
+// Publish canvas and draft.item.layout together after checking request identity.
+```
+
 ### Geometry
 
 The engine never lays the document out: geometry comes from the renderer.

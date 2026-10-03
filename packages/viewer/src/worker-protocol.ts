@@ -41,6 +41,7 @@ export type EditWorkerOperation =
   | "edit-pptx-slides"
   | "edit-pptx-layouts"
   | "edit-docx-revisions"
+  | "edit-docx-preview-text"
   | "edit-docx-text-style"
   | "edit-docx-text-colors"
   | "edit-pptx-text-style"

@@ -12,7 +12,12 @@ import type {
 } from "../engine.js";
 import { OoxmlPackage } from "../ooxml/package.js";
 import { patches, type XmlPatch } from "../ooxml/patch.js";
-import { invalidOperationError, parseReference } from "../operations.js";
+import {
+  checkOperations,
+  freezeOperations,
+  invalidOperationError,
+  parseReference,
+} from "../operations.js";
 import type {
   EditFindOptions,
   EditOperation,
@@ -35,6 +40,8 @@ import { docxOperationSchemas } from "./schemas.js";
 import { revisionsOf } from "./tracked.js";
 import type {
   DocxElement,
+  DocxFields,
+  DocxReplaceTextOperation,
   DocxOperation,
   DocxRevision,
   DocxTextStyle,
@@ -84,6 +91,14 @@ function unauthoredIdsOf(bytes: Uint8Array): string[] {
 
 /** Reads the DOCX session adds on top of the core, served by the engine and the worker client alike. */
 export interface DocxEngineReads {
+  previewDraft(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    signal: AbortSignal,
+  ): Promise<DocxDraftDocument>;
+  previewText(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    signal: AbortSignal,
+  ): Promise<Uint8Array>;
   revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]>;
   textStyle(
     id: string,
@@ -95,6 +110,12 @@ export interface DocxEngineReads {
     spans: readonly TextSpan[],
     signal: AbortSignal,
   ): Promise<readonly string[] | undefined>;
+}
+
+/** Internal worker read: display bytes and target metadata belong to the same isolated draft. */
+export interface DocxDraftDocument {
+  readonly bytes: Uint8Array;
+  readonly paragraph?: DocxElement;
 }
 
 /** Word's automatic text colour on a white page. */
@@ -427,6 +448,40 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
     const record = model.byId.get(id);
     if (!record || record.kind !== "paragraph") return [];
     return revisionsOf(model.document, record.node);
+  }
+
+  /** Display-only bytes of an isolated draft; the live package is never written. */
+  async previewText(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    signal: AbortSignal,
+  ): Promise<Uint8Array> {
+    return (await this.previewDraft(fields, signal)).bytes;
+  }
+
+  async previewDraft(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    signal: AbortSignal,
+  ): Promise<DocxDraftDocument> {
+    const input = [{ ...fields, op: "replaceText" as const }];
+    const issues = checkOperations(input, this.schemas);
+    if (issues.length > 0) throw invalidOperationError(issues);
+    const operations = freezeOperations(input);
+    // A separate package keeps draft reads out of live ids, history and save bytes.
+    const shown = await this.materializeDocument("show", {}, signal);
+    const preview = await DocxEditEngine.open(
+      shown.bytes,
+      this.#limits,
+      signal,
+    );
+    try {
+      await preview.apply(operations, signal);
+      const bytes = (await preview.materializeDocument("show", {}, signal))
+        .bytes;
+      const paragraph = await preview.getElement(fields.target, signal);
+      return { bytes, ...(paragraph ? { paragraph } : {}) };
+    } finally {
+      await preview.dispose();
+    }
   }
 
   /**

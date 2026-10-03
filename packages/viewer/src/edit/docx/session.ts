@@ -30,6 +30,12 @@ import {
   type LaidLine,
   type TextMeasurer,
 } from "./layout.js";
+import {
+  checkOperations,
+  freezeOperations,
+  invalidOperationError,
+} from "../operations.js";
+import { docxOperationSchemas } from "./schemas.js";
 import { spanOnTarget } from "../range-style.js";
 import type {
   ApplyOptions,
@@ -70,6 +76,8 @@ import type {
   DocxSetTableCellOperation,
   DocxSetTextStyleOperation,
   DocxTextStyle,
+  DocxTextPreview,
+  DocxTextPreviewOptions,
 } from "./types.js";
 
 /*
@@ -440,6 +448,68 @@ export class DocxSession implements DocxEditSession {
       },
       this.#measurer ?? undefined,
     );
+  }
+
+  previewText(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    options?: ReadOptions,
+  ): Promise<ReadItem<Uint8Array>> {
+    const draft = frozenPreviewFields(fields);
+    return this.#core.readItem(options, (engine, signal) =>
+      docxReads(engine).previewText(draft, signal),
+    );
+  }
+
+  previewTextPages(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    render: DocxTextPreviewOptions,
+    options?: ReadOptions,
+  ): Promise<ReadItem<DocxTextPreview>> {
+    const draft = frozenPreviewFields(fields);
+    const targets = {
+      ...render,
+      pages: render.pages.map((page) => ({ ...page })),
+    };
+    return this.#core.readItem(options, async (engine, signal) => {
+      const previewDocument = this.#access.previewDocument;
+      if (!previewDocument)
+        throw new ViewerError(
+          "edit-unsupported",
+          "Draft rendering is unavailable",
+        );
+      const document = await docxReads(engine).previewDraft(draft, signal);
+      const pages = await previewDocument(document.bytes, targets, signal);
+      const paragraph = document.paragraph;
+      const page = [...pages.pages]
+        .sort((left, right) => left.pageIndex - right.pageIndex)
+        .find((page) =>
+          page.runs.some(
+            (run) => run.paragraphId === paragraphIdOf(draft.target),
+          ),
+        );
+      if (!paragraph || paragraph.kind !== "paragraph" || !page) return pages;
+      const lines = this.#lay(paragraph, [page]);
+      if (lines.length === 0) return pages;
+      const color =
+        typeof paragraph.textStyle?.color === "string" &&
+        paragraph.textStyle.color.startsWith("#")
+          ? paragraph.textStyle.color
+          : "#000000";
+      return {
+        ...pages,
+        layout: {
+          elementId: draft.target,
+          pageIndex: page.pageIndex,
+          frame: unionRects(lines.map((line) => line.box)),
+          lines: lines.map(
+            ({ pageIndex: _page, box: _box, ends: _ends, ...line }) => ({
+              ...line,
+              color,
+            }),
+          ),
+        },
+      };
+    });
   }
 
   replaceText(
@@ -919,4 +989,19 @@ function docxReads(engine: EditEngine): DocxEngineReads {
       { details: { format: "docx", reason: "no-reads" } },
     );
   return candidate as DocxEngineReads;
+}
+
+/** Validate at the public boundary before copying: a cyclic value must not recurse in the copier. */
+function frozenPreviewFields(
+  fields: DocxFields<DocxReplaceTextOperation>,
+): DocxFields<DocxReplaceTextOperation> {
+  const issues = checkOperations(
+    [{ ...fields, op: "replaceText" }],
+    docxOperationSchemas,
+  );
+  if (issues.length > 0) throw invalidOperationError(issues);
+  const draft = freezeOperations([fields])[0];
+  if (!draft)
+    throw new ViewerError("invalid-operation", "Missing draft fields");
+  return draft;
 }

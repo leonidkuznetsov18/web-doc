@@ -15,6 +15,16 @@ import type {
   TextPosition,
   TextRange,
 } from "../types.js";
+import type {
+  DocumentPreviewPages,
+  DocumentPreviewRenderOptions,
+} from "../engine.js";
+
+export type DocxTextPreviewOptions = DocumentPreviewRenderOptions;
+export interface DocxTextPreview extends DocumentPreviewPages {
+  /** Target paragraph geometry from the same draft as the rendered pages. */
+  readonly layout?: TextLayout;
+}
 
 /*
  * The DOCX editing contract: the elements of the body story (paragraphs,
@@ -297,6 +307,17 @@ export interface DocxEditSession extends EditSessionBase<
     point: PagePoint,
     options?: ReadOptions,
   ): Promise<ReadItem<TextPosition>>;
+  /** Display-only draft bytes. Does not change the document, revision or history. */
+  previewText(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    options?: ReadOptions,
+  ): Promise<ReadItem<Uint8Array>>;
+  /** Renders draft pages into caller-owned targets without changing content or history. */
+  previewTextPages(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    render: DocxTextPreviewOptions,
+    options?: ReadOptions,
+  ): Promise<ReadItem<DocxTextPreview>>;
   /** Replaces the whole text of a paragraph, or the part a range covers. */
   replaceText(
     fields: DocxFields<DocxReplaceTextOperation>,
