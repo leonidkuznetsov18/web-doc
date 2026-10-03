@@ -36,6 +36,8 @@ export interface TextPageScan {
   readonly elements: readonly PdfElement[];
   /** Per character of the text page: its element and offset, when an object draws it. */
   readonly offsets: readonly (TextPosition | undefined)[];
+  /** Element id → the rectangle its text is laid out in, for text boxes. */
+  readonly frames?: ReadonlyMap<string, PageRect>;
 }
 
 interface Glyph {
@@ -44,6 +46,8 @@ interface Glyph {
   readonly position: TextPosition;
   readonly char: string;
   readonly box: PageRect;
+  /** Origin to origin plus advance, font ascent to descent. */
+  readonly loose: PageRect;
   readonly advance: number;
   readonly origin: PagePoint;
 }
@@ -65,10 +69,12 @@ export function layoutOf(
     scan,
     (position) => position.elementId === element.id,
   );
+  const lines = linesOf(pdfium, scan, glyphs);
   return {
     elementId: element.id,
     pageIndex: element.pageIndex,
-    lines: linesOf(pdfium, scan, glyphs),
+    frame: frameOf(scan, element, lines),
+    lines,
   };
 }
 
@@ -85,13 +91,34 @@ export function layoutsOf(pdfium: Pdfium, scan: TextPageScan): TextLayout[] {
   for (const element of scan.elements) {
     const own = byElement.get(element.id);
     if (!own || !TEXT_KINDS.has(element.kind)) continue;
+    const lines = linesOf(pdfium, scan, own);
     layouts.push({
       elementId: element.id,
       pageIndex: element.pageIndex,
-      lines: linesOf(pdfium, scan, own),
+      frame: frameOf(scan, element, lines),
+      lines,
     });
   }
   return layouts;
+}
+
+/**
+ * The box an element's text is laid out in: a paragraph's frame (its bounds
+ * already start at the pen and span its widest advance), a text box's own
+ * rect, else the union of the lines' advance boxes.
+ */
+function frameOf(
+  scan: TextPageScan,
+  element: PdfElement,
+  lines: readonly TextLayoutLine[],
+): PageRect {
+  if (element.kind === "paragraph") return element.bounds;
+  const own = scan.frames?.get(element.id);
+  if (own) return own;
+  const boxes = lines.flatMap((line) =>
+    line.advanceBounds ? [line.advanceBounds] : [],
+  );
+  return boxes.length > 0 ? roundRect(unionRects(boxes)) : element.bounds;
 }
 
 /** The caret position nearest to a page-space point, or none without text. */
@@ -188,6 +215,9 @@ function glyphsOf(
       position,
       char: String.fromCodePoint(lib.FPDFText_GetUnicode(textPage, index)),
       box: roundRect(userRectToPage(geometry, left, bottom, right, top)),
+      loose: roundRect(
+        userRectToPage(geometry, looseLeft, looseBottom, looseRight, looseTop),
+      ),
       advance: round(Math.abs(looseRight - looseLeft)),
       origin: roundPoint(userToPage(geometry, origin[0]!, origin[1]!)),
     });
@@ -221,11 +251,15 @@ function linesOf(
       },
       text: members.map((glyph) => glyph.char).join(""),
       bounds: roundRect(unionRects(members.map((glyph) => glyph.box))),
+      // PDFium's loose boxes run from each origin to origin plus advance,
+      // ascent to descent: their union is the line a text field must hold.
+      advanceBounds: roundRect(unionRects(members.map((glyph) => glyph.loose))),
       baseline: members[0]!.origin,
-      glyphs: members.map(({ position, box, advance }) => ({
+      glyphs: members.map(({ position, box, advance, origin }) => ({
         offset: position.offset,
         box,
         advance,
+        origin,
       })),
       fontFamily: style.fontFamily,
       fontSize: style.fontSize,

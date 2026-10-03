@@ -50,6 +50,85 @@ function nearlyEqual(a: PageRect, b: PageRect, slack = 0.01): boolean {
   );
 }
 
+/** Helvetica advance widths (Adobe AFM, 1000 units per em) of the test strings. */
+const HELVETICA: Readonly<Record<string, number>> = {
+  " ": 278,
+  A: 667,
+  H: 722,
+  R: 722,
+  T: 611,
+  V: 667,
+  W: 944,
+  a: 556,
+  d: 556,
+  e: 556,
+  l: 222,
+  o: 556,
+  r: 333,
+  v: 500,
+  w: 722,
+};
+
+/** The pen distance of `text` set in Helvetica at `fontSize`, without spacing. */
+function helveticaAdvance(text: string, fontSize: number): number {
+  let units = 0;
+  for (const character of text) units += HELVETICA[character]!;
+  return (units * fontSize) / 1000;
+}
+
+/** Ascent and descent (both positive) PDFium reports for an object's font. */
+async function fontMetrics(
+  bytes: Uint8Array,
+  objectIndex: number,
+  fontSize: number,
+): Promise<{ ascent: number; descent: number }> {
+  const pdfium = await fixturePdfium();
+  const { lib } = pdfium;
+  const document = pdfium.openDocument(bytes);
+  try {
+    const page = lib.FPDF_LoadPage(document.handle, 0);
+    try {
+      const font = lib.FPDFTextObj_GetFont(
+        lib.FPDFPage_GetObject(page, objectIndex),
+      );
+      const ascent = pdfium.readNumbers(1, "float", ([pointer]) =>
+        lib.FPDFFont_GetAscent(font, fontSize, pointer!),
+      )![0]!;
+      const descent = pdfium.readNumbers(1, "float", ([pointer]) =>
+        lib.FPDFFont_GetDescent(font, fontSize, pointer!),
+      )![0]!;
+      return { ascent, descent: Math.abs(descent) };
+    } finally {
+      lib.FPDF_ClosePage(page);
+    }
+  } finally {
+    document.close();
+  }
+}
+
+/** A one-page PDF whose content stream is `content`, with Helvetica as /F1. */
+function rawPdf(content: string): Uint8Array {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+  ];
+  let pdf = "%PDF-1.7\n";
+  const offsets: number[] = [];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets)
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new Uint8Array(Buffer.from(pdf));
+}
+
 /** A point `fraction` of the way through a glyph box in reading direction. */
 function along(
   box: PageRect,
@@ -117,6 +196,20 @@ describe("text layout (overlay primitives)", () => {
           ),
           `baseline ${JSON.stringify(line!.baseline)} near ${JSON.stringify(element.bounds)}`,
         );
+        // The advance box turns with the page like the ink: it holds the
+        // ink and runs the pen distance along the reading direction.
+        const advance = line!.advanceBounds!;
+        assert.ok(
+          inside(line!.bounds, advance),
+          `ink ${JSON.stringify(line!.bounds)} inside ${JSON.stringify(advance)}`,
+        );
+        const length = rotation % 2 === 0 ? advance.width : advance.height;
+        assert.ok(
+          Math.abs(length - helveticaAdvance("Hello world", 24)) < 0.01,
+          `advance length ${length}`,
+        );
+        assert.deepEqual(line!.glyphs[0]!.origin, line!.baseline);
+        assert.deepEqual(layout.frame, advance);
       } finally {
         close();
       }
@@ -311,6 +404,290 @@ describe("text layout (overlay primitives)", () => {
       assert.equal((await session.getTextLayout("missing")).item, undefined);
     } finally {
       await end();
+    }
+  });
+});
+
+describe("text field frame (ACTION-922)", () => {
+  it("gives a line the advance box a text field needs, wider than its ink by the side bearings", async () => {
+    const bytes = await buildPdf([
+      { texts: [{ text: "Wave AVATAR", x: 72, y: 700, fontSize: 24 }] },
+    ]);
+    const { ascent, descent } = await fontMetrics(bytes, 0, 24);
+    const { model, close } = await openModel(bytes);
+    try {
+      const element = model.getElement("p0:o0")!;
+      const [line] = model.textLayout("p0:o0")!.lines;
+      const advance = line!.advanceBounds!;
+      assert.ok(advance, "the line has an advance box");
+      // From the first pen position to the last glyph's advance end: the
+      // sum of the font's advances, which a browser lays the text out by.
+      assert.ok(
+        Math.abs(advance.x - line!.baseline.x) < 0.01,
+        `starts at the pen origin: ${advance.x} vs ${line!.baseline.x}`,
+      );
+      assert.ok(
+        Math.abs(advance.width - helveticaAdvance("Wave AVATAR", 24)) < 0.01,
+        `advance width ${advance.width}, AFM ${helveticaAdvance("Wave AVATAR", 24)}`,
+      );
+      assert.ok(
+        advance.width > line!.bounds.width &&
+          advance.width > element.bounds.width,
+        `advance ${advance.width} wider than ink ${line!.bounds.width}`,
+      );
+      assert.ok(
+        element.bounds.x > advance.x,
+        "the ink starts right of the pen",
+      );
+      // Vertically the font's ascent above the baseline to its descent below.
+      assert.ok(
+        Math.abs(advance.y - (line!.baseline.y - ascent)) < 0.01,
+        `top ${advance.y}, baseline ${line!.baseline.y}, ascent ${ascent}`,
+      );
+      assert.ok(
+        Math.abs(advance.height - (ascent + descent)) < 0.01,
+        `height ${advance.height}, ascent + descent ${ascent + descent}`,
+      );
+      assert.ok(inside(line!.bounds, advance), "the advance box holds the ink");
+      // `bounds` stays the ink: hit tests and paragraph checks compare it.
+      assert.ok(
+        nearlyEqual(element.bounds, line!.bounds),
+        "element bounds are still the ink",
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("places each glyph at its drawn pen position, character spacing and kerning included", async () => {
+    const bytes = rawPdf(
+      "BT /F1 20 Tf 2 Tc 1 0 0 1 72 700 Tm [(Wa) 100 (ve)] TJ ET",
+    );
+    const { model, close } = await openModel(bytes);
+    try {
+      const [line] = model.textLayout("p0:o0")!.lines;
+      assert.equal(line!.text, "Wave");
+      const origins = line!.glyphs.map((glyph) => glyph.origin!);
+      assert.equal(origins.length, 4);
+      assert.deepEqual(origins[0], line!.baseline);
+      // Each step is the glyph's width, plus 2 pt of Tc, less the 100/1000 em
+      // the TJ array moves "v" back.
+      const steps = [
+        helveticaAdvance("W", 20) + 2,
+        helveticaAdvance("a", 20) + 2 - 2,
+        helveticaAdvance("v", 20) + 2,
+      ];
+      for (const [index, step] of steps.entries()) {
+        const drawn = origins[index + 1]!.x - origins[index]!.x;
+        assert.ok(
+          Math.abs(drawn - step) < 0.01,
+          `step ${index}: ${drawn} vs ${step}`,
+        );
+        assert.equal(origins[index + 1]!.y, origins[index]!.y);
+      }
+      const advance = line!.advanceBounds!;
+      const last = origins[3]!.x + helveticaAdvance("e", 20) - origins[0]!.x;
+      assert.ok(
+        Math.abs(advance.width - last) < 0.01,
+        `advance width ${advance.width} vs ${last}`,
+      );
+    } finally {
+      close();
+    }
+  });
+
+  it("frames plain text by its advance box and a table by its cells' advance boxes", async () => {
+    const { model, close } = await openModel(
+      await buildPdf([
+        { texts: [{ text: "Hello world", x: 72, y: 700, fontSize: 24 }] },
+      ]),
+    );
+    try {
+      const text = model.textLayout("p0:o0")!;
+      assert.deepEqual(text.frame, text.lines[0]!.advanceBounds);
+      const [tableId] = model.apply([
+        op({
+          op: "insertTable",
+          pageIndex: 0,
+          at: { x: 50, y: 300 },
+          width: 300,
+          rows: [
+            ["a1", "b1"],
+            ["a2", "b2"],
+          ],
+        }),
+      ]).createdIds;
+      const table = model.textLayout(tableId!)!;
+      assert.equal(table.lines.length, 4);
+      assert.ok(
+        nearlyEqual(
+          table.frame!,
+          union(table.lines.map((line) => line.advanceBounds!)),
+        ),
+        `frame ${JSON.stringify(table.frame)}`,
+      );
+      // A page layout reports the same geometry as the element's own read.
+      const page = model.pageLayout(0)!;
+      for (const layout of [text, table])
+        assert.deepEqual(
+          page.layouts.find((entry) => entry.elementId === layout.elementId),
+          layout,
+        );
+    } finally {
+      close();
+    }
+  });
+
+  it("frames a text box by its own rect", async () => {
+    const { model, close } = await openModel(await buildPdf([{}]));
+    try {
+      const rect = { x: 50, y: 60, width: 200, height: 120 };
+      const [boxId] = model.apply([
+        op({
+          op: "insertTextBox",
+          pageIndex: 0,
+          rect,
+          text: "one two three four five six seven eight nine ten",
+          style: { fontSize: 14 },
+        }),
+      ]).createdIds;
+      const layout = model.textLayout(boxId!)!;
+      assert.ok(layout.lines.length >= 2, `${layout.lines.length} lines`);
+      assert.deepEqual(layout.frame, rect);
+      for (const line of layout.lines) {
+        // Left-aligned lines start at the box's edge and fit its width.
+        const advance = line.advanceBounds!;
+        assert.ok(Math.abs(advance.x - rect.x) < 0.01, `x ${advance.x}`);
+        assert.ok(advance.x + advance.width <= rect.x + rect.width + 0.01);
+      }
+      assert.deepEqual(
+        model.pageLayout(0)!.layouts.find((entry) => entry.elementId === boxId)
+          ?.frame,
+        rect,
+      );
+      model.apply([
+        op({ op: "moveElement", target: boxId!, by: { dx: 10, dy: 20 } }),
+      ]);
+      assert.deepEqual(model.textLayout(boxId!)!.frame, {
+        ...rect,
+        x: 60,
+        y: 80,
+      });
+    } finally {
+      close();
+    }
+  });
+
+  it("frames a paragraph by its own rect, before and after it is rewritten", async () => {
+    const lines = [
+      "Since 2013 our independent testing has tracked",
+      "software quality across teams and organisations",
+      "and shared the results with practitioners.",
+    ];
+    const { session, end } = await pdfSession(
+      await buildPdf([
+        {
+          texts: lines.map((text, index) => ({
+            text,
+            x: 90,
+            y: 700 - index * 20,
+            fontSize: 11,
+          })),
+        },
+      ]),
+    );
+    try {
+      const row = (await session.getElements({ pageIndex: 0 })).items[0]!;
+      const paragraph = (await session.getTextParagraph(row.id)).item!;
+      assert.ok(paragraph, "the rows form a paragraph");
+      const layout = (await session.getTextLayout(paragraph.id)).item!;
+      assert.equal(layout.lines.length, 3);
+      assert.deepEqual(layout.frame, paragraph.bounds);
+      // The paragraph's rect is advance-based already: it starts at the pen
+      // and is as wide as its widest line's advance box.
+      const advances = layout.lines.map((line) => line.advanceBounds!);
+      assert.ok(Math.abs(layout.frame!.x - advances[0]!.x) < 0.01);
+      assert.ok(
+        Math.abs(
+          layout.frame!.width -
+            Math.max(...advances.map((advance) => advance.width)),
+        ) < 0.01,
+        `frame ${layout.frame!.width}`,
+      );
+      // A row read on its own is plain text, framed by its own advance box.
+      const own = (await session.getTextLayout(row.id)).item!;
+      assert.deepEqual(own.frame, own.lines[0]!.advanceBounds);
+      await session.replaceParagraphText({
+        target: paragraph.id,
+        text: "A shorter paragraph that still wraps across two of its lines.",
+      });
+      const element = (await session.getElement(paragraph.id)).item!;
+      const rewritten = (await session.getTextLayout(paragraph.id)).item!;
+      assert.deepEqual(rewritten.frame, element.bounds);
+      // The rewrite wraps inside the paragraph's own width and left edge.
+      assert.equal(rewritten.frame!.x, paragraph.bounds.x);
+      assert.equal(rewritten.frame!.width, paragraph.bounds.width);
+    } finally {
+      await end();
+    }
+  });
+
+  it("frames a line turned 90° on the page as an upright box turned with it", async () => {
+    const bytes = await buildPdf([
+      {
+        texts: [
+          { text: "Wave AVATAR", x: 72, y: 700, fontSize: 24 },
+          // Reads down the page: the text turned 90° clockwise.
+          {
+            text: "Wave AVATAR",
+            x: 300,
+            y: 400,
+            fontSize: 1,
+            matrix: [0, -24, 24, 0],
+          },
+        ],
+      },
+    ]);
+    const { ascent, descent } = await fontMetrics(bytes, 1, 24);
+    const { model, close } = await openModel(bytes);
+    try {
+      const element = model.getElement("p0:o1")!;
+      assert.equal(element.rotation, 90);
+      const upright = model.textLayout("p0:o0")!.lines[0]!.advanceBounds!;
+      const layout = model.textLayout("p0:o1")!;
+      const [line] = layout.lines;
+      const advance = line!.advanceBounds!;
+      // Axis-aligned in page space like `bounds`: the advance runs down the
+      // page from the pen origin, ascent to the right, descent to the left.
+      assert.ok(
+        Math.abs(advance.y - line!.baseline.y) < 0.01,
+        `y ${advance.y}`,
+      );
+      assert.ok(
+        Math.abs(advance.height - helveticaAdvance("Wave AVATAR", 24)) < 0.01,
+        `height ${advance.height}`,
+      );
+      assert.ok(
+        Math.abs(advance.x - (line!.baseline.x - descent)) < 0.01,
+        `x ${advance.x}`,
+      );
+      assert.ok(
+        Math.abs(advance.width - (ascent + descent)) < 0.01,
+        `width ${advance.width}`,
+      );
+      assert.ok(inside(line!.bounds, advance), "the advance box holds the ink");
+      assert.ok(inside(element.bounds, advance), "and the element's ink");
+      // Turned back by the element's rotation it is the upright line's box.
+      assert.ok(Math.abs(advance.width - upright.height) < 0.01);
+      assert.ok(Math.abs(advance.height - upright.width) < 0.01);
+      assert.deepEqual(layout.frame, advance);
+      const origins = line!.glyphs.map((glyph) => glyph.origin!);
+      for (const [index, origin] of origins.slice(1).entries()) {
+        assert.equal(origin.x, origins[index]!.x);
+        assert.ok(origin.y > origins[index]!.y, "the pen moves down the page");
+      }
+    } finally {
+      close();
     }
   });
 });
