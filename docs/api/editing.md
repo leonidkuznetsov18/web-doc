@@ -1222,6 +1222,23 @@ current committed document and preserves unaffected runs and properties.
 It changes no revision, dirty state, paragraph ids, history or checkpoints.
 An invalid or cancelled preview leaves the live document usable.
 
+The `DocxTextPreviewFields.insertionStyle` field optionally supplies the
+pending character style (`bold`, `italic`, `underline` and the other native
+DOCX style fields). It applies only to the replacement text, using the
+replacement range's start and UTF-16 text length. Existing text on either
+side keeps its runs. A missing range replaces and styles the whole target.
+Styled replacement text must be nonempty; deletion-only drafts omit
+`insertionStyle`. Styles and ranges use the same validation and atomic operations as committed
+edits. The same optional field is supported by `replaceText`, so preview
+and commit use one native writer. Insertion into an empty paragraph is
+supported. CRLF/CR are normalized to LF; each LF splits native paragraphs.
+All inserted fragments and new paragraph marks inherit the insertion style,
+while the untouched suffix retains its existing runs on the last paragraph.
+The original target id stays with the first paragraph; `createdIds` lists
+new paragraph ids in text order (one per LF). A split may change the draft
+page count and move text across pages; layout covers the target paragraph
+on the first requested page containing it.
+
 For an in-document editor, `previewTextPages(fields, render, options?)`
 also renders the draft through the viewer's document adapter. `render.pages`
 is a list of `{ pageIndex, target }` objects whose targets are detached,

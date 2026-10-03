@@ -39,6 +39,375 @@ function range(elementId: string, start: number, end = start) {
 }
 
 describe("DOCX read-only text draft preview", () => {
+  it("previews pending bold, italic and underline only on inserted text without changing live runs", async () => {
+    const pair = loopbackWorker(createOoxmlEditHandler());
+    const engine = await loadDocxEditEngine(
+      ORIGINAL,
+      { format: "docx", limits, signal },
+      { createWorker: () => pair.worker },
+    );
+    try {
+      const before = (await engine.getElements({}, signal))[0];
+      assert.ok(before);
+      const saved = (await engine.materializeDocument("save", {}, signal))
+        .bytes;
+      const fields = {
+        target: before.id,
+        text: "🙂",
+        range: range(before.id, 4),
+        insertionStyle: { bold: false, italic: true, underline: true },
+      };
+      const draft = await engine.previewDraft(fields, signal);
+      const preview = await DocxEditEngine.open(draft.bytes, limits, signal);
+      try {
+        assert.equal(
+          (await preview.getElement(before.id, signal))?.text,
+          "Bold🙂 italic",
+        );
+        const inserted = await preview.textStyle(
+          before.id,
+          { start: 4, end: 6 },
+          signal,
+        );
+        assert.equal(inserted?.bold, false);
+        assert.equal(inserted?.italic, true);
+        assert.equal(inserted?.underline, true);
+        assert.equal(
+          (await preview.textStyle(before.id, { start: 0, end: 4 }, signal))
+            ?.bold,
+          true,
+        );
+        assert.equal(
+          (await preview.textStyle(before.id, { start: 6, end: 13 }, signal))
+            ?.italic,
+          true,
+        );
+      } finally {
+        await preview.dispose();
+      }
+      assert.deepEqual(await engine.getElement(before.id, signal), before);
+      assert.deepEqual(
+        (await engine.materializeDocument("save", {}, signal)).bytes,
+        saved,
+      );
+    } finally {
+      await engine.dispose();
+    }
+  });
+  it("styles empty paragraphs without consuming live ids", async () => {
+    const original = buildDocx({
+      body: paragraph("") + paragraph("next") + sectPr(),
+    });
+    const engine = await DocxEditEngine.open(original, limits, signal);
+    try {
+      const target = await paragraphId(engine);
+      for (const insertionStyle of [
+        { bold: true },
+        { bold: true, italic: true, underline: true },
+      ]) {
+        const draft = await engine.previewDraft(
+          { target, text: "one🙂two", insertionStyle },
+          signal,
+        );
+        const parsed = await DocxEditEngine.open(draft.bytes, limits, signal);
+        try {
+          assert.equal(
+            (await parsed.getElement(target, signal))?.text,
+            "one🙂two",
+          );
+          const style = await parsed.textStyle(
+            target,
+            { start: 0, end: 8 },
+            signal,
+          );
+          assert.equal(style?.bold, true);
+          if (insertionStyle.italic) {
+            assert.equal(style?.italic, true);
+            assert.equal(style?.underline, true);
+          }
+          assert.equal((await parsed.getElements({}, signal)).length, 2);
+        } finally {
+          await parsed.dispose();
+        }
+      }
+      assert.deepEqual(
+        (await engine.materializeDocument("save", {}, signal)).bytes,
+        original,
+      );
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+  it("rejects empty, invalid, cyclic and surrogate-splitting styled drafts without altering the session", async () => {
+    const original = buildDocx({ body: paragraph("a🙂b") + sectPr() });
+    const { session, end } = await docxSession(original, [[]]);
+    try {
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const before = session.state;
+      const cyclic = { bold: true };
+      Object.assign(cyclic, { extra: cyclic });
+      for (const fields of [
+        { target, text: "", insertionStyle: { bold: true } },
+        { target, text: "x", insertionStyle: { fontSize: 0 } },
+        {
+          target,
+          text: "x",
+          range: range(target, 2),
+          insertionStyle: { bold: true },
+        },
+      ]) {
+        await assert.rejects(
+          async () => session.previewText(fields),
+          (error: unknown) =>
+            error instanceof ViewerError && error.code === "invalid-operation",
+        );
+        await assert.rejects(
+          session.apply([{ op: "replaceText", ...fields }]),
+          (error: unknown) =>
+            error instanceof ViewerError && error.code === "invalid-operation",
+        );
+        assert.deepEqual(session.state, before);
+        assert.deepEqual((await session.save()).bytes, original);
+      }
+      await assert.rejects(
+        async () =>
+          session.previewText({ target, text: "x", insertionStyle: cyclic }),
+        (error: unknown) =>
+          error instanceof ViewerError && error.code === "invalid-operation",
+      );
+      assert.deepEqual(session.state, before);
+      assert.deepEqual((await session.save()).bytes, original);
+      const aborted = new AbortController();
+      aborted.abort();
+      await assert.rejects(
+        session.previewText(
+          { target, text: "x", insertionStyle: { bold: true } },
+          { signal: aborted.signal },
+        ),
+      );
+      assert.deepEqual(session.state, before);
+      assert.deepEqual((await session.save()).bytes, original);
+    } finally {
+      await end();
+    }
+  });
+
+  it("commits styled appended text after sequential validation and keeps invalid later operations atomic", async () => {
+    const { session, end } = await docxSession(ORIGINAL, [[]]);
+    try {
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const styled = [
+        {
+          op: "replaceText" as const,
+          target,
+          text: "🙂",
+          range: range(target, 11),
+        },
+        {
+          op: "setTextStyle" as const,
+          target,
+          range: range(target, 11, 13),
+          style: { bold: true, italic: true, underline: true },
+        },
+      ];
+      const before = session.state;
+      const saved = await session.save();
+      const dry = await session.apply(styled, { dryRun: true });
+      assert.equal(dry.dryRun, true);
+      assert.deepEqual(session.state, before);
+      assert.deepEqual(await session.save(), saved);
+      await session.apply(styled);
+      assert.equal(
+        (await session.getElement(target)).item?.text,
+        "Bold italic🙂",
+      );
+      const actualStyle = (
+        await session.getTextStyle({ target, range: range(target, 11, 13) })
+      ).item;
+      assert.equal(actualStyle?.bold, true);
+      assert.equal(actualStyle?.italic, true);
+      assert.equal(actualStyle?.underline, true);
+      const after = session.state;
+      const afterSaved = await session.save();
+      const checkpoint = await session.createCheckpoint("before failed style");
+      const bad = [
+        { op: "replaceText" as const, target, text: "x" },
+        {
+          op: "setTextStyle" as const,
+          target,
+          range: range(target, 11, 13),
+          style: { bold: true },
+        },
+      ];
+      await assert.rejects(
+        session.apply(bad),
+        (error: unknown) =>
+          error instanceof ViewerError && error.code === "invalid-operation",
+      );
+      assert.deepEqual(session.state, after);
+      assert.deepEqual(await session.save(), afterSaved);
+      assert.deepEqual(session.listCheckpoints(), [checkpoint]);
+      const split = [
+        { op: "replaceText" as const, target, text: "a\nb" },
+        {
+          op: "setTextStyle" as const,
+          target,
+          range: range(target, 0, 3),
+          style: { italic: true },
+        },
+      ];
+      await assert.rejects(
+        session.apply(split),
+        (error: unknown) =>
+          error instanceof ViewerError && error.code === "invalid-operation",
+      );
+      assert.deepEqual(session.state, after);
+      assert.deepEqual(await session.save(), afterSaved);
+      await session.undo();
+      assert.deepEqual((await session.save()).bytes, saved.bytes);
+      await session.redo();
+      assert.deepEqual((await session.save()).bytes, afterSaved.bytes);
+    } finally {
+      await end();
+    }
+  });
+
+  it("atomically styles multiple inserted paragraphs while preserving mixed tail runs through save and history", async () => {
+    const { session, end } = await docxSession(ORIGINAL, [[]]);
+    try {
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const fields = {
+        target,
+        text: "x\r\n\r\n🙂y",
+        range: range(target, 4),
+        insertionStyle: { italic: true, underline: true },
+      };
+      const operation = { op: "replaceText" as const, ...fields };
+      const before = session.state;
+      const saved = await session.save();
+      const draft = await session.previewText(fields);
+      assert.ok(draft.item);
+      const preview = await DocxEditEngine.open(draft.item, limits, signal);
+      try {
+        const paragraphs = await preview.getElements({}, signal);
+        assert.deepEqual(
+          paragraphs.map((p) => p.text),
+          ["Boldx", "", "🙂y italic", "Following paragraph"],
+        );
+        assert.equal(
+          (await preview.textStyle(target, { start: 4, end: 5 }, signal))
+            ?.underline,
+          true,
+        );
+        const empty = paragraphs[1];
+        const last = paragraphs[2];
+        assert.ok(empty && last);
+        assert.equal(
+          (await preview.textStyle(empty.id, undefined, signal))?.underline,
+          true,
+        );
+        assert.equal(
+          (await preview.textStyle(empty.id, undefined, signal))?.bold,
+          true,
+        );
+        assert.equal(
+          (await preview.textStyle(last.id, { start: 0, end: 3 }, signal))
+            ?.underline,
+          true,
+        );
+        assert.equal(
+          (await preview.textStyle(last.id, { start: 3, end: 10 }, signal))
+            ?.underline,
+          false,
+        );
+      } finally {
+        await preview.dispose();
+      }
+      assert.deepEqual(session.state, before);
+      assert.deepEqual(await session.save(), saved);
+      const dry = await session.apply([operation], { dryRun: true });
+      assert.equal(dry.createdIds.length, 2);
+      assert.deepEqual(session.state, before);
+      const actual = await session.apply([operation]);
+      assert.deepEqual(actual.createdIds, dry.createdIds);
+      const committed = await session.save();
+      const reopened = await DocxEditEngine.open(
+        committed.bytes,
+        limits,
+        signal,
+      );
+      try {
+        assert.deepEqual(
+          (await reopened.getElements({}, signal)).map((p) => p.text),
+          ["Boldx", "", "🙂y italic", "Following paragraph"],
+        );
+      } finally {
+        await reopened.dispose();
+      }
+      await session.undo();
+      assert.deepEqual((await session.save()).bytes, saved.bytes);
+      await session.redo();
+      assert.deepEqual((await session.save()).bytes, committed.bytes);
+    } finally {
+      await end();
+    }
+  });
+
+  it("retains insertion styling on tracked split runs and newly inserted paragraph marks", async () => {
+    const engine = await DocxEditEngine.open(ORIGINAL, limits, signal);
+    try {
+      const target = await paragraphId(engine);
+      const operation = {
+        op: "replaceText" as const,
+        target,
+        range: range(target, 4),
+        text: "x\n\n🙂y",
+        insertionStyle: { bold: false, italic: true, underline: true },
+      };
+      await engine.apply(
+        {
+          stateId: 1,
+          operations: [operation],
+          changeMode: "tracked",
+          author: "QA",
+        },
+        signal,
+      );
+      const elements = await engine.getElements({}, signal);
+      const empty = elements[1];
+      const last = elements[2];
+      assert.ok(empty && last);
+      assert.equal(
+        (await engine.textStyle(target, { start: 4, end: 5 }, signal))
+          ?.underline,
+        true,
+      );
+      assert.equal(
+        (await engine.textStyle(empty.id, undefined, signal))?.underline,
+        true,
+      );
+      assert.equal(
+        (await engine.textStyle(last.id, { start: 0, end: 3 }, signal))
+          ?.underline,
+        true,
+      );
+      assert.equal(
+        (await engine.textStyle(last.id, { start: 3, end: 10 }, signal))
+          ?.underline,
+        false,
+      );
+      assert.ok(
+        (await engine.revisions(target, signal)).some((r) => r.kind === "ins"),
+      );
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("returns draft target metadata with its display bytes through the edit worker", async () => {
     const pair = loopbackWorker(createOoxmlEditHandler());
     const engine = await loadDocxEditEngine(
@@ -219,6 +588,7 @@ describe("DOCX read-only text draft preview", () => {
         target,
         text: "draft",
         range: range(target, 1, 5),
+        insertionStyle: { bold: true, italic: true },
       });
       assert.equal(result.sessionId, before.sessionId);
       assert.equal(result.revision, before.revision);
@@ -228,6 +598,15 @@ describe("DOCX read-only text draft preview", () => {
         assert.equal(
           (await preview.getElement(target, signal))?.text,
           "+draft italic",
+        );
+        assert.equal(
+          (await preview.textStyle(target, { start: 1, end: 6 }, signal))?.bold,
+          true,
+        );
+        assert.equal(
+          (await preview.textStyle(target, { start: 1, end: 6 }, signal))
+            ?.italic,
+          true,
         );
       } finally {
         await preview.dispose();

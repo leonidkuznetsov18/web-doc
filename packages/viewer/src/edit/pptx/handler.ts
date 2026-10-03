@@ -5,7 +5,7 @@ import type {
   EditWorkerOpenResult,
   WorkerOperation,
 } from "../../worker-protocol.js";
-import type { DocxFields, DocxReplaceTextOperation } from "../docx/types.js";
+import type { DocxTextPreviewFields } from "../docx/types.js";
 import { DocxEditEngine } from "../docx/engine.js";
 import type { BatchMode, EngineBatch } from "../engine.js";
 import type {
@@ -167,7 +167,7 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         );
       case "edit-docx-preview-text": {
         const { fields } = payload as {
-          readonly fields: DocxFields<DocxReplaceTextOperation>;
+          readonly fields: DocxTextPreviewFields;
         };
         const draft = await docx().previewDraft(fields, signal);
         return {

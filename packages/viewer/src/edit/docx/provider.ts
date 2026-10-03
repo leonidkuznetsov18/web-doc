@@ -10,8 +10,7 @@ import type { DocxDraftDocument, DocxEngineReads } from "./engine.js";
 import { docxOperationSchemas } from "./schemas.js";
 import type { TextSpan } from "../range-style.js";
 import type {
-  DocxFields,
-  DocxReplaceTextOperation,
+  DocxTextPreviewFields,
   DocxRevision,
   DocxTextStyle,
 } from "./types.js";
@@ -46,14 +45,14 @@ export class DocxEditEngineClient
   readonly schemas = docxOperationSchemas;
 
   async previewText(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     signal: AbortSignal,
   ): Promise<Uint8Array> {
     return (await this.previewDraft(fields, signal)).bytes;
   }
 
   async previewDraft(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     signal: AbortSignal,
   ): Promise<DocxDraftDocument> {
     const draft = await this.request<{

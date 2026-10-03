@@ -4,7 +4,11 @@ import { describe, it } from "node:test";
 import type { DocumentAdapter, TextRun } from "../src/contracts.js";
 import { DocxEditEngine } from "../src/edit/docx/engine.js";
 import { DocxSession } from "../src/edit/docx/session.js";
-import { ViewerClient, defaultResourceLimits } from "../src/index.js";
+import {
+  ViewerClient,
+  defaultResourceLimits,
+  type DocxTextStyle,
+} from "../src/index.js";
 import { buildDocx, paragraph, sectPr } from "./fixtures/docx-builder.js";
 
 /** The test adapter only records target identity; no raster output is simulated. */
@@ -27,6 +31,9 @@ class RenderTarget extends EventTarget implements OffscreenCanvas {
 const ORIGINAL = buildDocx({ body: paragraph("original") + sectPr() });
 
 function setup() {
+  const renderedStyle: { current: DocxTextStyle | undefined } = {
+    current: undefined,
+  };
   const closed: DocxEditEngine[] = [];
   const opened: DocxEditEngine[] = [];
   const painted: {
@@ -81,6 +88,7 @@ function setup() {
       const element = (
         await engine.getElements({}, new AbortController().signal)
       )[0];
+      renderedStyle.current = element?.textStyle;
       painted.push({ text: element?.text ?? "", target });
       controls.afterRender?.();
     },
@@ -109,7 +117,7 @@ function setup() {
     "editstatechange",
   ] as const)
     viewer.on(type, () => events.push(type));
-  return { viewer, opened, closed, painted, controls, events };
+  return { viewer, opened, closed, painted, controls, events, renderedStyle };
 }
 
 describe("DOCX renderer draft preview isolation", () => {
@@ -126,7 +134,11 @@ describe("DOCX renderer draft preview isolation", () => {
       test.events.length = 0;
       const canvas = new RenderTarget();
       const preview = await session.previewTextPages(
-        { target, text: "longer draft text" },
+        {
+          target,
+          text: "longer draft text",
+          insertionStyle: { bold: true, italic: true },
+        },
         {
           pages: [{ pageIndex: 0, target: canvas }],
           zoom: 1,
@@ -134,6 +146,8 @@ describe("DOCX renderer draft preview isolation", () => {
         },
       );
       assert.equal(preview.revision, state.revision);
+      assert.equal(test.renderedStyle.current?.bold, true);
+      assert.equal(test.renderedStyle.current?.italic, true);
       assert.equal(preview.item?.layout?.lines[0]?.text, "longer draft text");
       assert.equal(
         preview.item?.layout?.frame?.width,

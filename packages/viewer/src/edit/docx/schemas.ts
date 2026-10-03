@@ -143,6 +143,7 @@ const all: Readonly<Record<string, JsonSchema>> = {
     {
       target: { $ref: "#/$defs/target" },
       text: { $ref: "#/$defs/text" },
+      insertionStyle: { $ref: "#/$defs/textStyle" },
       range: { $ref: "#/$defs/textRange" },
     },
     ["target", "text"],

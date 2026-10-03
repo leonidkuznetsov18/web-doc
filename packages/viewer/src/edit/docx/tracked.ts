@@ -1,11 +1,12 @@
-import type { XmlElement, XmlPart } from "../ooxml/xml.js";
+import { scanXml, type XmlElement, type XmlPart } from "../ooxml/xml.js";
 import { W_NS } from "./ids.js";
 import type { ParagraphRecord } from "./model.js";
 import type { DocxOperationContext, Issue } from "./operations.js";
 import { LINE_BREAK, TAB, type RunItem } from "./text.js";
 import { contentOf, rPrOf, unitsOf, type Unit } from "./text-ops.js";
-import type { DocxRevision } from "./types.js";
+import type { DocxRevision, DocxTextStyleChange } from "./types.js";
 import {
+  changedRunProperties,
   escapeAttributeValue,
   innerPropertiesXml,
   mergedProperties,
@@ -269,12 +270,24 @@ export function markedParagraphProperties(
   context: DocxOperationContext,
   pPr: XmlElement | undefined,
   mark: "ins" | "del",
+  insertion?: {
+    readonly style: DocxTextStyleChange;
+    readonly source: XmlElement | undefined;
+  },
 ): string {
   const part = context.model.document;
   const rPr = pPr?.children.find(
     (child) => child.local === "rPr" && child.namespace === W_NS,
   );
-  const inner = innerPropertiesXml(part, rPr, ["ins", "del"]);
+  const changed = insertion
+    ? scanXml(
+        "inserted-paragraph-mark",
+        `<w:root xmlns:w="${W_NS}">${changedRunProperties(part, insertion.source, insertion.style, context.model.styles)}</w:root>`,
+      )
+    : undefined;
+  const inner = changed
+    ? innerPropertiesXml(changed, changed.root.children[0], ["ins", "del"])
+    : innerPropertiesXml(part, rPr, ["ins", "del"]);
   const marked = `<w:rPr><w:${mark}${revisionAttributes(context)}/>${inner}</w:rPr>`;
   return mergedProperties(
     part,

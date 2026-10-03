@@ -415,15 +415,26 @@ export function paragraphMarkProperties(
 export function paragraphPropertiesWithoutSection(
   part: XmlPart,
   pPr: XmlElement | undefined,
+  insertion?: {
+    readonly style: DocxTextStyleChange;
+    readonly styles: DocxStyles;
+    readonly source: XmlElement | undefined;
+  },
 ): string {
-  if (!pPr) return "";
-  return mergedProperties(
-    part,
-    pPr,
-    "w:pPr",
-    PPR_ORDER,
-    new Map([["sectPr", null]]),
-  );
+  if (!pPr && !insertion) return "";
+  const set = new Map<string, string | null>([["sectPr", null]]);
+  if (insertion) {
+    set.set(
+      "rPr",
+      changedRunProperties(
+        part,
+        insertion.source,
+        insertion.style,
+        insertion.styles,
+      ),
+    );
+  }
+  return mergedProperties(part, pPr, "w:pPr", PPR_ORDER, set);
 }
 
 /**

@@ -158,9 +158,14 @@ export interface DocxReplaceTextOperation {
   /** A `paragraph` element. */
   readonly target: string;
   readonly text: string;
+  /** Style only the nonempty inserted text and new paragraph marks, keeping surrounding runs. */
+  readonly insertionStyle?: DocxTextStyleChange;
   /** Both ends on the target; absent, the whole text; collapsed, an insertion. */
   readonly range?: TextRange;
 }
+
+/** A read-only replacement draft; style applies only to its nonempty replacement text. */
+export type DocxTextPreviewFields = DocxFields<DocxReplaceTextOperation>;
 
 export interface DocxSetTextStyleOperation {
   readonly op: "setTextStyle";
@@ -309,12 +314,12 @@ export interface DocxEditSession extends EditSessionBase<
   ): Promise<ReadItem<TextPosition>>;
   /** Display-only draft bytes. Does not change the document, revision or history. */
   previewText(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     options?: ReadOptions,
   ): Promise<ReadItem<Uint8Array>>;
   /** Renders draft pages into caller-owned targets without changing content or history. */
   previewTextPages(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     render: DocxTextPreviewOptions,
     options?: ReadOptions,
   ): Promise<ReadItem<DocxTextPreview>>;
