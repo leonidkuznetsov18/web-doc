@@ -82,6 +82,7 @@ export function createPdfEditHandler(
         };
         await fonts.prepare(engine().fontRequests(operations));
         await engine().images.prepare(operations, host.decodeImage, assets);
+        await engine().prepareRewrites(operations);
         return engine().validate(operations);
       }
       case "edit-apply": {
@@ -92,6 +93,7 @@ export function createPdfEditHandler(
           host.decodeImage,
           assets,
         );
+        await engine().prepareRewrites(batch.operations);
         return engine().apply(batch);
       }
       case "edit-put-asset": {
@@ -122,7 +124,7 @@ export function createPdfEditHandler(
         const operations = batches.flatMap((batch) => batch.operations);
         await fonts.prepare(engine().fontRequests(operations));
         await engine().images.prepare(operations, host.decodeImage, assets);
-        engine().restore({
+        await engine().restorePrepared({
           batches,
           ...(base ? { base: new Uint8Array(base) } : {}),
         });

@@ -496,7 +496,7 @@ interface PdfTextStyle {
 | `textBox`   | A box created by `insertTextBox`; its lines are listed as one element                                           | `replaceText`, `setTextStyle`, `moveElement`, `resizeElement`, `deleteElement`                                |
 | `paragraph` | A confidently recognized homogeneous imported paragraph; native rows become one persisted element when reflowed | `replaceText`, `replaceParagraphText`, `setTextStyle` (color/fontSize/bold/italic/underline), `deleteElement` |
 | `table`     | A table created by `insertTable`; `text` joins cells by tab and newline                                         | `setTableCell`, `moveElement`, `deleteElement`                                                                |
-| `other`     | Shadings, form XObjects and anything else                                                                       | `moveElement`, `resizeElement`, `deleteElement`                                                               |
+| `other`     | Shadings, form XObjects and anything else; text inside a form is listed separately                              | `moveElement`, `resizeElement`, `deleteElement`                                                               |
 
 Ids look like `p0:o3` for objects of the original file and `p0:n2.0.0` for
 elements an operation created. A file saved by an earlier session already
@@ -562,6 +562,38 @@ text is incorporated into the paragraph, `textAnchorMigrations`.
 
 `elementsAt()` lists the elements under a point top-most first. Bounds of
 stroked shapes include the stroke, as PDFium reports them.
+
+#### Text inside form XObjects
+
+Producers often wrap content in form XObjects, forms inside forms included.
+Empty-text frame retention and underline decoration are not supported inside
+forms: those operations are refused before changing content or history. Ordinary
+page text keeps its existing empty-target and underline support. Nested text
+supports bold/italic, colour and font-size changes when the form can be safely
+rewritten.
+
+Each text object inside a form is a `text` element of its own, listed after
+its form and named by its path from the page object: `p0:o3/1/0` is object 0
+of the form that is object 1 of form `p0:o3`. Its bounds, `rotation` and
+`fontSize` include every form matrix it is drawn through, and `findText()`,
+`elementsAt()`, `positionAt()`, the layout reads and `renderPageWithout()` all
+name it. It accepts `replaceText`, `setTextStyle`, `moveElement` and
+`deleteElement`; stretching it is not offered.
+
+PDFium does not write changes inside a form back, so an edit rewrites the
+forms on the way to the text as new XObjects, for that one drawing of them:
+another drawing of the same form keeps the original. The text's neighbours in
+the form keep their matrices and clip paths, which carry the form's `/Matrix`
+and `/BBox`, and the clip path the form is drawn with is kept. Before
+validating, the engine rewrites the page in a scratch copy, writes it and
+reads it back; the target is refused as `unsupported-target` unless the copy
+holds the same objects, renders the same and sets no graphics state its new
+forms lack. That refuses a form drawn as a transparency group or under
+optional content, a pattern laid out by the form's `/Matrix`, and objects that
+take a graphics state by name — opacity set where the form is drawn, or an
+`ExtGState` from the form's own resources — since the new forms do not hold
+those names. Deleting a form lists the text elements inside it in
+`removedIds`.
 
 ### Page space
 

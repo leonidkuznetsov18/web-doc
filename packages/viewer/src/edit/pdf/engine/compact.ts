@@ -26,6 +26,34 @@ interface ParsedObject {
   readonly references: readonly number[];
   /** The object's value when it is a bare integer, for indirect lengths. */
   readonly integer?: number;
+  /** Byte range of the object's value when it is a dictionary or an array. */
+  readonly value?: readonly [number, number];
+  /** Byte range of the object's stream data, when it has a stream. */
+  readonly data?: readonly [number, number];
+}
+
+/** An object of a file PDFium wrote: its dictionary or array as text, its raw stream bytes. */
+export interface PdfObjectBytes {
+  readonly value?: string;
+  readonly data?: Uint8Array;
+}
+
+/**
+ * The objects of a file PDFium wrote, by number, read with the same lexer
+ * as the compaction. Throws `PdfCompactionError` on a shape it cannot read.
+ */
+export function readObjects(bytes: Uint8Array): Map<number, PdfObjectBytes> {
+  return new Map(
+    parseFile(bytes).objects.map((object) => [
+      object.number,
+      {
+        ...(object.value
+          ? { value: latin1(bytes.subarray(...object.value)) }
+          : {}),
+        ...(object.data ? { data: bytes.subarray(...object.data) } : {}),
+      },
+    ]),
+  );
 }
 
 /** A token with its byte range; `start` is past any whitespace and comments. */
@@ -182,6 +210,8 @@ function parseObject(
   let integer: number | undefined;
   let lengthValue: number | undefined;
   let lengthReference: number | undefined;
+  let value: readonly [number, number] | undefined;
+  let data: readonly [number, number] | undefined;
   // The object's value: a dictionary, an array, a scalar or nothing.
   const first = lexer.peek();
   if (first.kind === "number") {
@@ -198,6 +228,11 @@ function parseObject(
   } else if (first.kind !== "keyword" || first.value !== "endobj") {
     const dictionaryStart = lexer.position;
     const dictionaryEnd = skipValue(lexer, references);
+    if (
+      first.kind === "delimiter" &&
+      (first.value === "<<" || first.value === "[")
+    )
+      value = [dictionaryStart, dictionaryEnd];
     if (first.kind === "delimiter" && first.value === "<<") {
       const length = findLength(bytes, dictionaryStart, dictionaryEnd);
       lengthValue = length?.value;
@@ -227,6 +262,7 @@ function parseObject(
       if (dataEnd === undefined)
         throw new PdfCompactionError(`object ${number} has no endstream`);
     }
+    data = [dataStart, dataEnd];
     lexer.seek(dataEnd);
     const endstream = lexer.next();
     if (endstream.kind !== "keyword" || endstream.value !== "endstream")
@@ -243,6 +279,8 @@ function parseObject(
     end: next.end,
     references,
     ...(integer === undefined ? {} : { integer }),
+    ...(value ? { value } : {}),
+    ...(data ? { data } : {}),
   };
 }
 
