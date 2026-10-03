@@ -33,6 +33,7 @@ import {
   positionIn,
   rectsOf,
   type TextPageScan,
+  type TextCharacter,
 } from "./layout.js";
 import {
   markIsFresh,
@@ -579,18 +580,11 @@ export class PdfEditDocument {
       targets.length < limit;
       pageIndex += 1
     )
-      this.#scanText(pageIndex, ({ textPage, geometry, byObject, offsets }) => {
-        for (const match of this.#matches(textPage, query, options)) {
+      this.#scanText(pageIndex, ({ textPage, geometry, characters }) => {
+        for (const match of this.#matches(characters, query, options)) {
           if (targets.length >= limit) break;
           targets.push(
-            this.#target(
-              textPage,
-              pageIndex,
-              geometry,
-              match,
-              byObject,
-              offsets,
-            ),
+            this.#target(textPage, pageIndex, geometry, match, characters),
           );
         }
       });
@@ -1197,14 +1191,18 @@ export class PdfEditDocument {
         ...scan.elements.filter((element) => !members.has(element.id)),
         paragraphElement(paragraph),
       ],
-      offsets: scan.offsets.map((position) => {
+      characters: scan.characters.map((character) => {
+        const { position } = character;
         const member = position && members.get(position.elementId);
         return member && position
           ? {
-              elementId: paragraph.id,
-              offset: Math.min(member.end, member.start + position.offset),
+              ...character,
+              position: {
+                elementId: paragraph.id,
+                offset: Math.min(member.end, member.start + position.offset),
+              },
             }
-          : position;
+          : character;
       }),
     };
   }
@@ -1221,8 +1219,7 @@ export class PdfEditDocument {
         geometry,
         records,
       );
-      const offsets = this.#charOffsets(
-        page,
+      const characters = this.#characters(
         textPage,
         byObject,
         new Map(elements.map((element) => [element.id, element.text ?? ""])),
@@ -1239,7 +1236,7 @@ export class PdfEditDocument {
         geometry,
         byObject,
         elements,
-        offsets,
+        characters,
         frames,
       });
     });
@@ -1270,35 +1267,38 @@ export class PdfEditDocument {
   }
 
   *#matches(
-    textPage: number,
+    characters: readonly TextCharacter[],
     query: string,
     options: EditFindOptions,
   ): Generator<{ readonly start: number; readonly end: number }> {
-    const { lib } = this.#pdfium;
-    const count = lib.FPDFText_CountChars(textPage);
-    if (count === 0) return;
-    const bytes = (count + 1) * 2;
-    const buffer = this.#pdfium.malloc(bytes);
-    let text: string;
-    try {
-      lib.FPDFText_GetText(textPage, 0, count, buffer);
-      text = this.#pdfium.readWideStringAt(buffer, bytes);
-    } finally {
-      this.#pdfium.free(buffer);
-    }
+    // FPDFText_GetText returns UCS-2 and can omit astral scalars. Build
+    // the searchable text and its native spans from the same scan as layout.
+    const text = characters.map((character) => character.text).join("");
     const haystack = options.caseSensitive ? text : text.toLowerCase();
+    const starts = new Map<number, number>();
+    const ends = new Map<number, number>();
+    let length = 0;
+    for (const [index, character] of characters.entries()) {
+      const folded = options.caseSensitive
+        ? character.text
+        : character.text.toLowerCase();
+      // A case fold can expand one source character (İ → i + dot). Each
+      // folded codepoint still selects that original character in full.
+      for (const codepoint of folded) {
+        starts.set(length, index);
+        length += codepoint.length;
+        ends.set(length, index + 1);
+      }
+    }
     const needle = options.caseSensitive ? query : query.toLowerCase();
     let from = 0;
     while (from <= haystack.length - needle.length) {
       const at = haystack.indexOf(needle, from);
       if (at < 0) return;
-      // Text indexes count UTF-16 units; PDFium's char indexes do not.
-      const start = lib.FPDFText_GetCharIndexFromTextIndex(textPage, at);
-      const end = lib.FPDFText_GetCharIndexFromTextIndex(
-        textPage,
-        at + needle.length - 1,
-      );
-      if (start >= 0 && end >= start) yield { start, end: end + 1 };
+      const start = starts.get(at);
+      const end = ends.get(at + needle.length);
+      // A match must not split the two UTF-16 units of one character.
+      if (start !== undefined && end !== undefined) yield { start, end };
       from = at + Math.max(1, needle.length);
     }
   }
@@ -1309,42 +1309,63 @@ export class PdfEditDocument {
    * Lines of a text box or cells of a table are separate objects; their
    * offsets are found by locating each object's text inside the element's.
    */
-  #charOffsets(
-    page: number,
+  #characters(
     textPage: number,
     byObject: ReadonlyMap<number, string>,
     elementTexts: ReadonlyMap<string, string>,
-  ): readonly (TextPosition | undefined)[] {
+  ): readonly TextCharacter[] {
     const { lib } = this.#pdfium;
     const count = lib.FPDFText_CountChars(textPage);
-    const positions: (TextPosition | undefined)[] = [];
+    const characters: TextCharacter[] = [];
     const seen = new Map<number, number>();
     const cursors = new Map<string, number>();
     const bases = new Map<number, number>();
     for (let index = 0; index < count; index += 1) {
       const object = lib.FPDFText_GetTextObject(textPage, index);
+      const code = lib.FPDFText_GetUnicode(textPage, index);
+      let text = String.fromCodePoint(code);
+      let nativeCount: 1 | 2 = 1;
+      // ToUnicode may expose two surrogate records for one painted glyph;
+      // glyph-name extraction may expose the scalar as a single record.
+      if (code >= 0xd800 && code <= 0xdbff && index + 1 < count) {
+        const next = lib.FPDFText_GetUnicode(textPage, index + 1);
+        if (
+          next >= 0xdc00 &&
+          next <= 0xdfff &&
+          lib.FPDFText_GetTextObject(textPage, index + 1) === object
+        ) {
+          text += String.fromCharCode(next);
+          nativeCount = 2;
+        }
+      }
+      const character = { index, count: nativeCount, object, text };
+      index += nativeCount - 1;
       const elementId = byObject.get(object);
       if (!object || elementId === undefined) {
-        positions.push(undefined);
+        characters.push(character);
         continue;
       }
-      if (!bases.has(object)) {
+      let base = bases.get(object);
+      if (base === undefined) {
         const own = this.#pdfium.readWideString((buffer, bytes) =>
           lib.FPDFTextObj_GetText(object, textPage, buffer, bytes),
         );
         const whole = elementTexts.get(elementId) ?? "";
         const from = cursors.get(elementId) ?? 0;
         const at = whole.indexOf(own, from);
-        const base = at >= 0 ? at : whole.indexOf(own.trim(), from);
-        bases.set(object, base >= 0 ? base : from);
-        cursors.set(elementId, (base >= 0 ? base : from) + own.length);
+        const found = at >= 0 ? at : whole.indexOf(own.trim(), from);
+        base = found >= 0 ? found : from;
+        bases.set(object, base);
+        cursors.set(elementId, base + own.length);
       }
       const within = seen.get(object) ?? 0;
-      seen.set(object, within + 1);
-      positions.push({ elementId, offset: bases.get(object)! + within });
+      seen.set(object, within + text.length);
+      characters.push({
+        ...character,
+        position: { elementId, offset: base + within },
+      });
     }
-    void page;
-    return positions;
+    return characters;
   }
 
   #target(
@@ -1352,8 +1373,7 @@ export class PdfEditDocument {
     pageIndex: number,
     geometry: PageGeometry,
     match: { readonly start: number; readonly end: number },
-    byObject: ReadonlyMap<number, string>,
-    offsets: readonly (TextPosition | undefined)[],
+    characters: readonly TextCharacter[],
   ): TextTarget {
     const { lib } = this.#pdfium;
     const ranges: TextRange[] = [];
@@ -1366,14 +1386,15 @@ export class PdfEditDocument {
     const ids: string[] = [];
     let text = "";
     for (let index = match.start; index < match.end; index += 1) {
+      const character = characters[index];
+      if (!character) continue;
       const box = this.#pdfium.readNumbers(4, "double", ([l, r, b, t]) =>
-        lib.FPDFText_GetCharBox(textPage, index, l!, r!, b!, t!),
+        lib.FPDFText_GetCharBox(textPage, character.index, l!, r!, b!, t!),
       );
-      const unit = lib.FPDFText_GetUnicode(textPage, index);
-      text += String.fromCodePoint(unit);
-      const id = byObject.get(lib.FPDFText_GetTextObject(textPage, index));
+      text += character.text;
+      const { position } = character;
+      const id = position?.elementId;
       if (id && !ids.includes(id)) ids.push(id);
-      const position = offsets[index];
       if (position) {
         const last = ranges.at(-1);
         if (
@@ -1383,12 +1404,18 @@ export class PdfEditDocument {
         )
           ranges[ranges.length - 1] = {
             start: last.start,
-            end: { elementId: position.elementId, offset: position.offset + 1 },
+            end: {
+              elementId: position.elementId,
+              offset: position.offset + character.text.length,
+            },
           };
         else
           ranges.push({
             start: position,
-            end: { elementId: position.elementId, offset: position.offset + 1 },
+            end: {
+              elementId: position.elementId,
+              offset: position.offset + character.text.length,
+            },
           });
       }
       if (!box) continue;
