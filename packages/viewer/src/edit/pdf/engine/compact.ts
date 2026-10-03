@@ -56,6 +56,61 @@ export function readObjects(bytes: Uint8Array): Map<number, PdfObjectBytes> {
   );
 }
 
+/** Attach PDFium's newly written Info object when its source had no `/Info`. */
+export function attachInfoDictionary(
+  bytes: Uint8Array,
+  metadataKey: string,
+  prefixLength = 0,
+): Uint8Array {
+  // Incremental saves can have an arbitrary original encoding. Only inspect
+  // PDFium's classic appended section; every byte of the original stays intact.
+  const appended = bytes.subarray(prefixLength);
+  const parsed = parseFile(appended);
+  if (dictionaryHasKey(appended.subarray(...parsed.trailerRange), "Info"))
+    return bytes;
+  const latest = new Map(
+    parsed.objects.map((object) => [object.number, object]),
+  );
+  const candidates = [...latest.values()].filter(
+    (object) =>
+      !object.data &&
+      object.value &&
+      dictionaryHasKey(appended.subarray(...object.value), metadataKey),
+  );
+  if (candidates.length !== 1)
+    throw new PdfCompactionError(
+      "the page identity Info object is ambiguous or absent",
+    );
+  const info = candidates[0]!;
+  const end = prefixLength + parsed.trailerRange[1] - 2;
+  return concat([
+    bytes.subarray(0, end),
+    ascii(` /Info ${info.number} ${info.generation} R `),
+    bytes.subarray(end),
+  ]);
+}
+
+/** Inspect dictionary entries, ignoring names inside values or stream bytes. */
+function dictionaryHasKey(bytes: Uint8Array, key: string): boolean {
+  const lexer = new Lexer(bytes);
+  const opening = lexer.next();
+  if (opening.kind !== "delimiter" || opening.value !== "<<") return false;
+  for (;;) {
+    const name = lexer.next();
+    if (name.kind === "delimiter" && name.value === ">>") return false;
+    if (name.kind !== "name")
+      throw new PdfCompactionError("a dictionary entry is malformed");
+    if (lexer.lastNameIs(key)) return true;
+    const first = lexer.peek();
+    skipValue(lexer, []);
+    if (first.kind !== "number" || lexer.peek().kind !== "number") continue;
+    lexer.next();
+    const reference = lexer.next();
+    if (reference.kind !== "keyword" || reference.value !== "R")
+      throw new PdfCompactionError("a dictionary reference is malformed");
+  }
+}
+
 /** A token with its byte range; `start` is past any whitespace and comments. */
 type Token = { readonly start: number; readonly end: number } & (
   | { readonly kind: "number"; readonly value: number }
@@ -126,11 +181,13 @@ function parseFile(bytes: Uint8Array): {
   readonly objects: ParsedObject[];
   readonly trailer: string;
   readonly trailerReferences: readonly number[];
+  readonly trailerRange: readonly [number, number];
   readonly headerEnd: number;
 } {
   const lexer = new Lexer(bytes);
   const objects: ParsedObject[] = [];
   let trailer: string | undefined;
+  let trailerRange: readonly [number, number] | undefined;
   let trailerReferences: number[] = [];
   let headerEnd: number | undefined;
   // Two integers followed by `obj` open an object; a dangling pair is kept
@@ -172,6 +229,7 @@ function parseFile(bytes: Uint8Array): {
       const references: number[] = [];
       const dictionaryEnd = skipValue(lexer, references);
       trailer = latin1(bytes.subarray(dictionaryStart, dictionaryEnd));
+      trailerRange = [dictionaryStart, dictionaryEnd];
       trailerReferences = references;
       continue;
     }
@@ -190,13 +248,13 @@ function parseFile(bytes: Uint8Array): {
         "the file uses a cross-reference stream instead of a trailer",
       );
   }
-  if (trailer === undefined)
+  if (trailer === undefined || trailerRange === undefined)
     throw new PdfCompactionError("the file has no trailer dictionary");
   if (headerEnd === undefined)
     throw new PdfCompactionError("the file has no objects");
   // Indirect stream lengths were resolved while parsing where the length
   // object came first; the rest were measured from `endstream`.
-  return { objects, trailer, trailerReferences, headerEnd };
+  return { objects, trailer, trailerRange, trailerReferences, headerEnd };
 }
 
 function parseObject(

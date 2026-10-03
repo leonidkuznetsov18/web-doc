@@ -6,10 +6,15 @@ import {
   type OoxmlEditProviderOptions,
 } from "../ooxml/worker.js";
 import { WorkerEngineClient } from "../worker-engine.js";
-import type { DocxEngineReads } from "./engine.js";
+import type { DocxDraftDocument, DocxEngineReads } from "./engine.js";
 import { docxOperationSchemas } from "./schemas.js";
 import type { TextSpan } from "../range-style.js";
-import type { DocxRevision, DocxTextStyle } from "./types.js";
+import type {
+  DocxFields,
+  DocxReplaceTextOperation,
+  DocxRevision,
+  DocxTextStyle,
+} from "./types.js";
 
 export type DocxEditProviderOptions = OoxmlEditProviderOptions;
 
@@ -39,6 +44,27 @@ export class DocxEditEngineClient
   implements DocxEngineReads
 {
   readonly schemas = docxOperationSchemas;
+
+  async previewText(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    signal: AbortSignal,
+  ): Promise<Uint8Array> {
+    return (await this.previewDraft(fields, signal)).bytes;
+  }
+
+  async previewDraft(
+    fields: DocxFields<DocxReplaceTextOperation>,
+    signal: AbortSignal,
+  ): Promise<DocxDraftDocument> {
+    const draft = await this.request<{
+      readonly bytes: ArrayBuffer;
+      readonly paragraph?: DocxDraftDocument["paragraph"];
+    }>("edit-docx-preview-text", { fields }, signal);
+    return {
+      bytes: new Uint8Array(draft.bytes),
+      ...(draft.paragraph ? { paragraph: draft.paragraph } : {}),
+    };
+  }
 
   revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]> {
     return this.request("edit-docx-revisions", { id }, signal);

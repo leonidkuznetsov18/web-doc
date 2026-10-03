@@ -16,6 +16,13 @@ export interface PdfiumFunctions {
   ): number;
   PDFiumExt_CloseFileWriter(writer: number): void;
   FPDF_GetLastError(): number;
+  FPDF_GetMetaText(
+    document: number,
+    key: string,
+    buffer: number,
+    bytes: number,
+  ): number;
+  EPDF_SetMetaText(document: number, key: string, value: number): boolean;
   FPDF_CreateNewDocument(): number;
   FPDF_LoadMemDocument(data: number, size: number, password: string): number;
   FPDF_CloseDocument(document: number): void;
@@ -529,9 +536,12 @@ export class Pdfium {
    * Reads a UTF-16LE string from an API that returns the byte size it needs
    * when called with an empty buffer.
    */
-  readWideString(read: (buffer: number, bytes: number) => number): string {
+  readWideString(
+    read: (buffer: number, bytes: number) => number,
+    maxBytes = Infinity,
+  ): string {
     const bytes = read(0, 0);
-    if (bytes <= 2) return "";
+    if (bytes <= 2 || bytes > maxBytes) return "";
     const pointer = this.malloc(bytes);
     try {
       read(pointer, bytes);

@@ -34,7 +34,11 @@ import type {
   PageRect,
   ViewportRect,
 } from "./edit/types.js";
-import type { EditEngineProvider } from "./edit/engine.js";
+import type {
+  DocumentPreviewPages,
+  DocumentPreviewRenderOptions,
+  EditEngineProvider,
+} from "./edit/engine.js";
 import type { EditSession } from "./edit/sessions.js";
 import {
   EditSessionController,
@@ -1024,6 +1028,8 @@ export class DocumentViewer implements ViewerApi {
         getTextRuns: (pageIndex, signal) =>
           this.#getTextRuns(pageIndex, signal),
         cachedPages: () => [...this.#textMaps.keys()],
+        previewDocument: (bytes, render, signal) =>
+          this.#previewDocument(bytes, render, signal),
       });
       this.#session = { core, session };
       this.#emit("editstatechange", {
@@ -1099,6 +1105,91 @@ export class DocumentViewer implements ViewerApi {
       info: nextInfo,
       generation,
     };
+  }
+
+  /** Opens and closes an independent draft handle; never publishes viewer state or events. */
+  async #previewDocument(
+    bytes: Uint8Array,
+    options: DocumentPreviewRenderOptions,
+    signal: AbortSignal,
+  ): Promise<DocumentPreviewPages> {
+    const { adapter, info } = this.#assertReady();
+    const generation = this.#generation;
+    enforceContainerLimits(bytes, info.format, this.#limits);
+    const assertCurrent = () => {
+      if (generation !== this.#generation || signal.aborted) throw abortError();
+    };
+    assertCurrent();
+    const temporary = await adapter.open(bytes, {
+      format: info.format,
+      limits: this.#limits,
+      signal,
+      reportProgress: () => {},
+      reportWarning: () => {},
+      ...(this.#originalFileName ? { fileName: this.#originalFileName } : {}),
+      ...(this.#originalContentType
+        ? { contentType: this.#originalContentType }
+        : {}),
+      ...(this.#runtime.assetBaseUrl
+        ? { assetBaseUrl: this.#runtime.assetBaseUrl }
+        : {}),
+    });
+    try {
+      assertCurrent();
+      const draft = describeDocument(
+        adapter,
+        await adapter.getInfo(temporary),
+        info.format,
+        this.#limits,
+      );
+      assertCurrent();
+      const zoom = clampZoom(options.zoom ?? this.#state.zoom);
+      const devicePixelRatio = positiveNumber(
+        options.devicePixelRatio,
+        globalThis.devicePixelRatio ?? 1,
+      );
+      const requested = new Set<number>();
+      for (const page of options.pages) {
+        assertPageIndex(page.pageIndex, draft.pageCount);
+        if (requested.has(page.pageIndex))
+          throw new ViewerError(
+            "invalid-operation",
+            "Draft pages must be unique",
+          );
+        requested.add(page.pageIndex);
+        const size = draft.pageSizes?.[page.pageIndex];
+        assertRenderBudget(
+          (size?.width ?? THUMBNAIL_BASE_WIDTH) * zoom,
+          (size?.height ?? THUMBNAIL_BASE_HEIGHT) * zoom,
+          devicePixelRatio,
+          this.#limits.maxDecodedPixels,
+        );
+      }
+      const pages: DocumentPreviewPages["pages"][number][] = [];
+      for (const page of options.pages) {
+        const runs =
+          (await adapter.getTextMap?.(temporary, page.pageIndex, signal)) ?? [];
+        assertCurrent();
+        await this.#runtime.fonts.ensureRuns(runs, () => {}, signal);
+        await this.#runtime.renderScheduler.run("visible", signal, () =>
+          adapter.render(
+            temporary,
+            page.target,
+            { pageIndex: page.pageIndex, zoom, devicePixelRatio },
+            signal,
+          ),
+        );
+        assertCurrent();
+        pages.push({ pageIndex: page.pageIndex, runs });
+      }
+      return {
+        pageCount: draft.pageCount,
+        ...(draft.pageSizes ? { pageSizes: draft.pageSizes } : {}),
+        pages,
+      };
+    } finally {
+      await adapter.close(temporary);
+    }
   }
 
   /**

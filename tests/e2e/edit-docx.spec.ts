@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 import { expect, test, type Page } from "@playwright/test";
+import type { Viewer, ViewerClient } from "../../packages/viewer/src/index.js";
 
 import {
   localRecordOf,
@@ -692,3 +693,193 @@ test(
     }
   },
 );
+
+test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow without publishing stale drafts", async ({
+  page,
+}, testInfo) => {
+  const originalText = "Bold heading italic phrase plain tail.";
+  const inserted = " Native draft wrapping remains faithful.".repeat(14);
+  const documentOf = (addition: string) =>
+    buildDocx({
+      body:
+        '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Bold heading </w:t></w:r>' +
+        '<w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">italic phrase </w:t></w:r>' +
+        `<w:r><w:t xml:space="preserve">plain tail.${addition}</w:t></w:r></w:p>` +
+        paragraph("Following paragraph must move below the expanded draft") +
+        sectPr({ width: 7200, height: 15840, margin: 720 }),
+    });
+  const original = documentOf("");
+  const expected = documentOf(inserted);
+  await loadDocument(page, original, "mixed-draft.docx");
+  const result = await page.evaluate(
+    async ({ originalBytes, expectedBytes, originalText, inserted }) => {
+      const viewer = (window as unknown as { __viewer: Viewer }).__viewer;
+      const session = await viewer.edit();
+      if (session.format !== "docx") throw new Error("Expected DOCX session");
+      const elements = (await session.getElements({ pageIndex: 0 })).items;
+      const first = elements.find((element) => element.text === originalText);
+      const following = elements.find((element) =>
+        element.text?.startsWith("Following paragraph"),
+      );
+      if (!first || !following)
+        throw new Error("Fixture paragraphs are missing");
+      const changes: string[] = [];
+      viewer.on("documentchange", () => changes.push("documentchange"));
+      viewer.on("editstatechange", () => changes.push("editstatechange"));
+      const stateBefore = session.state;
+      const before = document.createElement("canvas");
+      await viewer.renderPage(0, before, { zoom: 1, devicePixelRatio: 1 });
+      const liveBefore = before.toDataURL();
+      const cancelled = document.createElement("canvas");
+      const controller = new AbortController();
+      const stale = session
+        .previewTextPages(
+          {
+            target: first.id,
+            text: " Stale draft",
+            range: {
+              start: { elementId: first.id, offset: originalText.length },
+              end: { elementId: first.id, offset: originalText.length },
+            },
+          },
+          {
+            pages: [{ pageIndex: 0, target: cancelled }],
+            zoom: 1,
+            devicePixelRatio: 1,
+          },
+          { signal: controller.signal },
+        )
+        .then(
+          () => "resolved",
+          (error: unknown) => {
+            if (
+              error instanceof Error &&
+              "code" in error &&
+              typeof error.code === "string"
+            )
+              return error.code;
+            return error instanceof Error ? error.name : "unknown";
+          },
+        );
+      controller.abort();
+      const draft = document.createElement("canvas");
+      const preview = await session.previewTextPages(
+        {
+          target: first.id,
+          text: inserted,
+          range: {
+            start: { elementId: first.id, offset: originalText.length },
+            end: { elementId: first.id, offset: originalText.length },
+          },
+        },
+        {
+          pages: [{ pageIndex: 0, target: draft }],
+          zoom: 1,
+          devicePixelRatio: 1,
+        },
+      );
+      if (!preview.item?.layout)
+        throw new Error("Native draft layout is missing");
+      const runs = preview.item.pages[0]?.runs ?? [];
+      const paragraphRuns = runs.filter(
+        (run) => run.paragraphId === first.id.slice(2),
+      );
+      const movedFollowing = runs.find(
+        (run) => run.paragraphId === following.id.slice(2),
+      );
+      const module = (await import("/main.js")) as {
+        ViewerClient: typeof ViewerClient;
+      };
+      const expectedClient = module.ViewerClient.create({
+        assetBaseUrl: new URL("/", location.href),
+        fontPolicy: { mode: "offline" },
+      });
+      const expectedViewer = expectedClient.createViewer();
+      await expectedViewer.load(new Uint8Array(expectedBytes), {
+        fileName: "expected-draft.docx",
+      });
+      const expectedCanvas = document.createElement("canvas");
+      await expectedViewer.renderPage(0, expectedCanvas, {
+        zoom: 1,
+        devicePixelRatio: 1,
+      });
+      const liveAfter = document.createElement("canvas");
+      await viewer.renderPage(0, liveAfter, { zoom: 1, devicePixelRatio: 1 });
+      const saved = await session.save();
+      const response = {
+        draftPixels: draft.toDataURL(),
+        draftChanged: draft.toDataURL() !== liveBefore,
+        expectedPixels: expectedCanvas.toDataURL(),
+        liveUnchanged: liveAfter.toDataURL() === liveBefore,
+        originalBytesUnchanged:
+          saved.bytes.length === originalBytes.length &&
+          saved.bytes.every((byte, index) => byte === originalBytes[index]),
+        stateBefore,
+        stateAfter: session.state,
+        changes,
+        cancelledResult: await stale,
+        mixedRuns: paragraphRuns.map((run) => ({
+          text: run.text,
+          fontWeight: run.fontWeight,
+          fontStyle: run.fontStyle,
+          font: run.font,
+        })),
+        layoutLines: preview.item.layout.lines.length,
+        followingYBefore: following.bounds.y,
+        followingYAfter: movedFollowing?.y,
+        lastDraftLineBottom: Math.max(
+          ...paragraphRuns.map((run) => run.y + run.height),
+        ),
+      };
+      await expectedViewer.destroy();
+      await expectedClient.destroy();
+      return response;
+    },
+    {
+      originalBytes: Array.from(original),
+      expectedBytes: Array.from(expected),
+      originalText,
+      inserted,
+    },
+  );
+  for (const [name, pixels] of [
+    ["native-draft", result.draftPixels],
+    ["independent-expected", result.expectedPixels],
+  ]) {
+    const artifactPath = testInfo.outputPath(`${name}.png`);
+    await writeFile(
+      artifactPath,
+      Buffer.from(pixels.split(",")[1] ?? "", "base64"),
+    );
+    await testInfo.attach(name, {
+      path: artifactPath,
+      contentType: "image/png",
+    });
+  }
+  expect(result.draftPixels === result.expectedPixels).toBe(true);
+  expect(result.draftChanged).toBe(true);
+  expect(result.liveUnchanged).toBe(true);
+  expect(result.originalBytesUnchanged).toBe(true);
+  expect(result.stateAfter).toEqual(result.stateBefore);
+  expect(result.changes).toEqual([]);
+  expect(result.cancelledResult).toBe("aborted");
+  expect(
+    result.mixedRuns.some(
+      (run) =>
+        run.text.includes("Bold") &&
+        (run.fontWeight === 700 || run.font?.includes("bold")),
+    ),
+  ).toBe(true);
+  expect(
+    result.mixedRuns.some(
+      (run) =>
+        run.text.includes("italic") &&
+        (run.fontStyle === "italic" || run.font?.includes("italic")),
+    ),
+  ).toBe(true);
+  expect(result.layoutLines).toBeGreaterThan(3);
+  expect(result.followingYAfter).toBeGreaterThan(result.followingYBefore);
+  expect(result.followingYAfter).toBeGreaterThanOrEqual(
+    result.lastDraftLineBottom - 1,
+  );
+});

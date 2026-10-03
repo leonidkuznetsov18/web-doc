@@ -1,5 +1,6 @@
 import type {
   DocumentFormat,
+  PageSize,
   RegisteredFont,
   ResourceLimits,
   TextRun,
@@ -74,6 +75,31 @@ export interface EditSessionAccess {
   ): Promise<readonly TextRun[]>;
   /** Pages whose text runs are already known, in no particular order. */
   cachedPages(): readonly number[];
+  /** Renders a temporary document without changing the viewer's shown handle. */
+  previewDocument?(
+    bytes: Uint8Array,
+    options: DocumentPreviewRenderOptions,
+    signal: AbortSignal,
+  ): Promise<DocumentPreviewPages>;
+}
+
+export interface DocumentPreviewRenderOptions {
+  /** Detached targets owned by the caller; publish only after this read resolves. */
+  readonly pages: readonly {
+    readonly pageIndex: number;
+    readonly target: HTMLCanvasElement | OffscreenCanvas;
+  }[];
+  readonly zoom?: number;
+  readonly devicePixelRatio?: number;
+}
+
+export interface DocumentPreviewPages {
+  readonly pageCount: number;
+  readonly pageSizes?: readonly PageSize[];
+  readonly pages: readonly {
+    readonly pageIndex: number;
+    readonly runs: readonly TextRun[];
+  }[];
 }
 
 /** Advertised by a `DocumentAdapter` that can edit some of its formats. */

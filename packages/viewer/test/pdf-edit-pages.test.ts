@@ -8,8 +8,231 @@ import {
   extractPageText,
   fixturePdfium,
 } from "./fixtures/pdf-builder.js";
+import { sharedFormPdf } from "./fixtures/pdf-forms.js";
+import { pdfSession } from "./fixtures/pdf-session.js";
 
 const op = <T extends PdfOperation>(operation: T): T => operation;
+
+for (const [name, operations] of [
+  ["page insertion", [op({ op: "insertPage", index: 0 })]],
+  [
+    "page reorder",
+    [
+      op({ op: "insertPage", index: 1 }),
+      op({ op: "movePage", from: 0, to: 1 }),
+    ],
+  ],
+] as const) {
+  it(`keeps ordinary and Form targets through ${name}, checkpoint Undo/Redo and save`, async () => {
+    const { session, end } = await pdfSession(sharedFormPdf());
+    const control = "p0:o0";
+    const first = "p0:o1/2/1";
+    const second = "p0:o1/3/1";
+    try {
+      for (const operation of operations) await session.apply([operation]);
+      await session.createCheckpoint("after page structure change");
+      await session.apply([
+        { op: "setTextStyle", target: control, style: { color: "#00ff00" } },
+        { op: "setTextStyle", target: first, style: { color: "#ff0000" } },
+      ]);
+      await session.undo();
+      await session.redo();
+      const edited = (await session.getElements({ pageIndex: 1 })).items;
+      assert.equal(
+        edited.find((element) => element.id === control)?.textStyle?.color,
+        "#00ff00",
+      );
+      assert.equal(
+        edited.find((element) => element.id === first)?.textStyle?.color,
+        "#ff0000",
+      );
+      assert.equal(
+        edited.find((element) => element.id === second)?.textStyle?.color,
+        "#000000",
+      );
+      assert.ok(
+        Math.abs(
+          edited.find((element) => element.id === first)!.bounds.x - 72.784,
+        ) < 0.01,
+      );
+      assert.ok(
+        Math.abs(
+          edited.find((element) => element.id === second)!.bounds.x - 312.784,
+        ) < 0.01,
+      );
+
+      await session.replaceText({ target: control, text: "Updated control" });
+      await session.replaceText({ target: first, text: "Updated inner" });
+      const reopened = new PdfEditDocument(
+        await fixturePdfium(),
+        (await session.save()).bytes,
+      );
+      try {
+        assert.equal(reopened.getElement(control)?.pageIndex, 1);
+        assert.equal(reopened.getElement(control)?.text, "Updated control");
+        assert.equal(reopened.getElement(first)?.pageIndex, 1);
+        assert.equal(reopened.getElement(first)?.text?.trim(), "Updated inner");
+        assert.equal(reopened.getElement(second)?.text?.trim(), "Shared inner");
+        const incremental = new PdfEditDocument(
+          await fixturePdfium(),
+          (await session.save({ mode: "incremental" })).bytes,
+        );
+        try {
+          assert.equal(incremental.getElement(control)?.pageIndex, 1);
+          assert.equal(
+            incremental.getElement(control)?.text,
+            "Updated control",
+          );
+          assert.equal(
+            incremental.getElement(first)?.text?.trim(),
+            "Updated inner",
+          );
+          assert.equal(
+            incremental.getElement(second)?.text?.trim(),
+            "Shared inner",
+          );
+        } finally {
+          incremental.dispose();
+        }
+      } finally {
+        reopened.dispose();
+      }
+    } finally {
+      await end();
+    }
+  });
+}
+
+it("keeps native shape and newly created page targets after checkpoint restoration", async () => {
+  const { session, end } = await pdfSession(
+    await buildPdf([
+      {
+        text: "Original",
+        rect: { x: 100, y: 300, width: 120, height: 40, fill: [0, 0, 255] },
+      },
+      "Second",
+    ]),
+  );
+  try {
+    await session.insertPage({ index: 0 });
+    const created = await session.insertTextBox({
+      pageIndex: 0,
+      rect: { x: 40, y: 40, width: 200, height: 40 },
+      text: "New page",
+    });
+    const target = created.createdIds[0]!;
+    const before = (await session.getElements({ pageIndex: 1 })).items.find(
+      (element) => element.id === "p0:o1",
+    )!.bounds;
+    await session.createCheckpoint("with a new page element");
+    await session.apply([
+      { op: "moveElement", target: "p0:o1", by: { dx: 9, dy: 13 } },
+      { op: "replaceText", target, text: "New page edited" },
+    ]);
+    await session.undo();
+    await session.redo();
+    const edited = (await session.getElements({})).items;
+    assert.equal(edited.find((element) => element.id === target)?.pageIndex, 0);
+    assert.equal(
+      edited.find((element) => element.id === target)?.text,
+      "New page edited",
+    );
+    assert.equal(
+      edited.find((element) => element.id === "p0:o1")?.pageIndex,
+      1,
+    );
+    assert.equal(
+      edited.find((element) => element.id === "p0:o1")?.bounds.x,
+      before.x + 9,
+    );
+    assert.equal(
+      edited.find((element) => element.id === "p0:o1")?.bounds.y,
+      before.y + 13,
+    );
+    const reopened = new PdfEditDocument(
+      await fixturePdfium(),
+      (await session.save()).bytes,
+    );
+    try {
+      assert.equal(reopened.getElement(target)?.text, "New page edited");
+      assert.equal(reopened.getElement("p0:o1")?.pageIndex, 1);
+      assert.equal(reopened.getElement("p1:o0")?.pageIndex, 2);
+      // A fresh session starts its state counter at one. Its new page must
+      // not reuse the previously saved q1.0 logical page's identity.
+      reopened.apply([{ op: "insertPage", index: 0 }]);
+      const added = reopened.apply([
+        {
+          op: "insertTextBox",
+          pageIndex: 0,
+          rect: { x: 40, y: 40, width: 200, height: 40 },
+          text: "Another new page",
+        },
+      ]);
+      assert.notEqual(added.createdIds[0], target);
+      assert.equal(reopened.getElement(target)?.text, "New page edited");
+      assert.equal(reopened.getElement(target)?.pageIndex, 1);
+      assert.equal(
+        reopened.getElement(added.createdIds[0]!)?.text,
+        "Another new page",
+      );
+    } finally {
+      reopened.dispose();
+    }
+  } finally {
+    await end();
+  }
+});
+
+it("rejects malformed or stale page metadata without rebinding native targets", async () => {
+  const pdfium = await fixturePdfium();
+  const original = await buildPdf(["First", "Second"]);
+  const document = pdfium.openDocument(original);
+  const numbers = [0, 1].map((index) =>
+    pdfium.lib.EPDFDoc_GetPageObjectNumberByIndex(document.handle, index),
+  );
+  document.close();
+  const entries = numbers.map((object, index) => ({
+    object,
+    key: `p${index}`,
+  }));
+  const invalid = [
+    "invalid json",
+    JSON.stringify({ version: 2, pages: entries }),
+    JSON.stringify({ version: 1, pages: entries.slice(0, 1) }),
+    JSON.stringify({ version: 1, pages: [entries[0], entries[0]] }),
+    JSON.stringify({
+      version: 1,
+      pages: [entries[0], { object: numbers[1], key: "p0" }],
+    }),
+    JSON.stringify({
+      version: 1,
+      pages: [entries[0], { object: 999999, key: "p1" }],
+    }),
+    JSON.stringify({
+      version: 1,
+      pages: [entries[0], { object: numbers[1], key: "foreign" }],
+    }),
+  ];
+  for (const raw of invalid) {
+    const native = pdfium.openDocument(original);
+    const pointer = pdfium.writeWideString(raw);
+    try {
+      assert.ok(
+        pdfium.lib.EPDF_SetMetaText(native.handle, "WebDocPageKeys", pointer),
+      );
+      const model = new PdfEditDocument(pdfium, native.save("full"));
+      try {
+        assert.equal(model.getElement("p0:o0")?.text, "First");
+        assert.equal(model.getElement("p1:o0")?.text, "Second");
+      } finally {
+        model.dispose();
+      }
+    } finally {
+      pdfium.free(pointer);
+      native.close();
+    }
+  }
+});
 
 /** Page sizes and rotations as PDFium reads them back from saved bytes. */
 async function pageShapes(bytes: Uint8Array) {
