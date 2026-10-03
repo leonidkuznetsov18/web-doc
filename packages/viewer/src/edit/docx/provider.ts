@@ -8,7 +8,8 @@ import {
 import { WorkerEngineClient } from "../worker-engine.js";
 import type { DocxEngineReads } from "./engine.js";
 import { docxOperationSchemas } from "./schemas.js";
-import type { DocxRevision } from "./types.js";
+import type { TextSpan } from "../range-style.js";
+import type { DocxRevision, DocxTextStyle } from "./types.js";
 
 export type DocxEditProviderOptions = OoxmlEditProviderOptions;
 
@@ -41,6 +42,14 @@ export class DocxEditEngineClient
 
   revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]> {
     return this.request("edit-docx-revisions", { id }, signal);
+  }
+
+  textStyle(
+    id: string,
+    span: TextSpan | undefined,
+    signal: AbortSignal,
+  ): Promise<Partial<DocxTextStyle> | undefined> {
+    return this.request("edit-docx-text-style", { id, span }, signal);
   }
 
   async start(original: Uint8Array): Promise<void> {

@@ -17,9 +17,16 @@ import {
   firstTextRun,
   readTableCells,
   readTextModel,
+  type ParagraphInfo,
   type TextModel,
 } from "./text.js";
-import type { PptxElement, PptxElementKind, PptxPlaceholder } from "./types.js";
+import { runsCovering, sharedStyle, type TextSpan } from "../range-style.js";
+import type {
+  PptxElement,
+  PptxElementKind,
+  PptxPlaceholder,
+  PptxTextStyle,
+} from "./types.js";
 
 /*
  * The elements of a slide, read from its XML: every child of the shape tree
@@ -52,6 +59,8 @@ export interface ShapeRecord {
   /** Inside the fallback branch of `mc:AlternateContent`. */
   readonly readOnly: boolean;
   readonly parent?: ShapeRecord;
+  /** The style a span of the shape's text shows: what every run it covers shares. */
+  readonly styleOf?: (span: TextSpan) => Partial<PptxTextStyle> | undefined;
 }
 
 export interface SlideElements {
@@ -390,6 +399,12 @@ function readRecord(
     ...(text ? { text } : {}),
     readOnly,
     ...(parent ? { parent } : {}),
+    ...(text && txBody
+      ? {
+          styleOf: (span: TextSpan) =>
+            rangeStyleOf(context, placeholder, txBody, text, span),
+        }
+      : {}),
   };
 }
 
@@ -447,6 +462,48 @@ export function listStylesOf(
   }
   if (defaults) lists.push(defaults);
   return lists;
+}
+
+/**
+ * The style a span of a text body shows: each run it covers resolves through
+ * its paragraph and the inherited lists, and the properties they all share
+ * are kept. An empty paragraph reads its end-of-paragraph properties.
+ */
+function rangeStyleOf(
+  context: ElementContext,
+  placeholder: PptxPlaceholder | undefined,
+  txBody: XmlElement,
+  text: TextModel,
+  span: TextSpan,
+): Partial<PptxTextStyle> | undefined {
+  const lists = listStylesOf(context, txBody, placeholder);
+  const styleOf = (paragraph: ParagraphInfo, rPr: XmlElement | undefined) =>
+    resolveTextStyle({
+      ...(rPr ? { rPr: { part: context.part, node: rPr } } : {}),
+      ...(paragraph.pPr
+        ? { pPr: { part: context.part, node: paragraph.pPr } }
+        : {}),
+      level: paragraph.level,
+      lists,
+      fonts: context.fonts,
+    });
+  const runs = text.paragraphs.flatMap((paragraph) =>
+    paragraph.runs.map((run) => ({
+      start: run.start,
+      end: run.end,
+      style: () => styleOf(paragraph, run.rPr),
+    })),
+  );
+  const covered = runsCovering(runs, span);
+  if (covered.length > 0) return sharedStyle(covered.map((run) => run.style()));
+  const paragraph =
+    text.paragraphs.find(
+      (candidate) =>
+        candidate.start <= span.start && span.start <= candidate.end,
+    ) ?? text.paragraphs[0];
+  return paragraph
+    ? sharedStyle([styleOf(paragraph, paragraph.endParaRPr)])
+    : undefined;
 }
 
 function textStyleOf(

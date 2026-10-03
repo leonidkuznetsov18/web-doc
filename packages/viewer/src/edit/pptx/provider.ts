@@ -6,9 +6,10 @@ import {
   type OoxmlEditProviderOptions,
 } from "../ooxml/worker.js";
 import { WorkerEngineClient } from "../worker-engine.js";
+import type { TextSpan } from "../range-style.js";
 import type { PptxEngineReads } from "./engine.js";
 import { pptxOperationSchemas } from "./schemas.js";
-import type { PptxLayoutInfo, PptxSlideInfo } from "./types.js";
+import type { PptxLayoutInfo, PptxSlideInfo, PptxTextStyle } from "./types.js";
 
 export type PptxEditProviderOptions = OoxmlEditProviderOptions;
 
@@ -56,5 +57,13 @@ export class PptxEditEngineClient
 
   layouts(signal: AbortSignal): Promise<readonly PptxLayoutInfo[]> {
     return this.request("edit-pptx-layouts", undefined, signal);
+  }
+
+  textStyle(
+    id: string,
+    span: TextSpan | undefined,
+    signal: AbortSignal,
+  ): Promise<Partial<PptxTextStyle> | undefined> {
+    return this.request("edit-pptx-text-style", { id, span }, signal);
   }
 }
