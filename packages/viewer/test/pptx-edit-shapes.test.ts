@@ -87,6 +87,338 @@ function sameRect(
 }
 
 describe("PPTX shape operations (pptx-edit)", () => {
+  it("rejects unrepresentable rotated group resize without changing bytes or history, including dry run", async () => {
+    const bytes = buildDeck({
+      slides: [
+        {
+          shapes: [
+            group({
+              id: 2,
+              x: 914400,
+              y: 914400,
+              cx: 914400,
+              cy: 914400,
+              rotation: 45,
+              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+              children: [
+                textShape({ id: 3, x: 0, y: 0, cx: 457200, cy: 457200 }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const { session, end } = await pptxSession(bytes);
+    try {
+      await session.moveElement({ target: "sld1:2", by: { dx: 10, dy: 0 } });
+      const redoBytes = (await session.save()).bytes;
+      await session.undo();
+      const state = session.state;
+      const before = (await session.getElement("sld1:2")).item;
+      assert.ok(before);
+      for (const dryRun of [false, true]) {
+        const operations: PptxOperation[] = [
+          {
+            op: "resizeElement",
+            target: before.id,
+            rect: { ...before.bounds, width: before.bounds.width * 2 },
+          },
+        ];
+        await assert.rejects(session.applyJson(operations, { dryRun }), {
+          code: "invalid-operation",
+        });
+        assert.deepEqual(session.state, state);
+        assert.deepEqual((await session.save()).bytes, bytes);
+        assert.deepEqual(
+          (await session.getElement(before.id)).item?.bounds,
+          before.bounds,
+        );
+      }
+      await session.redo();
+      assert.deepEqual((await session.save()).bytes, redoBytes);
+    } finally {
+      await end();
+    }
+  });
+
+  it("rejects tiny anisotropic group shear even when overflowing descendants amplify it", async () => {
+    const bytes = buildDeck({
+      slides: [
+        {
+          shapes: [
+            group({
+              id: 2,
+              x: 914400,
+              y: 914400,
+              cx: 914400,
+              cy: 914400,
+              rotation: 45,
+              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+              children: [
+                textShape({
+                  id: 3,
+                  x: 914400000000,
+                  y: 0,
+                  cx: 457200,
+                  cy: 457200,
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const { session, end } = await pptxSession(bytes);
+    try {
+      const before = (await session.getElement("sld1:2")).item;
+      const child = (await session.getElement("sld1:3")).item;
+      assert.ok(before && child);
+      const state = session.state;
+      for (const dryRun of [false, true]) {
+        const operations: PptxOperation[] = [
+          {
+            op: "resizeElement",
+            target: before.id,
+            rect: { ...before.bounds, width: before.bounds.width + 0.00001 },
+          },
+        ];
+        await assert.rejects(session.applyJson(operations, { dryRun }), {
+          code: "invalid-operation",
+        });
+        assert.deepEqual(session.state, state);
+        assert.deepEqual((await session.save()).bytes, bytes);
+        assert.deepEqual(
+          (await session.getElement(child.id)).item?.bounds,
+          child.bounds,
+        );
+      }
+      await session.resizeElement({
+        target: before.id,
+        rect: {
+          ...before.bounds,
+          width: before.bounds.width * 2,
+          height: before.bounds.height * 2,
+        },
+      });
+      const resizedChild = (await session.getElement(child.id)).item;
+      assert.ok(resizedChild);
+      sameRect(
+        resizedChild.bounds,
+        {
+          x: before.bounds.x + (child.bounds.x - before.bounds.x) * 2,
+          y: before.bounds.y + (child.bounds.y - before.bounds.y) * 2,
+          width: child.bounds.width * 2,
+          height: child.bounds.height * 2,
+        },
+        0.001,
+      );
+      await session.undo();
+      assert.deepEqual((await session.save()).bytes, bytes);
+    } finally {
+      await end();
+    }
+  });
+
+  it("rejects a resize whose inherited transform yields non-finite corner bounds", async () => {
+    const bytes = buildDeck({
+      slides: [
+        {
+          shapes: [
+            group({
+              id: 2,
+              x: 1e308,
+              y: 1e308,
+              cx: 914400,
+              cy: 914400,
+              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+              children: [
+                textShape({
+                  id: 3,
+                  x: 0,
+                  y: 0,
+                  cx: 457200,
+                  cy: 228600,
+                  rotation: 140,
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const { session, end } = await pptxSession(bytes);
+    try {
+      const state = session.state;
+      const operations: PptxOperation[] = [
+        {
+          op: "resizeElement",
+          target: "sld1:3",
+          rect: { x: 0, y: 0, width: 100, height: 100 },
+        },
+      ];
+      for (const dryRun of [false, true]) {
+        await assert.rejects(session.applyJson(operations, { dryRun }), {
+          code: "invalid-operation",
+        });
+        assert.deepEqual(session.state, state);
+        assert.deepEqual((await session.save()).bytes, bytes);
+      }
+    } finally {
+      await end();
+    }
+  });
+
+  it("preserves rotated group child placement during uniform resize, save/reopen and one undo", async () => {
+    const bytes = buildDeck({
+      slides: [
+        {
+          shapes: [
+            group({
+              id: 2,
+              x: 914400,
+              y: 914400,
+              cx: 914400,
+              cy: 914400,
+              rotation: 45,
+              flipH: true,
+              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+              children: [
+                textShape({ id: 3, x: 0, y: 114300, cx: 457200, cy: 228600 }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const { session, end } = await pptxSession(bytes);
+    try {
+      const before = (await session.getElement("sld1:2")).item;
+      const child = (await session.getElement("sld1:3")).item;
+      assert.ok(before && child);
+      const rect = {
+        x: 30,
+        y: 40,
+        width: before.bounds.width * 2,
+        height: before.bounds.height * 2,
+      };
+      await session.resizeElement({ target: before.id, rect });
+      const expectedChild = {
+        x: rect.x + (child.bounds.x - before.bounds.x) * 2,
+        y: rect.y + (child.bounds.y - before.bounds.y) * 2,
+        width: child.bounds.width * 2,
+        height: child.bounds.height * 2,
+      };
+      const resizedGroup = (await session.getElement(before.id)).item;
+      const resizedChild = (await session.getElement(child.id)).item;
+      assert.ok(resizedGroup && resizedChild);
+      sameRect(resizedGroup.bounds, rect, 0.001);
+      sameRect(resizedChild.bounds, expectedChild, 0.001);
+      const reopened = await open((await session.save()).bytes);
+      try {
+        sameRect((await element(reopened, before.id)).bounds, rect, 0.001);
+        sameRect(
+          (await element(reopened, child.id)).bounds,
+          expectedChild,
+          0.001,
+        );
+      } finally {
+        await reopened.dispose();
+      }
+      await session.undo();
+      assert.deepEqual((await session.save()).bytes, bytes);
+      assert.equal(session.state.canUndo, false);
+    } finally {
+      await end();
+    }
+  });
+
+  it("solves single shape bounds through a nonuniform rotated parent and rejects group shear", async () => {
+    const bytes = buildDeck({
+      slides: [
+        {
+          shapes: [
+            group({
+              id: 2,
+              x: 914400,
+              y: 914400,
+              cx: 1828800,
+              cy: 914400,
+              rotation: 20,
+              flipH: true,
+              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+              children: [
+                textShape({
+                  id: 3,
+                  x: 114300,
+                  y: 114300,
+                  cx: 457200,
+                  cy: 228600,
+                  rotation: 30,
+                  flipV: true,
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const engine = await open(bytes);
+    const resizedFixture = await open(
+      buildDeck({
+        slides: [
+          {
+            shapes: [
+              group({
+                id: 2,
+                x: 914400,
+                y: 914400,
+                cx: 1828800,
+                cy: 914400,
+                rotation: 20,
+                flipH: true,
+                child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+                children: [
+                  textShape({
+                    id: 3,
+                    x: 114300,
+                    y: 114300,
+                    cx: 685800,
+                    cy: 285750,
+                    rotation: 30,
+                    flipV: true,
+                  }),
+                ],
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    try {
+      const expected = (await element(resizedFixture, "sld1:3")).bounds;
+      await run(engine, [
+        { op: "resizeElement", target: "sld1:3", rect: expected },
+      ]);
+      sameRect((await element(engine, "sld1:3")).bounds, expected, 0.001);
+      const groupBefore = (await element(engine, "sld1:2")).bounds;
+      const snapshot = await engine.materialize("save", {}, signal);
+      await assert.rejects(
+        run(engine, [
+          {
+            op: "resizeElement",
+            target: "sld1:2",
+            rect: { ...groupBefore, width: groupBefore.width * 1.2 },
+          },
+        ]),
+        { code: "invalid-operation" },
+      );
+      assert.deepEqual(await engine.materialize("save", {}, signal), snapshot);
+    } finally {
+      await engine.dispose();
+      await resizedFixture.dispose();
+    }
+  });
+
   it("writes fills and lines into p:spPr in schema order and removes them on null", async () => {
     const engine = await open(
       buildDeck({

@@ -1,3 +1,4 @@
+import { invalidOperationError } from "../operations.js";
 import { patches, type XmlPatch } from "../ooxml/patch.js";
 import type { XmlElement, XmlPart } from "../ooxml/xml.js";
 import type { ViewerWarning } from "../../contracts.js";
@@ -7,6 +8,10 @@ import {
   apply as applyMatrix,
   invert,
   pxToEmu,
+  EMU_PER_PX,
+  groupMatrix,
+  multiply,
+  placeFrame,
   type Matrix,
 } from "./geometry.js";
 import {
@@ -213,41 +218,139 @@ function offsetInElementSpace(
   };
 }
 
-/** The element-space frame whose rotated, group-mapped box fills `rect` (slide px). */
-function frameForBounds(record: ShapeRecord, rect: PageRect): FrameEmu {
-  const placed = record.placed!;
-  const rotation = (placed.frame.rotation * Math.PI) / 180;
-  const cos = Math.abs(Math.cos(rotation));
-  const sin = Math.abs(Math.sin(rotation));
-  const det = cos * cos - sin * sin;
-  let width: number;
-  let height: number;
-  if (Math.abs(det) < 1e-6) {
-    // At 45° the box does not determine both sides; keep the aspect ratio.
-    const scale =
-      placed.bounds.width > 0 ? rect.width / placed.bounds.width : 1;
-    width = placed.frame.width * scale;
-    height = placed.frame.height * scale;
-  } else {
-    width = (rect.width * cos - rect.height * sin) / det;
-    height = (rect.height * cos - rect.width * sin) / det;
+/**
+ * EMU frame rounding moves the centre by at most one EMU and each extent
+ * by half an EMU. Two EMU per parent axis conservatively bounds the resulting
+ * slide-space corner error, including conversion of the requested centre.
+ */
+const FRAME_ROUNDING_EMU = 2;
+const MATRIX_SINGULAR_TOLERANCE = 1e-10;
+const MATRIX_FLOAT_TOLERANCE = 16 * Number.EPSILON;
+const UNREPRESENTABLE_FRAME_MESSAGE =
+  "The box cannot preserve the element frame and group placement";
+
+/** Solve the actual affine corner bounds, rather than the displayed frame angle. */
+function frameForBounds(
+  record: ShapeRecord,
+  rect: PageRect,
+): FrameEmu | undefined {
+  const own = record.xfrm;
+  const placed = record.placed;
+  if (!own || !placed) return undefined;
+  const parents = record.parents;
+  if (!Object.values(parents).every(Number.isFinite)) return undefined;
+  const parentDet = parents.a * parents.d - parents.b * parents.c;
+  if (!Number.isFinite(parentDet) || parentDet === 0) return undefined;
+  const rotation = (own.rotation * Math.PI) / 180;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  // Flips negate columns; they cannot change an axis-aligned extent.
+  const a = Math.abs(parents.a * cos + parents.c * sin);
+  const b = Math.abs(parents.b * cos + parents.d * sin);
+  const c = Math.abs(-parents.a * sin + parents.c * cos);
+  const d = Math.abs(-parents.b * sin + parents.d * cos);
+  if (record.node.local === "grpSp") {
+    const sx = rect.width / placed.bounds.width;
+    const sy = rect.height / placed.bounds.height;
+    // An anisotropic world scale preserves a basis direction only when it
+    // lies on a world axis. Test representability before quantization: a
+    // small shear at nominal corners can grow arbitrarily on overflowing
+    // descendants, and must not be excused as EMU rounding.
+    const uniform =
+      Math.abs(sx - sy) <=
+      MATRIX_FLOAT_TOLERANCE * Math.max(Math.abs(sx), Math.abs(sy));
+    const firstAxis = Math.min(a, b) <= MATRIX_FLOAT_TOLERANCE * Math.max(a, b);
+    const secondAxis =
+      Math.min(c, d) <= MATRIX_FLOAT_TOLERANCE * Math.max(c, d);
+    if (
+      ![sx, sy].every(Number.isFinite) ||
+      (!uniform && !(firstAxis && secondAxis))
+    )
+      return undefined;
   }
-  width = Math.max(width, 0);
-  height = Math.max(height, 0);
-  const scaleX = Math.hypot(record.parents.a, record.parents.b) || 1;
-  const scaleY = Math.hypot(record.parents.c, record.parents.d) || 1;
-  const centre = applyMatrix(invert(record.parents), {
-    x: pxToEmu(rect.x + rect.width / 2),
-    y: pxToEmu(rect.y + rect.height / 2),
+  const det = a * d - b * c;
+  const width = rect.width * EMU_PER_PX;
+  const height = rect.height * EMU_PER_PX;
+  let cx: number;
+  let cy: number;
+  if (Math.abs(det) <= MATRIX_SINGULAR_TOLERANCE * Math.max(a * d, b * c)) {
+    // A rank-one AABB only permits proportional dimensions. Preserve aspect
+    // ratio; the forward check below also verifies the requested height.
+    const scale = rect.width / placed.bounds.width;
+    cx = own.cx * scale;
+    cy = own.cy * scale;
+  } else {
+    cx = (width * d - height * c) / det;
+    cy = (height * a - width * b) / det;
+  }
+  const centre = applyMatrix(invert(parents), {
+    x: (rect.x + rect.width / 2) * EMU_PER_PX,
+    y: (rect.y + rect.height / 2) * EMU_PER_PX,
   });
-  const cx = Math.round(pxToEmu(width) / scaleX);
-  const cy = Math.round(pxToEmu(height) / scaleY);
-  return {
-    x: Math.round(centre.x - cx / 2),
-    y: Math.round(centre.y - cy / 2),
-    cx,
-    cy,
+  const frame = {
+    cx: Math.round(cx),
+    cy: Math.round(cy),
+    x: Math.round(centre.x - Math.round(cx) / 2),
+    y: Math.round(centre.y - Math.round(cy) / 2),
   };
+  if (
+    !Object.values(frame).every(Number.isFinite) ||
+    frame.cx <= 0 ||
+    frame.cy <= 0
+  )
+    return undefined;
+  const candidate = { ...own, ...frame };
+  const actual = placeFrame(candidate, parents).bounds;
+  if (!Object.values(actual).every(Number.isFinite)) return undefined;
+  const toleranceX =
+    (FRAME_ROUNDING_EMU * (Math.abs(parents.a) + Math.abs(parents.c))) /
+      EMU_PER_PX +
+    1e-7;
+  const toleranceY =
+    (FRAME_ROUNDING_EMU * (Math.abs(parents.b) + Math.abs(parents.d))) /
+      EMU_PER_PX +
+    1e-7;
+  if (
+    Math.abs(actual.x - rect.x) > toleranceX ||
+    Math.abs(actual.width - rect.width) > toleranceX ||
+    Math.abs(actual.y - rect.y) > toleranceY ||
+    Math.abs(actual.height - rect.height) > toleranceY
+  )
+    return undefined;
+  if (record.node.local === "grpSp") {
+    // Matching a group's AABB alone can shear the requested composition.
+    // Require its complete child-space mapping to equal world-axis scaling.
+    const previous = multiply(parents, groupMatrix(own));
+    const next = multiply(parents, groupMatrix(candidate));
+    const child = own.child ?? { x: 0, y: 0, cx: own.cx, cy: own.cy };
+    const sx = rect.width / placed.bounds.width;
+    const sy = rect.height / placed.bounds.height;
+    for (const point of [
+      { x: child.x, y: child.y },
+      { x: child.x + (child.cx || own.cx), y: child.y },
+      { x: child.x, y: child.y + (child.cy || own.cy) },
+      { x: child.x + (child.cx || own.cx), y: child.y + (child.cy || own.cy) },
+    ]) {
+      const before = applyMatrix(previous, point);
+      const after = applyMatrix(next, point);
+      const expectedX =
+        rect.x * EMU_PER_PX + (before.x - placed.bounds.x * EMU_PER_PX) * sx;
+      const expectedY =
+        rect.y * EMU_PER_PX + (before.y - placed.bounds.y * EMU_PER_PX) * sy;
+      if (
+        ![before.x, before.y, after.x, after.y, expectedX, expectedY].every(
+          Number.isFinite,
+        )
+      )
+        return undefined;
+      if (
+        Math.abs(after.x - expectedX) > toleranceX * EMU_PER_PX ||
+        Math.abs(after.y - expectedY) > toleranceY * EMU_PER_PX
+      )
+        return undefined;
+    }
+  }
+  return frame;
 }
 
 async function framedTarget(
@@ -302,21 +405,23 @@ export const resizeElementHandler: PptxOperationHandler<PptxResizeElementOperati
       const record = await framedTarget(operation.target, context, issue);
       if (!record) return;
       const frame = frameForBounds(record, operation.rect);
-      if (!(frame.cx > 0 && frame.cy > 0))
-        issue(
-          "/rect",
-          "invalid-value",
-          "The box leaves no size for the rotated frame",
-        );
+      if (!frame)
+        issue("/rect", "invalid-value", UNREPRESENTABLE_FRAME_MESSAGE);
     },
     async apply(operation, context) {
       const record = (await framedTarget(operation.target, context, () => {}))!;
+      const frame = frameForBounds(record, operation.rect);
+      if (!frame)
+        throw invalidOperationError([
+          {
+            operationIndex: context.operationIndex,
+            path: "/rect",
+            code: "invalid-value",
+            message: UNREPRESENTABLE_FRAME_MESSAGE,
+          },
+        ]);
       // A group scales its children with its extent; its child space stays.
-      return commit(
-        context,
-        record,
-        framePatches(record, frameForBounds(record, operation.rect)),
-      );
+      return commit(context, record, framePatches(record, frame));
     },
   };
 
