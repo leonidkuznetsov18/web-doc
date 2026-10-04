@@ -1,0 +1,101 @@
+name: ACTION-938 WebKit diagnostics
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/action-938-webkit.yml
+      - scripts/diagnostics/action-938/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        source:
+          - 283fd8566398af7b91526c0972d440d80d160943
+          - 61bbe72f445e874b104ba96b5be5127239a1a1c4
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: kit
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.source }}
+          path: subject
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: subject/package-lock.json
+      - run: npm install --global npm@11.16.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: wasm32-unknown-unknown
+      - name: Install exact historical dependencies
+        working-directory: subject
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+      - name: Build the historical browser assets
+        working-directory: subject
+        run: |
+          npm run corpus:fetch
+          npm run build:wasm-bindings
+          npm run build --workspace web-doc
+          npm run build --workspace @zrimo/example-vanilla
+      - name: Record environment
+        working-directory: subject
+        run: |
+          git rev-parse HEAD > action-938-environment.txt
+          uname -a >> action-938-environment.txt
+          node --version >> action-938-environment.txt
+          npx playwright --version >> action-938-environment.txt
+          lscpu >> action-938-environment.txt
+          free -m >> action-938-environment.txt
+      - name: Run unchanged WebKit control
+        id: control
+        continue-on-error: true
+        working-directory: subject
+        env:
+          CI: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: control-report.json
+        run: node node_modules/@playwright/test/cli.js test --config=playwright.matrix.config.ts --project=webkit --workers=2 --retries=0 ooxml-package.spec.ts --output=control-results --reporter=list,json
+      - name: Capture detached canvas at the original await boundary
+        if: always()
+        run: |
+          node kit/scripts/diagnostics/action-938/instrument.mjs subject
+          cd subject
+          npm run build --workspace web-doc
+          npm run build --workspace @zrimo/example-vanilla
+          npm run typecheck --workspace web-doc
+      - name: Run full historical matrix with diagnostics
+        id: diagnostic
+        if: always()
+        continue-on-error: true
+        working-directory: subject
+        env:
+          CI: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: diagnostic-report.json
+        run: node node_modules/@playwright/test/cli.js test --config=playwright.matrix.config.ts --workers=2 --retries=0 --output=diagnostic-results --reporter=list,json
+      - name: Preserve every result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: action-938-${{ matrix.source }}
+          path: |
+            subject/action-938-*.json
+            subject/action-938-environment.txt
+            subject/control-report.json
+            subject/diagnostic-report.json
+            subject/control-results/
+            subject/diagnostic-results/
+      - name: Preserve failure verdict
+        if: always() && (steps.control.outcome == 'failure' || steps.diagnostic.outcome == 'failure')
+        run: exit 1
