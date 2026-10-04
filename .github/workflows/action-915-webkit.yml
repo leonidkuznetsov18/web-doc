@@ -42,7 +42,7 @@ jobs:
         working-directory: subject
         run: |
           npm ci
-          npx playwright install --with-deps webkit
+          npx playwright install --with-deps chromium firefox webkit
       - name: Build the historical browser assets
         working-directory: subject
         run: |
@@ -70,7 +70,7 @@ jobs:
       - name: Enable sanitized worker diagnostics
         if: always()
         run: node kit/scripts/diagnostics/action-915/instrument.mjs subject
-      - name: Run bounded diagnostic samples
+      - name: Run full historical matrix with diagnostics
         id: diagnostic
         if: always()
         continue-on-error: true
@@ -78,7 +78,7 @@ jobs:
         env:
           CI: "1"
           PLAYWRIGHT_JSON_OUTPUT_FILE: diagnostic-report.json
-        run: node node_modules/@playwright/test/cli.js test --config=playwright.matrix.config.ts --project=webkit --workers=2 --retries=0 --repeat-each=2 --grep 'describes 500 pages|applies an edit within the budget' --output=diagnostic-results --reporter=list,json
+        run: node node_modules/@playwright/test/cli.js test --config=playwright.matrix.config.ts --workers=2 --retries=0 --output=diagnostic-results --reporter=list,json
       - name: Preserve every result
         if: always()
         uses: actions/upload-artifact@v4

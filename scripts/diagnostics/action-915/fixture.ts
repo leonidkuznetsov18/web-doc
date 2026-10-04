@@ -41,11 +41,35 @@ export const test = base.extend({
     );
     await page.route("**/workers/ooxml-edit-worker.js", async (route) => {
       const response = await route.fetch();
+      const bootstrap = () => {
+        console.debug(
+          "ACTION915:" +
+            JSON.stringify({ event: "boot", ms: performance.now() }),
+        );
+        self.addEventListener("message", (event: MessageEvent<unknown>) => {
+          const value = event.data;
+          if (
+            value === null ||
+            typeof value !== "object" ||
+            !("kind" in value) ||
+            value.kind !== "request"
+          )
+            return;
+          const details: Record<string, unknown> = {
+            event: "worker-request-received",
+            ms: performance.now(),
+          };
+          for (const key of ["kind", "id", "operation"]) {
+            const field: unknown = Reflect.get(value, key);
+            if (typeof field === "string" || typeof field === "number")
+              details[key] = field;
+          }
+          console.debug("ACTION915:" + JSON.stringify(details));
+        });
+      };
       await route.fulfill({
         response,
-        body:
-          `console.debug('ACTION915:'+JSON.stringify({event:'boot',ms:performance.now()}));\n` +
-          (await response.text()),
+        body: `(${bootstrap.toString()})();\n` + (await response.text()),
       });
     });
     await page.addInitScript(() => {
