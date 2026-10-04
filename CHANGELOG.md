@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.15.2](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.1...v0.15.2) (2026-10-04)
+
+### Bug fixes
+
+* **viewer:** hit-test exact transformed pptx child frames ([f1c360b](https://github.com/leonidkuznetsov18/web-doc/commit/f1c360b21f13e12a1ce0c904b210226358c305a6))
+* **viewer:** preserve implicit pptx group child coordinates ([7d777ae](https://github.com/leonidkuznetsov18/web-doc/commit/7d777aee34599f4381d10c53b2708f88d276093e))
+* **viewer:** preserve pdf metadata in incremental xref saves ([6bb32ff](https://github.com/leonidkuznetsov18/web-doc/commit/6bb32ffcde0dcc52ed19c836213af386e28566f6))
+* **viewer:** preserve pptx group geometry when resizing ([3fe649a](https://github.com/leonidkuznetsov18/web-doc/commit/3fe649a5d0fc291d14ea26ae1371d00322ccaf33))
+* **viewer:** reject retired document text before caching ([6393f97](https://github.com/leonidkuznetsov18/web-doc/commit/6393f97942793562ef596204630172ce7f293d20))
+* **viewer:** retain authored pdf text box alignment ([b988300](https://github.com/leonidkuznetsov18/web-doc/commit/b9883008a1572a47f404e3558b4b0873e5a00d80))
+* **viewer:** retain docx split paragraph preview layouts ([b7e2ce6](https://github.com/leonidkuznetsov18/web-doc/commit/b7e2ce6244ced9526892090a739e97c6d846c1ef))
+
 ## [0.15.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.0...v0.15.1) (2026-10-04)
 
 ### Bug fixes
