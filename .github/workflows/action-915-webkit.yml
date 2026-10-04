@@ -1,0 +1,86 @@
+name: ACTION-915 WebKit phase capture
+
+# Explicit manual invocation only; no PR/push trigger or automatic retry.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SUBJECT: 283fd8566398af7b91526c0972d440d80d160943
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: kit
+      - uses: actions/checkout@v6
+        with:
+          ref: 283fd8566398af7b91526c0972d440d80d160943
+          path: subject
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: subject/package-lock.json
+      - run: npm install --global npm@11.16.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: wasm32-unknown-unknown
+      - name: Guard native Linux x86 architecture
+        run: |
+          test "$(uname -m)" = "x86_64"
+          test "$RUNNER_ARCH" = "X64"
+      - name: Install exact historical dependencies
+        working-directory: subject
+        run: |
+          npm ci
+          npx playwright install --with-deps webkit
+      - name: Guard historical source and enable phase capture before building
+        run: node kit/scripts/diagnostics/action-915/instrument.mjs subject
+      - name: Build historical assets with the reviewed diagnostics
+        working-directory: subject
+        run: |
+          npm run corpus:fetch
+          npm run build:wasm-bindings
+          npm run build --workspace web-doc
+          npm run build --workspace @zrimo/example-vanilla
+      - name: Record separate subject and workflow provenance
+        run: |
+          git -C subject rev-parse HEAD > subject/action-915-environment.txt
+          git -C kit rev-parse HEAD >> subject/action-915-environment.txt
+          printf 'workflow_sha=%s\nrun_id=%s\nattempt=%s\nimage_os=%s\nimage_version=%s\nrunner_arch=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$ImageOS" "$ImageVersion" "$RUNNER_ARCH" >> subject/action-915-environment.txt
+          uname -a >> subject/action-915-environment.txt
+          cat /etc/os-release >> subject/action-915-environment.txt
+          node --version >> subject/action-915-environment.txt
+          npm --version >> subject/action-915-environment.txt
+          cd subject
+          npx playwright --version >> action-915-environment.txt
+          sha256sum package-lock.json packages/viewer/package.json node_modules/playwright-core/browsers.json node_modules/@playwright/test/package.json playwright.matrix.config.ts >> action-915-environment.txt
+          lscpu >> action-915-environment.txt
+          free -m >> action-915-environment.txt
+      - name: One unchanged-workload WebKit pair with phase capture
+        id: diagnostic
+        continue-on-error: true
+        working-directory: subject
+        env:
+          CI: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: diagnostic-report.json
+        run: node node_modules/@playwright/test/cli.js test tests/e2e/edit-ai.spec.ts tests/e2e/edit-pptx.spec.ts --config=playwright.matrix.config.ts --project=webkit --workers=2 --retries=0 --repeat-each=1 --grep 'describes 500 pages and 500 slides within the operation budget and records the latency|applies an edit within the budget on 10-, 100- and 500-slide decks' --output=diagnostic-results --reporter=list,json
+      - name: Preserve complete and partial evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: action-915-283fd856-phase-capture
+          path: |
+            subject/action-915-source-hashes.json
+            subject/action-915-environment.txt
+            subject/diagnostic-report.json
+            subject/diagnostic-results/
+      - name: Preserve failure verdict
+        if: always() && steps.diagnostic.outcome == 'failure'
+        run: exit 1
