@@ -1322,7 +1322,12 @@ export class DocumentViewer implements ViewerApi {
         pageIndex,
         operation.signal,
       );
-      if (generation !== this.#generation || operation.signal.aborted)
+      if (
+        generation !== this.#generation ||
+        operation.signal.aborted ||
+        adapter !== this.#adapter ||
+        handle !== this.#handle
+      )
         throw abortError();
       const immutableRuns = Object.freeze(
         runs.map((run) => Object.freeze({ ...run })),

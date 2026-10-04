@@ -6,6 +6,7 @@ import type {
   EditSession,
   EditSessionBase,
   EditStateChange,
+  TextRun,
   ViewerApi,
 } from "../src/index.js";
 import { ViewerClient, ViewerError } from "../src/index.js";
@@ -67,7 +68,74 @@ function rejectsWith(code: string) {
   };
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {
+    throw new Error("The promise executor did not run");
+  };
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 describe("viewer editing integration", () => {
+  it("rejects an old text read after an edit swaps the handle in the same load generation", async () => {
+    const { viewer, adapter } = viewerWith();
+    await viewer.load(original, { fileName: "edited.pdf" });
+    const session = await editFake(viewer);
+    const oldText = deferred<readonly TextRun[]>();
+    const getTextMap = adapter.getTextMap;
+    assert.ok(getTextMap);
+    adapter.getTextMap = (handle, pageIndex, signal) =>
+      handle.id === 1 ? oldText.promise : getTextMap(handle, pageIndex, signal);
+    const stale = viewer.getPageText(0);
+    const rejection = assert.rejects(stale, rejectsWith("aborted"));
+    await session.apply(
+      ops({ op: "setText", pageIndex: 0, text: "edited text" }),
+    );
+    oldText.resolve([]);
+    await rejection;
+    assert.equal(await viewer.getPageText(0), "edited text");
+    assert.equal(await viewer.getPageText(0), "edited text");
+    await viewer.destroy();
+  });
+
+  it("rejects retired text reads started while ending a session before loading the next document", async () => {
+    const { viewer, adapter, engines } = viewerWith();
+    await viewer.load(original, { fileName: "old.pdf" });
+    await viewer.edit();
+    const ending = deferred<void>();
+    const endStarted = deferred<void>();
+    const engine = engines[0];
+    assert.ok(engine);
+    engine.dispose = async () => {
+      endStarted.resolve();
+      await ending.promise;
+    };
+    const oldText = deferred<readonly TextRun[]>();
+    const getTextMap = adapter.getTextMap;
+    assert.ok(getTextMap);
+    adapter.getTextMap = (handle, pageIndex, signal) =>
+      handle.id === 1 ? oldText.promise : getTextMap(handle, pageIndex, signal);
+    const loading = viewer.load(encodePages(["current text"]), {
+      fileName: "new.pdf",
+    });
+    await endStarted.promise;
+    // Like an old viewport callback, this starts after load increments its
+    // generation but while the ending session still owns the previous handle.
+    const stale = viewer.getPageText(0);
+    const rejection = assert.rejects(stale, rejectsWith("aborted"));
+    ending.resolve();
+    await loading;
+    // A retired PDF.js worker can suppress its termination error and return
+    // an empty map. It must not poison the newly loaded document's text cache.
+    oldText.resolve([]);
+    await rejection;
+    assert.equal(await viewer.getPageText(0), "current text");
+    assert.equal(await viewer.getPageText(0), "current text");
+    await viewer.destroy();
+  });
+
   it("advertises editing only when the adapter has an engine for the format", async () => {
     const { viewer, provider } = viewerWith();
     await viewer.load(original, { fileName: "doc.pdf" });
