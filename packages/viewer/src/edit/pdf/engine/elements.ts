@@ -591,6 +591,12 @@ function compositeElement(
             "deleteElement",
           ],
     };
+  const align =
+    typeof mark.style === "object" &&
+    mark.style !== null &&
+    "align" in mark.style
+      ? mark.style.align
+      : undefined;
   const stored = mark.text === "" ? (mark.style as PdfTextStyle) : undefined;
   const style =
     members.find((member) => member.textStyle)?.textStyle ??
@@ -613,6 +619,9 @@ function compositeElement(
       ? {
           textStyle: {
             ...style,
+            ...(align === "left" || align === "center" || align === "right"
+              ? { align }
+              : {}),
             ...(typeof mark.style === "object" &&
             mark.style !== null &&
             "underline" in mark.style

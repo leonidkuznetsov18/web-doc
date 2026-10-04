@@ -12,6 +12,7 @@ import {
   extractPageText,
   fixturePdfium,
 } from "./fixtures/pdf-builder.js";
+import { pdfSession } from "./fixtures/pdf-session.js";
 
 /** Six points per character at any size: widths are easy to predict. */
 const monospace = (text: string) => text.length * 6;
@@ -163,6 +164,7 @@ describe("insertTextBox", () => {
         bold: false,
         italic: false,
         color: "#000000",
+        align: "left",
       });
       assert.ok(box.operations.includes("replaceText"));
 
@@ -215,6 +217,7 @@ describe("insertTextBox", () => {
         bold: true,
         italic: false,
         color: "#ff0000",
+        align: "right",
       });
 
       const turned = model.getElement("p1:n1.1.0")!;
@@ -325,6 +328,92 @@ describe("text box edits", () => {
     original = await buildPdf(["Existing"]);
   });
 
+  for (const align of ["center", "right"] as const)
+    it(`reads authored ${align} alignment and returns left through style edits, history and save/reopen`, async () => {
+      const { session, end } = await pdfSession(original);
+      try {
+        const inserted = await session.insertTextBox({
+          pageIndex: 0,
+          rect: { x: 72, y: 72, width: 200, height: 100 },
+          text: "Aligned text",
+          style: { align },
+        });
+        const target = inserted.createdIds[0];
+        assert.ok(target);
+        const aligned = (await session.getElement(target)).item;
+        assert.ok(aligned);
+        assert.equal(aligned.textStyle?.align, align);
+        const alignedSave = await session.save();
+        const alignedReopened = new PdfEditDocument(pdfium, alignedSave.bytes);
+        try {
+          assert.equal(
+            alignedReopened.getElement(target)?.textStyle?.align,
+            align,
+          );
+          assert.deepEqual(
+            alignedReopened.getElement(target)?.bounds,
+            aligned.bounds,
+          );
+        } finally {
+          alignedReopened.dispose();
+        }
+
+        await session.replaceText({ target, text: "" });
+        assert.equal(
+          (await session.getElement(target)).item?.textStyle?.align,
+          align,
+        );
+        const emptySave = await session.save();
+        const emptyReopened = new PdfEditDocument(pdfium, emptySave.bytes);
+        try {
+          assert.equal(emptyReopened.getElement(target)?.text, "");
+          assert.equal(
+            emptyReopened.getElement(target)?.textStyle?.align,
+            align,
+          );
+        } finally {
+          emptyReopened.dispose();
+        }
+        await session.undo();
+        assert.equal(
+          (await session.getElement(target)).item?.text,
+          "Aligned text",
+        );
+
+        await session.setTextStyle({ target, style: { align: "left" } });
+        const left = (await session.getElement(target)).item;
+        assert.ok(left);
+        assert.equal(left.textStyle?.align, "left");
+        assert.ok(
+          Math.abs(left.bounds.x - 72) < 1,
+          JSON.stringify(left.bounds),
+        );
+        assert.ok(left.bounds.x < aligned.bounds.x);
+        await session.undo();
+        const undone = (await session.getElement(target)).item;
+        assert.equal(undone?.textStyle?.align, align);
+        assert.deepEqual(undone?.bounds, aligned.bounds);
+        await session.redo();
+        const redone = (await session.getElement(target)).item;
+        assert.equal(redone?.textStyle?.align, "left");
+        assert.deepEqual(redone?.bounds, left.bounds);
+
+        const saved = await session.save();
+        const reopened = new PdfEditDocument(pdfium, saved.bytes);
+        try {
+          const persisted = reopened.getElement(target);
+          assert.equal(persisted?.textStyle?.align, "left");
+          assert.deepEqual(persisted?.bounds, left.bounds);
+          assert.equal(persisted?.text, "Aligned text");
+          assert.equal(reopened.getElement("p0:o0")?.text, "Existing");
+        } finally {
+          reopened.dispose();
+        }
+      } finally {
+        await end();
+      }
+    });
+
   it("rebuilds a box in place for replaceText, setTextStyle and resizeElement", async () => {
     const model = new PdfEditDocument(pdfium, original);
     try {
@@ -379,6 +468,7 @@ describe("text box edits", () => {
         bold: true,
         italic: false,
         color: "#0000ff",
+        align: "right",
       });
       assert.ok(Math.abs(styled.bounds.x + styled.bounds.width - 272) < 2);
 
