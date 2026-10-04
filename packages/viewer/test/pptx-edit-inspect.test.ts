@@ -447,6 +447,67 @@ describe("PPTX inspection (pptx-edit)", () => {
     await engine.dispose();
   });
 
+  it("hit-tests the full affine child frame in a nonuniform rotated reflected group", async () => {
+    const bytes = buildDeck({
+      slides: [
+        {
+          shapes: [
+            group({
+              id: 2,
+              x: 914400,
+              y: 914400,
+              cx: 1828800,
+              cy: 914400,
+              rotation: 20,
+              flipH: true,
+              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
+              children: [
+                textShape({
+                  id: 3,
+                  x: 114300,
+                  y: 114300,
+                  cx: 457200,
+                  cy: 228600,
+                  rotation: 30,
+                  flipV: true,
+                  fill: '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const engine = await open(bytes);
+    try {
+      // Independent DrawingML corner mapping: the child is 48×24 px at
+      // (12,12), vertically reflected and rotated 30° about (36,24).
+      // Its group doubles x, reflects horizontally, then rotates 20°
+      // about (192,144). These points lie strictly inside or outside the
+      // painted child, while all four remain inside the parent group.
+      for (const [point, expected] of [
+        [
+          { x: 263.47187776379513, y: 143.10467079496925 },
+          ["sld1:3", "sld1:2"],
+        ],
+        [{ x: 182.0503349135606, y: 116.20705028693925 }, ["sld1:3", "sld1:2"]],
+        [{ x: 268.3833957629165, y: 122.08944812977572 }, ["sld1:2"]],
+        [{ x: 266.7909673718494, y: 132.65588344080084 }, ["sld1:2"]],
+      ] as const) {
+        assert.deepEqual(
+          (await engine.elementsAt(0, point, signal)).map(
+            (element) => element.id,
+          ),
+          expected,
+          `hit at ${point.x}, ${point.y}`,
+        );
+      }
+      assert.deepEqual(await engine.materialize("save", {}, signal), bytes);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("hit-tests topmost first and finds text with ranges", async () => {
     const deck = buildDeck({
       slides: [

@@ -173,6 +173,9 @@ export function groupMatrix(group: Xfrm): Matrix {
 export interface PlacedFrame {
   readonly frame: ElementFrame;
   readonly bounds: PageRect;
+  /** Exact local-to-slide EMU mapping, including nonuniform group transforms. */
+  readonly matrix: Matrix;
+  readonly sourceFrame: Xfrm;
 }
 
 /**
@@ -220,6 +223,8 @@ export function placeFrame(frame: Xfrm, parents: Matrix): PlacedFrame {
     parentRotation + (parentFlip ? -frame.rotation : frame.rotation),
   );
   return {
+    matrix: total,
+    sourceFrame: frame,
     frame: {
       x: emuToPx(centre.x - width / 2),
       y: emuToPx(centre.y - height / 2),
@@ -243,17 +248,20 @@ export function frameContains(
   placed: PlacedFrame,
   point: { readonly x: number; readonly y: number },
 ): boolean {
-  const { frame } = placed;
-  const cx = frame.x + frame.width / 2;
-  const cy = frame.y + frame.height / 2;
-  const radians = (-frame.rotation * Math.PI) / 180;
-  const dx = point.x - cx;
-  const dy = point.y - cy;
-  const localX = dx * Math.cos(radians) - dy * Math.sin(radians);
-  const localY = dx * Math.sin(radians) + dy * Math.cos(radians);
+  const { matrix, sourceFrame } = placed;
+  const det = matrix.a * matrix.d - matrix.b * matrix.c;
+  if (!Number.isFinite(det) || det === 0) return false;
+  const local = apply(invert(matrix), {
+    x: point.x * EMU_PER_PX,
+    y: point.y * EMU_PER_PX,
+  });
+  if (!Number.isFinite(local.x) || !Number.isFinite(local.y)) return false;
+  const tolerance = EMU_PER_PX * 1e-6;
   return (
-    Math.abs(localX) <= frame.width / 2 + 1e-6 &&
-    Math.abs(localY) <= frame.height / 2 + 1e-6
+    local.x >= sourceFrame.x - tolerance &&
+    local.x <= sourceFrame.x + sourceFrame.cx + tolerance &&
+    local.y >= sourceFrame.y - tolerance &&
+    local.y <= sourceFrame.y + sourceFrame.cy + tolerance
   );
 }
 
