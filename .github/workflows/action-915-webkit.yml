@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         source:
-          - 176ac3d8e41a63b9c52264d40e6fd54429cb25e0
-          - 38d8cdb8ca9caf12191131dcee1c79e0f6a2bf28
+          # Fresh native failure: run37165762535, DOCX then PPTX Edit timeout.
+          - 283fd8566398af7b91526c0972d440d80d160943
     steps:
       - uses: actions/checkout@v6
         with:
