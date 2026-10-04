@@ -70,6 +70,7 @@ import type {
   DocxMoveElementOperation,
   DocxOperation,
   DocxReplaceTextOperation,
+  DocxTextPreviewFields,
   DocxRevision,
   DocxSaveOptions,
   DocxSetParagraphStyleOperation,
@@ -451,7 +452,7 @@ export class DocxSession implements DocxEditSession {
   }
 
   previewText(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     options?: ReadOptions,
   ): Promise<ReadItem<Uint8Array>> {
     const draft = frozenPreviewFields(fields);
@@ -461,7 +462,7 @@ export class DocxSession implements DocxEditSession {
   }
 
   previewTextPages(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     render: DocxTextPreviewOptions,
     options?: ReadOptions,
   ): Promise<ReadItem<DocxTextPreview>> {
@@ -993,8 +994,8 @@ function docxReads(engine: EditEngine): DocxEngineReads {
 
 /** Validate at the public boundary before copying: a cyclic value must not recurse in the copier. */
 function frozenPreviewFields(
-  fields: DocxFields<DocxReplaceTextOperation>,
-): DocxFields<DocxReplaceTextOperation> {
+  fields: DocxTextPreviewFields,
+): DocxTextPreviewFields {
   const issues = checkOperations(
     [{ ...fields, op: "replaceText" }],
     docxOperationSchemas,

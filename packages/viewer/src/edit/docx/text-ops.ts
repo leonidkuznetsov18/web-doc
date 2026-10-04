@@ -435,6 +435,33 @@ export const replaceTextHandler: DocxOperationHandler<DocxReplaceTextOperation> 
   {
     async validate(operation, context, issue) {
       const text = normalizeText(operation.text);
+      const style = operation.insertionStyle;
+      if (style !== undefined) {
+        if (text.length === 0)
+          issue(
+            "/insertionStyle",
+            "invalid-value",
+            "An insertion style requires nonempty replacement text",
+          );
+        if (style.color !== undefined) {
+          const invalid = colorProblem(style.color);
+          if (invalid)
+            issue(
+              "/insertionStyle/color",
+              "invalid-value",
+              `Colour: ${invalid}`,
+            );
+        }
+        if (style.fontFamily !== undefined) {
+          const invalid = attributeProblem(style.fontFamily);
+          if (invalid)
+            issue(
+              "/insertionStyle/fontFamily",
+              "invalid-value",
+              `Font: ${invalid}`,
+            );
+        }
+      }
       const problem = textProblem(text);
       if (problem) issue("/text", "invalid-text", `The text holds ${problem}`);
       const target = await textTarget(operation.target, context, issue);
@@ -492,6 +519,7 @@ export const replaceTextHandler: DocxOperationHandler<DocxReplaceTextOperation> 
           start,
           end,
           normalizeText(operation.text),
+          operation.insertionStyle,
         );
       return commitParagraph(context, target, items, {
         createdIds,
@@ -512,6 +540,7 @@ export function replacedParagraph(
   start: number,
   end: number,
   text: string,
+  insertionStyle?: DocxTextStyleChange,
 ): {
   items: XmlPatch[];
   createdIds: string[];
@@ -523,7 +552,34 @@ export function replacedParagraph(
   const single = segments.length === 1;
   const items: XmlPatch[] = [];
   const createdIds: string[] = [];
-  const copiedPPr = paragraphPropertiesWithoutSection(part, record.pPr);
+  // The splitter chooses an existing run or paragraph mark's exact properties.
+  // Merge only inserted runs and new marks; surrounding XML stays untouched.
+  const sourceProperties = (raw: string): XmlElement | undefined => {
+    const mark = record.pPr?.children.find(
+      (child) => child.local === "rPr" && child.namespace === W_NS,
+    );
+    return (
+      record.text.items.find((item) => sliceOf(part, item.rPr) === raw)?.rPr ??
+      (sliceOf(part, mark) === raw ? mark : undefined)
+    );
+  };
+  const insertion = (raw: string) =>
+    insertionStyle
+      ? {
+          style: insertionStyle,
+          styles: context.model.styles,
+          source: sourceProperties(raw),
+        }
+      : undefined;
+  const insertedProperties = (raw: string): string =>
+    insertionStyle
+      ? changedRunProperties(
+          part,
+          sourceProperties(raw),
+          insertionStyle,
+          context.model.styles,
+        )
+      : raw;
   if (context.tracked) {
     // The removed runs stay as a deletion, the new text goes in as an
     // insertion; a paragraph split marks the new paragraph marks inserted
@@ -535,14 +591,20 @@ export function replacedParagraph(
       end,
       paragraphMarkRPr(part, record),
     );
+    const runProperties = insertedProperties(split.rPr);
     const inserted = (segment: string): string =>
-      insertedRunXml(context, split.rPr, segment);
+      insertedRunXml(context, runProperties, segment);
     // The original mark (section properties included) ends the last
     // paragraph; every mark before it is an insertion.
     const originalPPr = sliceOf(part, record.pPr);
     const firstPPr = single
       ? originalPPr
-      : markedParagraphProperties(context, record.pPr, "ins");
+      : markedParagraphProperties(
+          context,
+          record.pPr,
+          "ins",
+          insertion(split.rPr),
+        );
     items.push(
       patches.replaceElement(
         part,
@@ -571,7 +633,12 @@ export function replacedParagraph(
             id,
             last
               ? originalPPr
-              : markedParagraphProperties(context, record.pPr, "ins"),
+              : markedParagraphProperties(
+                  context,
+                  record.pPr,
+                  "ins",
+                  insertion(split.rPr),
+                ),
             inserted(segment) + (last ? split.after : ""),
           ),
         ),
@@ -584,10 +651,18 @@ export function replacedParagraph(
       record.text.items,
       start,
       end,
-      (rPr) => runXml(rPr, runContentXml(segments[0]!)),
+      (rPr) => runXml(insertedProperties(rPr), runContentXml(segments[0]!)),
       paragraphMarkRPr(part, record),
     );
+    // A split inserts new marks before the original terminating mark. Keep
+    // its exact properties (including section ownership) on the last paragraph.
     const pPr = sliceOf(part, record.pPr);
+    const runProperties = insertedProperties(split.rPr);
+    const copiedPPr = paragraphPropertiesWithoutSection(
+      part,
+      record.pPr,
+      insertion(split.rPr),
+    );
     items.push(
       patches.replaceElement(
         part,
@@ -595,7 +670,7 @@ export function replacedParagraph(
         paragraphXml(
           record.node,
           record.id,
-          pPr,
+          single ? pPr : copiedPPr,
           split.before + (single ? split.after : ""),
         ),
       ),
@@ -611,8 +686,8 @@ export function replacedParagraph(
           paragraphXml(
             record.node,
             id,
-            copiedPPr,
-            runXml(split.rPr, runContentXml(segment)) +
+            last ? pPr : copiedPPr,
+            runXml(runProperties, runContentXml(segment)) +
               (last ? split.after : ""),
           ),
         ),

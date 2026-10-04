@@ -58,6 +58,120 @@ const RANGE = (id: string, start: number, end: number) => ({
 });
 
 describe("PPTX text operations (pptx-edit)", () => {
+  it("appends pending bold, italic and underline in one worker batch with isolated dry run and atomic history", async () => {
+    const bytes = deck(
+      textShape({
+        id: 2,
+        x: 0,
+        y: 0,
+        cx: 914400,
+        cy: 914400,
+        paragraphs: [["Original"]],
+      }),
+    );
+    const { session, end } = await pptxSession(bytes);
+    const operations: PptxOperation[] = [
+      {
+        op: "replaceText",
+        target: "sld1:2",
+        text: "X",
+        range: RANGE("sld1:2", 8, 8),
+      },
+      {
+        op: "setTextStyle",
+        target: "sld1:2",
+        style: { bold: true, italic: true, underline: true },
+        range: RANGE("sld1:2", 8, 9),
+      },
+    ];
+    try {
+      const state = session.state;
+      assert.equal(
+        (await session.applyJson(operations, { dryRun: true })).dryRun,
+        true,
+      );
+      assert.deepEqual(session.state, state);
+      assert.deepEqual((await session.save()).bytes, bytes);
+      await session.applyJson(operations);
+      assert.equal(
+        (await session.getElement("sld1:2")).item?.text,
+        "OriginalX",
+      );
+      const inserted = (
+        await session.getTextStyle({
+          target: "sld1:2",
+          range: RANGE("sld1:2", 8, 9),
+        })
+      ).item;
+      assert.equal(inserted?.bold, true);
+      assert.equal(inserted?.italic, true);
+      assert.equal(inserted?.underline, true);
+      const original = (
+        await session.getTextStyle({
+          target: "sld1:2",
+          range: RANGE("sld1:2", 0, 8),
+        })
+      ).item;
+      assert.notEqual(original?.bold, true);
+      assert.notEqual(original?.italic, true);
+      assert.notEqual(original?.underline, true);
+      const edited = (await session.save()).bytes;
+      await session.undo();
+      assert.deepEqual((await session.save()).bytes, bytes);
+      assert.equal(session.state.canUndo, false);
+      await session.redo();
+      assert.deepEqual((await session.save()).bytes, edited);
+    } finally {
+      await end();
+    }
+  });
+
+  it("rolls back a replacement when its later style range is invalid, retaining redo history even for dry run", async () => {
+    const bytes = deck(
+      textShape({
+        id: 2,
+        x: 0,
+        y: 0,
+        cx: 914400,
+        cy: 914400,
+        paragraphs: [["Original"]],
+      }),
+    );
+    const { session, end } = await pptxSession(bytes);
+    try {
+      await session.replaceText({ target: "sld1:2", text: "History" });
+      const historyBytes = (await session.save()).bytes;
+      await session.undo();
+      const state = session.state;
+      for (const dryRun of [false, true]) {
+        for (const range of [RANGE("sld1:2", 7, 8), RANGE("sld1:99", 0, 1)]) {
+          const operations: PptxOperation[] = [
+            { op: "replaceText", target: "sld1:2", text: "A" },
+            {
+              op: "setTextStyle",
+              target: "sld1:2",
+              style: { bold: true },
+              range,
+            },
+          ];
+          await assert.rejects(session.applyJson(operations, { dryRun }), {
+            code: "invalid-operation",
+          });
+          assert.deepEqual(session.state, state);
+          assert.deepEqual((await session.save()).bytes, bytes);
+          assert.equal(
+            (await session.getElement("sld1:2")).item?.text,
+            "Original",
+          );
+        }
+      }
+      await session.redo();
+      assert.deepEqual((await session.save()).bytes, historyBytes);
+    } finally {
+      await end();
+    }
+  });
+
   it("replaces the whole text keeping the first run's properties, the paragraph properties and the body", async () => {
     const engine = await open(
       deck(

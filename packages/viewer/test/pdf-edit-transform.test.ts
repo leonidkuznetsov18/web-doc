@@ -9,6 +9,7 @@ import {
   fixturePdfium,
 } from "./fixtures/pdf-builder.js";
 import { pdfSession } from "./fixtures/pdf-session.js";
+import { clippedTranslucentFormsPdf } from "./fixtures/pdf-forms.js";
 
 function near(actual: PageRect, expected: PageRect, slack = 0.5): void {
   for (const key of ["x", "y", "width", "height"] as const)
@@ -19,6 +20,75 @@ function near(actual: PageRect, expected: PageRect, slack = 0.5): void {
 }
 
 const op = <T extends PdfOperation>(operation: T): T => operation;
+
+for (const action of ["move", "resize"] as const) {
+  it(`keeps a clipped Form intact through ${action}, history and Save/reopen`, async () => {
+    const pdfium = await fixturePdfium();
+    const original = clippedTranslucentFormsPdf();
+    const { session, end } = await pdfSession(original);
+    const render = (bytes: Uint8Array) => {
+      const model = new PdfEditDocument(pdfium, bytes);
+      try {
+        return new Uint8Array(model.renderPageWithout(0, [], 1).data);
+      } finally {
+        model.dispose();
+      }
+    };
+    // This fixture's visible red bar is 200×10 pixels, clipped from a
+    // 500-point Form. A transform must retain that clipping relative to it.
+    const redBand = (pixels: Uint8Array) => {
+      let left = 612;
+      let right = -1;
+      let count = 0;
+      for (let y = 182; y < 192; y++)
+        for (let x = 0; x < 612; x++) {
+          const offset = (y * 612 + x) * 4;
+          if (
+            pixels[offset]! > 200 &&
+            pixels[offset + 1]! < 50 &&
+            pixels[offset + 2]! < 50
+          ) {
+            left = Math.min(left, x);
+            right = Math.max(right, x);
+            count++;
+          }
+        }
+      return [left, right, count];
+    };
+    const before = render(original);
+    assert.deepEqual(redBand(before), [72, 271, 2000]);
+    try {
+      const target = (await session.getElement("p0:o0")).item;
+      assert.ok(target);
+      await session.apply([
+        action === "move"
+          ? { op: "moveElement", target: target.id, by: { dx: 30, dy: 0 } }
+          : {
+              op: "resizeElement",
+              target: target.id,
+              rect: { ...target.bounds, width: target.bounds.width / 2 },
+            },
+      ]);
+      const expected = action === "move" ? [102, 301, 2000] : [72, 171, 1000];
+      for (const mode of ["full", "incremental"] as const) {
+        const after = render((await session.save({ mode })).bytes);
+        assert.deepEqual(redBand(after), expected, `${mode} retains the clip`);
+        // The faded Form below it overlaps neither its geometry nor its clip.
+        assert.deepEqual(
+          after.subarray(300 * 612 * 4, 500 * 612 * 4),
+          before.subarray(300 * 612 * 4, 500 * 612 * 4),
+          "the unrelated Form is unchanged",
+        );
+      }
+      await session.undo();
+      assert.deepEqual(render((await session.save()).bytes), before);
+      await session.redo();
+      assert.deepEqual(redBand(render((await session.save()).bytes)), expected);
+    } finally {
+      await end();
+    }
+  });
+}
 
 describe("moveElement, resizeElement and deleteElement", () => {
   let pdfium: Awaited<ReturnType<typeof fixturePdfium>>;

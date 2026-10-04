@@ -40,8 +40,7 @@ import { docxOperationSchemas } from "./schemas.js";
 import { revisionsOf } from "./tracked.js";
 import type {
   DocxElement,
-  DocxFields,
-  DocxReplaceTextOperation,
+  DocxTextPreviewFields,
   DocxOperation,
   DocxRevision,
   DocxTextStyle,
@@ -92,11 +91,11 @@ function unauthoredIdsOf(bytes: Uint8Array): string[] {
 /** Reads the DOCX session adds on top of the core, served by the engine and the worker client alike. */
 export interface DocxEngineReads {
   previewDraft(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     signal: AbortSignal,
   ): Promise<DocxDraftDocument>;
   previewText(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     signal: AbortSignal,
   ): Promise<Uint8Array>;
   revisions(id: string, signal: AbortSignal): Promise<readonly DocxRevision[]>;
@@ -265,6 +264,7 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
     const modeIssues = trackedModeIssues(tracked);
     if (modeIssues.length > 0) return modeIssues;
     const base = await this.#context(0, signal, 0, new Set(), tracked);
+    const replacedTargets = new Set<string>();
     for (const [index, operation] of operations.entries()) {
       const context = { ...base, operationIndex: index };
       const handler = docxHandlers.get(operation.op);
@@ -292,21 +292,38 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
       }
       const collect = issueCollector(index, issues);
       const skipped = referenced.map((entry) => `/${entry.field}`);
+      // A replacement changes the target's text length. Its following style range
+      // addresses that new text, not this preflight model. Apply checks it against
+      // the sequential state and rolls the whole batch back on any failure.
+      const deferStyleRange =
+        operation.op === "setTextStyle" &&
+        "target" in operation &&
+        typeof operation.target === "string" &&
+        replacedTargets.has(operation.target);
       await handler.validate(
         operation as DocxOperation,
         context,
-        referenced.length === 0
+        referenced.length === 0 && !deferStyleRange
           ? collect
           : (path, code, message) => {
               if (
                 !skipped.some(
                   (prefix) => path === prefix || path.startsWith(`${prefix}/`),
                 ) &&
-                !path.startsWith("/range")
+                !(
+                  (referenced.length > 0 || deferStyleRange) &&
+                  (path === "/range" || path.startsWith("/range/"))
+                )
               )
                 collect(path, code, message);
             },
       );
+      if (
+        operation.op === "replaceText" &&
+        "target" in operation &&
+        typeof operation.target === "string"
+      )
+        replacedTargets.add(operation.target);
     }
     return issues;
   }
@@ -452,14 +469,14 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
 
   /** Display-only bytes of an isolated draft; the live package is never written. */
   async previewText(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     signal: AbortSignal,
   ): Promise<Uint8Array> {
     return (await this.previewDraft(fields, signal)).bytes;
   }
 
   async previewDraft(
-    fields: DocxFields<DocxReplaceTextOperation>,
+    fields: DocxTextPreviewFields,
     signal: AbortSignal,
   ): Promise<DocxDraftDocument> {
     const input = [{ ...fields, op: "replaceText" as const }];
