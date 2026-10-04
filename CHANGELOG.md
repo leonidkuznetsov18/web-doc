@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.15.1](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.0...v0.15.1) (2026-10-04)
+
+### Bug fixes
+
+* **viewer:** preserve docx insertion styles across paragraphs ([b9765ac](https://github.com/leonidkuznetsov18/web-doc/commit/b9765ac50d09ce8eb67fa652d0328299e1175931))
+* **viewer:** reject cyclic edit inputs without overflow ([dac03b8](https://github.com/leonidkuznetsov18/web-doc/commit/dac03b83bde82fff1cfe2844b1ca835b783d041c))
+* **viewer:** style leading empty docx paragraphs ([40ef4e8](https://github.com/leonidkuznetsov18/web-doc/commit/40ef4e802a23046010ead8b7e8d1f646bbc8a433))
+* **viewer:** transform pdf clips with moved objects ([56b5418](https://github.com/leonidkuznetsov18/web-doc/commit/56b5418817ebdee85d7658168cbe11595458c421))
+* **viewer:** validate pptx styles against replaced text ([79e5923](https://github.com/leonidkuznetsov18/web-doc/commit/79e5923375f2e689980b6a5b9d173be3e1e9ad85))
+
 ## [0.15.0](https://github.com/leonidkuznetsov18/web-doc/compare/v0.14.2...v0.15.0) (2026-10-03)
 
 ### Features
