@@ -13,6 +13,7 @@ import {
   multiply,
   placeFrame,
   type Matrix,
+  type Xfrm,
 } from "./geometry.js";
 import {
   committedParts,
@@ -125,6 +126,7 @@ interface FrameEmu {
   readonly y: number;
   readonly cx: number;
   readonly cy: number;
+  readonly child?: NonNullable<Xfrm["child"]>;
 }
 
 /** The node whose `a:xfrm` positions the element: p:spPr, p:grpSpPr or the frame itself. */
@@ -146,16 +148,47 @@ function framePatches(record: ShapeRecord, frame: FrameEmu): XmlPatch[] {
   if (xfrm) {
     const off = xfrm.children.find((child) => child.local === "off");
     const ext = xfrm.children.find((child) => child.local === "ext");
-    if (off && ext)
-      return [
+    if (off && ext) {
+      const result: XmlPatch[] = [
         patches.setAttribute(part, off, "x", String(frame.x)),
         patches.setAttribute(part, off, "y", String(frame.y)),
         patches.setAttribute(part, ext, "cx", String(frame.cx)),
         patches.setAttribute(part, ext, "cy", String(frame.cy)),
       ];
+      if (frame.child) {
+        const childOff = xfrm.children.find((child) => child.local === "chOff");
+        const childExt = xfrm.children.find((child) => child.local === "chExt");
+        const offXml = `<a:chOff x="${frame.child.x}" y="${frame.child.y}"/>`;
+        const extXml = `<a:chExt cx="${frame.child.cx}" cy="${frame.child.cy}"/>`;
+        if (childOff) {
+          result.push(
+            patches.setAttribute(part, childOff, "x", String(frame.child.x)),
+            patches.setAttribute(part, childOff, "y", String(frame.child.y)),
+          );
+        } else {
+          result.push(
+            childExt
+              ? patches.insertBefore(part, childExt, offXml)
+              : patches.appendChild(part, xfrm, offXml),
+          );
+        }
+        if (childExt) {
+          result.push(
+            patches.setAttribute(part, childExt, "cx", String(frame.child.cx)),
+            patches.setAttribute(part, childExt, "cy", String(frame.child.cy)),
+          );
+        } else {
+          result.push(patches.appendChild(part, xfrm, extXml));
+        }
+      }
+      return result;
+    }
   }
   const tag = record.node.local === "graphicFrame" ? "p:xfrm" : "a:xfrm";
-  const xml = `<${tag}><a:off x="${frame.x}" y="${frame.y}"/><a:ext cx="${frame.cx}" cy="${frame.cy}"/></${tag}>`;
+  const childXml = frame.child
+    ? `<a:chOff x="${frame.child.x}" y="${frame.child.y}"/><a:chExt cx="${frame.child.cx}" cy="${frame.child.cy}"/>`
+    : "";
+  const xml = `<${tag}><a:off x="${frame.x}" y="${frame.y}"/><a:ext cx="${frame.cx}" cy="${frame.cy}"/>${childXml}</${tag}>`;
   const holder = frameHolder(record);
   if (!holder) {
     // A shape without p:spPr: add one where the schema puts it.
@@ -287,14 +320,27 @@ function frameForBounds(
     x: (rect.x + rect.width / 2) * EMU_PER_PX,
     y: (rect.y + rect.height / 2) * EMU_PER_PX,
   });
-  const frame = {
+  // Freeze the original effective child space before changing group extents.
+  // The renderer's absent/zero extent fallback is identity on that axis.
+  const child =
+    record.node.local === "grpSp" &&
+    (!own.child || own.child.cx === 0 || own.child.cy === 0)
+      ? {
+          x: own.child?.x ?? 0,
+          y: own.child?.y ?? 0,
+          cx: own.child?.cx || own.cx,
+          cy: own.child?.cy || own.cy,
+        }
+      : undefined;
+  const frame: FrameEmu = {
+    ...(child ? { child } : {}),
     cx: Math.round(cx),
     cy: Math.round(cy),
     x: Math.round(centre.x - Math.round(cx) / 2),
     y: Math.round(centre.y - Math.round(cy) / 2),
   };
   if (
-    !Object.values(frame).every(Number.isFinite) ||
+    ![frame.x, frame.y, frame.cx, frame.cy].every(Number.isFinite) ||
     frame.cx <= 0 ||
     frame.cy <= 0
   )

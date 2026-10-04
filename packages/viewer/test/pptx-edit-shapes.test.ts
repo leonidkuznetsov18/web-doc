@@ -268,69 +268,124 @@ describe("PPTX shape operations (pptx-edit)", () => {
     }
   });
 
-  it("preserves rotated group child placement during uniform resize, save/reopen and one undo", async () => {
-    const bytes = buildDeck({
-      slides: [
-        {
-          shapes: [
-            group({
-              id: 2,
-              x: 914400,
-              y: 914400,
-              cx: 914400,
-              cy: 914400,
-              rotation: 45,
-              flipH: true,
-              child: { x: 0, y: 0, cx: 914400, cy: 914400 },
-              children: [
-                textShape({ id: 3, x: 0, y: 114300, cx: 457200, cy: 228600 }),
-              ],
-            }),
-          ],
+  for (const childSpace of [
+    "explicit",
+    "missing",
+    "missing-offset",
+    "missing-extent",
+    "zero-x",
+    "zero-y",
+    "zero-both",
+  ] as const) {
+    it(`preserves rotated group child placement with ${childSpace} child space during uniform resize, save/reopen and one undo`, async () => {
+      const groupXml = group({
+        id: 2,
+        x: 914400,
+        y: 914400,
+        cx: 914400,
+        cy: 914400,
+        rotation: 45,
+        flipH: true,
+        child: {
+          x: 114300,
+          y: 228600,
+          cx:
+            childSpace === "zero-x" || childSpace === "zero-both" ? 0 : 914400,
+          cy:
+            childSpace === "zero-y" || childSpace === "zero-both" ? 0 : 914400,
         },
-      ],
-    });
-    const { session, end } = await pptxSession(bytes);
-    try {
-      const before = (await session.getElement("sld1:2")).item;
-      const child = (await session.getElement("sld1:3")).item;
-      assert.ok(before && child);
-      const rect = {
-        x: 30,
-        y: 40,
-        width: before.bounds.width * 2,
-        height: before.bounds.height * 2,
-      };
-      await session.resizeElement({ target: before.id, rect });
-      const expectedChild = {
-        x: rect.x + (child.bounds.x - before.bounds.x) * 2,
-        y: rect.y + (child.bounds.y - before.bounds.y) * 2,
-        width: child.bounds.width * 2,
-        height: child.bounds.height * 2,
-      };
-      const resizedGroup = (await session.getElement(before.id)).item;
-      const resizedChild = (await session.getElement(child.id)).item;
-      assert.ok(resizedGroup && resizedChild);
-      sameRect(resizedGroup.bounds, rect, 0.001);
-      sameRect(resizedChild.bounds, expectedChild, 0.001);
-      const reopened = await open((await session.save()).bytes);
+        children: [
+          textShape({ id: 3, x: 0, y: 114300, cx: 457200, cy: 228600 }),
+        ],
+      });
+      const offXml = '<a:chOff x="114300" y="228600"/>';
+      const extXml = '<a:chExt cx="914400" cy="914400"/>';
+      const shape =
+        childSpace === "missing"
+          ? groupXml.replace(offXml + extXml, "")
+          : childSpace === "missing-offset"
+            ? groupXml.replace(offXml, "")
+            : childSpace === "missing-extent"
+              ? groupXml.replace(extXml, "")
+              : groupXml;
+      const taggedShape =
+        childSpace === "zero-x" || childSpace === "missing-extent"
+          ? shape
+              .replace("<a:chOff ", '<a:chOff xmlns:qa="urn:qa" qa:keep="off" ')
+              .replace("<a:chExt ", '<a:chExt xmlns:qa="urn:qa" qa:keep="ext" ')
+          : shape;
+      const bytes = buildDeck({ slides: [{ shapes: [taggedShape] }] });
+      const { session, end } = await pptxSession(bytes);
       try {
-        sameRect((await element(reopened, before.id)).bounds, rect, 0.001);
-        sameRect(
-          (await element(reopened, child.id)).bounds,
-          expectedChild,
-          0.001,
-        );
+        const before = (await session.getElement("sld1:2")).item;
+        const child = (await session.getElement("sld1:3")).item;
+        assert.ok(before && child);
+        const rect = {
+          x: 30,
+          y: 40,
+          width: before.bounds.width * 2,
+          height: before.bounds.height * 2,
+        };
+        const state = session.state;
+        const invalidOperations: PptxOperation[] = [
+          {
+            op: "resizeElement",
+            target: before.id,
+            rect: { ...rect, height: rect.height * 1.5 },
+          },
+        ];
+        for (const dryRun of [false, true]) {
+          await assert.rejects(
+            session.applyJson(invalidOperations, { dryRun }),
+            { code: "invalid-operation" },
+          );
+          assert.deepEqual(session.state, state);
+          assert.deepEqual((await session.save()).bytes, bytes);
+        }
+        await session.resizeElement({ target: before.id, rect });
+        const expectedChild = {
+          x: rect.x + (child.bounds.x - before.bounds.x) * 2,
+          y: rect.y + (child.bounds.y - before.bounds.y) * 2,
+          width: child.bounds.width * 2,
+          height: child.bounds.height * 2,
+        };
+        const resizedGroup = (await session.getElement(before.id)).item;
+        const resizedChild = (await session.getElement(child.id)).item;
+        assert.ok(resizedGroup && resizedChild);
+        sameRect(resizedGroup.bounds, rect, 0.001);
+        sameRect(resizedChild.bounds, expectedChild, 0.001);
+        const reopened = await open((await session.save()).bytes);
+        try {
+          const savedXml = await partText(reopened, SLIDE);
+          const transform = savedXml.match(
+            /<p:grpSp>[\s\S]*?<p:grpSpPr>([\s\S]*?)<\/p:grpSpPr>/u,
+          )?.[1];
+          assert.ok(transform, "saved native group transform");
+          assert.ok(transform.indexOf("<a:chOff ") >= 0);
+          assert.ok(
+            transform.indexOf("<a:chExt ") > transform.indexOf("<a:chOff "),
+          );
+          if (childSpace === "zero-x" || childSpace === "missing-extent")
+            assert.match(transform, /<a:chOff[^>]*qa:keep="off"/u);
+          if (childSpace === "zero-x")
+            assert.match(transform, /<a:chExt[^>]*qa:keep="ext"/u);
+          sameRect((await element(reopened, before.id)).bounds, rect, 0.001);
+          sameRect(
+            (await element(reopened, child.id)).bounds,
+            expectedChild,
+            0.001,
+          );
+        } finally {
+          await reopened.dispose();
+        }
+        await session.undo();
+        assert.deepEqual((await session.save()).bytes, bytes);
+        assert.equal(session.state.canUndo, false);
       } finally {
-        await reopened.dispose();
+        await end();
       }
-      await session.undo();
-      assert.deepEqual((await session.save()).bytes, bytes);
-      assert.equal(session.state.canUndo, false);
-    } finally {
-      await end();
-    }
-  });
+    });
+  }
 
   it("solves single shape bounds through a nonuniform rotated parent and rejects group shear", async () => {
     const bytes = buildDeck({

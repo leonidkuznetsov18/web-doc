@@ -206,50 +206,59 @@ test("keeps visible paint order for renderer-produced overflow hits", async ({
   expect(result.untouched).toBe("Top");
 });
 
-test("resizes rotated groups through the browser worker without shearing child paint or history", async ({
-  page,
-}) => {
+for (const childSpace of ["explicit", "missing"] as const) {
+  test(`resizes rotated groups with ${childSpace} child space through the browser worker without shearing child paint or history`, async ({
+    page,
+  }) => {
+    await verifyGroupResizePaint(page, childSpace);
+  });
+}
+
+async function verifyGroupResizePaint(
+  page: Page,
+  childSpace: "explicit" | "missing",
+) {
   const unit = 9525;
-  const original = buildDeck({
-    slides: [
-      {
-        shapes: [
-          group({
-            id: 2,
-            x: 96 * unit,
-            y: 96 * unit,
-            cx: 96 * unit,
-            cy: 96 * unit,
-            rotation: 45,
-            flipH: true,
-            child: { x: 0, y: 0, cx: 96 * unit, cy: 96 * unit },
-            children: [
-              textShape({
-                id: 3,
-                x: 8 * unit,
-                y: 8 * unit,
-                cx: 24 * unit,
-                cy: 16 * unit,
-                paragraphs: [[]],
-                fill: '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
-                line: "<a:ln><a:noFill/></a:ln>",
-              }),
-              textShape({
-                id: 4,
-                x: 60 * unit,
-                y: 60 * unit,
-                cx: 20 * unit,
-                cy: 28 * unit,
-                paragraphs: [[]],
-                fill: '<a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>',
-                line: "<a:ln><a:noFill/></a:ln>",
-              }),
-            ],
-          }),
-        ],
-      },
+  const groupXml = group({
+    id: 2,
+    x: 96 * unit,
+    y: 96 * unit,
+    cx: 96 * unit,
+    cy: 96 * unit,
+    rotation: 45,
+    flipH: true,
+    child: { x: 0, y: 0, cx: 96 * unit, cy: 96 * unit },
+    children: [
+      textShape({
+        id: 3,
+        x: 8 * unit,
+        y: 8 * unit,
+        cx: 24 * unit,
+        cy: 16 * unit,
+        paragraphs: [[]],
+        fill: '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+        line: "<a:ln><a:noFill/></a:ln>",
+      }),
+      textShape({
+        id: 4,
+        x: 60 * unit,
+        y: 60 * unit,
+        cx: 20 * unit,
+        cy: 28 * unit,
+        paragraphs: [[]],
+        fill: '<a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>',
+        line: "<a:ln><a:noFill/></a:ln>",
+      }),
     ],
   });
+  const shape =
+    childSpace === "missing"
+      ? groupXml.replace(
+          '<a:chOff x="0" y="0"/><a:chExt cx="914400" cy="914400"/>',
+          "",
+        )
+      : groupXml;
+  const original = buildDeck({ slides: [{ shapes: [shape] }] });
   const workers: string[] = [];
   page.on("worker", (worker) => workers.push(new URL(worker.url()).pathname));
   await loadDeck(page, original);
@@ -443,7 +452,7 @@ test("resizes rotated groups through the browser worker without shearing child p
       }
     }
   }
-});
+}
 
 test("starts the OOXML worker only on edit() and lists every shape with the renderer's geometry", async ({
   page,
