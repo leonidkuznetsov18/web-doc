@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.15.3](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.2...v0.15.3) (2026-10-04)
+
+### Performance
+
+* **viewer:** bound docx draft rendering per page ([18fdb21](https://github.com/leonidkuznetsov18/web-doc/commit/18fdb2170ab39fc11504599e51665927ccdcb684))
+
 ## [0.15.2](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.1...v0.15.2) (2026-10-04)
 
 ### Bug fixes
