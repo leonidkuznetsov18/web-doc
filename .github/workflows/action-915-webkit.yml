@@ -1,0 +1,96 @@
+name: ACTION-915 WebKit diagnostics
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/action-915-webkit.yml
+      - scripts/diagnostics/action-915/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        source:
+          - 176ac3d8e41a63b9c52264d40e6fd54429cb25e0
+          - 38d8cdb8ca9caf12191131dcee1c79e0f6a2bf28
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: kit
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.source }}
+          path: subject
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: subject/package-lock.json
+      - run: npm install --global npm@11.16.0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: wasm32-unknown-unknown
+      - name: Install exact historical dependencies
+        working-directory: subject
+        run: |
+          npm ci
+          npx playwright install --with-deps webkit
+      - name: Build the historical browser assets
+        working-directory: subject
+        run: |
+          npm run corpus:fetch
+          npm run build:wasm-bindings
+          npm run build --workspace web-doc
+          npm run build --workspace @zrimo/example-vanilla
+      - name: Record environment
+        working-directory: subject
+        run: |
+          git rev-parse HEAD > action-915-environment.txt
+          uname -a >> action-915-environment.txt
+          node --version >> action-915-environment.txt
+          npx playwright --version >> action-915-environment.txt
+          lscpu >> action-915-environment.txt
+          free -m >> action-915-environment.txt
+      - name: Run unchanged WebKit control
+        id: control
+        continue-on-error: true
+        working-directory: subject
+        env:
+          CI: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: control-report.json
+        run: node node_modules/@playwright/test/cli.js test --config=playwright.matrix.config.ts --project=webkit --workers=2 --retries=0 --grep 'describes 500 pages|applies an edit within the budget' --output=control-results --reporter=list,json
+      - name: Enable sanitized worker diagnostics
+        if: always()
+        run: node kit/scripts/diagnostics/action-915/instrument.mjs subject
+      - name: Run bounded diagnostic samples
+        id: diagnostic
+        if: always()
+        continue-on-error: true
+        working-directory: subject
+        env:
+          CI: "1"
+          PLAYWRIGHT_JSON_OUTPUT_FILE: diagnostic-report.json
+        run: node node_modules/@playwright/test/cli.js test --config=playwright.matrix.config.ts --project=webkit --workers=2 --retries=0 --repeat-each=2 --grep 'describes 500 pages|applies an edit within the budget' --output=diagnostic-results --reporter=list,json
+      - name: Preserve every result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: action-915-${{ matrix.source }}
+          path: |
+            subject/action-915-*.json
+            subject/action-915-environment.txt
+            subject/control-report.json
+            subject/diagnostic-report.json
+            subject/control-results/
+            subject/diagnostic-results/
+      - name: Preserve failure verdict
+        if: always() && (steps.control.outcome == 'failure' || steps.diagnostic.outcome == 'failure')
+        run: exit 1
