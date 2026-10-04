@@ -62,15 +62,19 @@ export function attachInfoDictionary(
   metadataKey: string,
   prefixLength = 0,
 ): Uint8Array {
-  // Incremental saves can have an arbitrary original encoding. Only inspect
-  // PDFium's classic appended section; every byte of the original stays intact.
-  const appended = bytes.subarray(prefixLength);
-  const parsed = parseFile(appended);
-  if (dictionaryHasKey(appended.subarray(...parsed.trailerRange), "Info"))
+  const trailer = latestTrailerDictionary(bytes, prefixLength);
+  if (dictionaryHasKey(bytes.subarray(...trailer.dictionaryRange), "Info"))
     return bytes;
-  const latest = new Map(
-    parsed.objects.map((object) => [object.number, object]),
-  );
+  // Incremental saves can have an arbitrary original encoding. Only inspect
+  // PDFium's appended ordinary objects; every byte of the original stays intact.
+  const appended = bytes.subarray(prefixLength);
+  const objects =
+    trailer.format === "stream"
+      ? objectsBeforeXref(
+          appended.subarray(0, trailer.xrefStart - prefixLength),
+        )
+      : parseFile(appended).objects;
+  const latest = new Map(objects.map((object) => [object.number, object]));
   const candidates = [...latest.values()].filter(
     (object) =>
       !object.data &&
@@ -82,7 +86,7 @@ export function attachInfoDictionary(
       "the page identity Info object is ambiguous or absent",
     );
   const info = candidates[0]!;
-  const end = prefixLength + parsed.trailerRange[1] - 2;
+  const end = trailer.dictionaryRange[1] - 2;
   return concat([
     bytes.subarray(0, end),
     ascii(` /Info ${info.number} ${info.generation} R `),
@@ -90,17 +94,156 @@ export function attachInfoDictionary(
   ]);
 }
 
+/** Ordinary objects only: the xref stream itself is neither decoded nor parsed. */
+function objectsBeforeXref(bytes: Uint8Array): ParsedObject[] {
+  const lexer = new Lexer(bytes);
+  const objects: ParsedObject[] = [];
+  for (;;) {
+    const number = lexer.next();
+    if (number.kind === "end") return objects;
+    const generation = lexer.next();
+    const opening = lexer.next();
+    if (
+      number.kind !== "number" ||
+      !Number.isSafeInteger(number.value) ||
+      number.value <= 0 ||
+      generation.kind !== "number" ||
+      !Number.isSafeInteger(generation.value) ||
+      generation.value < 0 ||
+      opening.kind !== "keyword" ||
+      opening.value !== "obj"
+    )
+      throw new PdfCompactionError("an appended object header is malformed");
+    objects.push(
+      parseObject(lexer, bytes, number.value, generation.value, number.start),
+    );
+  }
+}
+
+// PDFium's final startxref/EOF pair fits in this fixed tail. Do not decode
+// arbitrary original revisions or stream payloads to find its trailer.
+const FOOTER_BYTES = 128;
+
+interface TrailerLocation {
+  readonly dictionaryRange: readonly [number, number];
+  readonly xrefStart: number;
+  readonly format: "classic" | "stream";
+}
+
+/** The dictionary at PDFium's authoritative, absolute final xref offset. */
+function latestTrailerDictionary(
+  bytes: Uint8Array,
+  prefixLength: number,
+): TrailerLocation {
+  const footer = latin1(
+    bytes.subarray(Math.max(prefixLength, bytes.length - FOOTER_BYTES)),
+  );
+  const match =
+    /(?:^|[\x00\t\n\f\r ])startxref[\x00\t\n\f\r ]+(\d+)[\x00\t\n\f\r ]+%%EOF[\x00\t\n\f\r ]*$/.exec(
+      footer,
+    );
+  const offset = match ? Number(match[1]) : NaN;
+  if (
+    !Number.isSafeInteger(prefixLength) ||
+    prefixLength < 0 ||
+    !Number.isSafeInteger(offset) ||
+    offset < prefixLength ||
+    offset >= bytes.length
+  )
+    throw new PdfCompactionError("the final cross-reference offset is invalid");
+  const lexer = new Lexer(bytes);
+  lexer.seek(offset);
+  const first = lexer.next();
+  let stream = false;
+  if (first.kind === "keyword" && first.value === "xref") {
+    for (;;) {
+      const start = lexer.next();
+      if (start.kind === "keyword" && start.value === "trailer") break;
+      const count = lexer.next();
+      if (
+        start.kind !== "number" ||
+        !Number.isSafeInteger(start.value) ||
+        start.value < 0 ||
+        count.kind !== "number" ||
+        !Number.isSafeInteger(count.value) ||
+        count.value < 0 ||
+        count.value > bytes.length - lexer.position
+      )
+        throw new PdfCompactionError("a cross-reference subsection is invalid");
+      for (let index = 0; index < count.value; index += 1) {
+        const position = lexer.next();
+        const generation = lexer.next();
+        const flag = lexer.next();
+        if (
+          position.kind !== "number" ||
+          !Number.isSafeInteger(position.value) ||
+          position.value < 0 ||
+          generation.kind !== "number" ||
+          !Number.isSafeInteger(generation.value) ||
+          generation.value < 0 ||
+          flag.kind !== "keyword" ||
+          (flag.value !== "n" && flag.value !== "f")
+        )
+          throw new PdfCompactionError("a cross-reference entry is invalid");
+      }
+    }
+  } else {
+    const generation = lexer.next();
+    const object = lexer.next();
+    if (
+      first.kind !== "number" ||
+      !Number.isSafeInteger(first.value) ||
+      first.value <= 0 ||
+      generation.kind !== "number" ||
+      !Number.isSafeInteger(generation.value) ||
+      generation.value < 0 ||
+      object.kind !== "keyword" ||
+      object.value !== "obj"
+    )
+      throw new PdfCompactionError("the cross-reference object is invalid");
+    stream = true;
+  }
+  const start = lexer.skipWhitespace();
+  const opening = lexer.peek();
+  if (opening.kind !== "delimiter" || opening.value !== "<<")
+    throw new PdfCompactionError("the cross-reference dictionary is invalid");
+  const end = skipValue(lexer, []);
+  const dictionary = bytes.subarray(start, end);
+  if (stream) {
+    const next = lexer.next();
+    if (
+      !isXrefStreamDictionary(dictionary) ||
+      next.kind !== "keyword" ||
+      next.value !== "stream"
+    )
+      throw new PdfCompactionError("the cross-reference stream is invalid");
+  }
+  return {
+    dictionaryRange: [start, end],
+    xrefStart: offset,
+    format: stream ? "stream" : "classic",
+  };
+}
+
 /** Inspect dictionary entries, ignoring names inside values or stream bytes. */
 function dictionaryHasKey(bytes: Uint8Array, key: string): boolean {
+  return dictionaryValueLexer(bytes, key) !== undefined;
+}
+
+/** A lexer positioned at a top-level entry's value; nested names are ignored. */
+function dictionaryValueLexer(
+  bytes: Uint8Array,
+  key: string,
+): Lexer | undefined {
   const lexer = new Lexer(bytes);
   const opening = lexer.next();
-  if (opening.kind !== "delimiter" || opening.value !== "<<") return false;
+  if (opening.kind !== "delimiter" || opening.value !== "<<") return undefined;
   for (;;) {
     const name = lexer.next();
-    if (name.kind === "delimiter" && name.value === ">>") return false;
+    if (name.kind === "delimiter" && name.value === ">>") return undefined;
     if (name.kind !== "name")
       throw new PdfCompactionError("a dictionary entry is malformed");
-    if (lexer.lastNameIs(key)) return true;
+    if (lexer.lastNameIs(key)) return lexer;
     const first = lexer.peek();
     skipValue(lexer, []);
     if (first.kind !== "number" || lexer.peek().kind !== "number") continue;
@@ -109,6 +252,54 @@ function dictionaryHasKey(bytes: Uint8Array, key: string): boolean {
     if (reference.kind !== "keyword" || reference.value !== "R")
       throw new PdfCompactionError("a dictionary reference is malformed");
   }
+}
+
+/** PDFium omits /Type on incremental xref streams, but retains their required shape. */
+function isXrefStreamDictionary(bytes: Uint8Array): boolean {
+  const type = dictionaryValueLexer(bytes, "Type");
+  if (type) {
+    const name = type.next();
+    if (name.kind !== "name" || !type.lastNameIs("XRef")) return false;
+  }
+  const widths = dictionaryValueLexer(bytes, "W");
+  const opening = widths?.next();
+  if (!widths || opening?.kind !== "delimiter" || opening.value !== "[")
+    return false;
+  let total = 0;
+  for (let index = 0; index < 3; index += 1) {
+    const width = widths.next();
+    if (
+      width.kind !== "number" ||
+      !Number.isSafeInteger(width.value) ||
+      width.value < 0
+    )
+      return false;
+    total += width.value;
+  }
+  const closing = widths.next();
+  if (closing.kind !== "delimiter" || closing.value !== "]" || total <= 0)
+    return false;
+  const size = dictionaryValueLexer(bytes, "Size")?.next();
+  if (
+    size?.kind !== "number" ||
+    !Number.isSafeInteger(size.value) ||
+    size.value <= 0
+  )
+    return false;
+  const root = dictionaryValueLexer(bytes, "Root");
+  const object = root?.next();
+  const generation = root?.next();
+  const reference = root?.next();
+  return (
+    object?.kind === "number" &&
+    Number.isSafeInteger(object.value) &&
+    object.value > 0 &&
+    generation?.kind === "number" &&
+    Number.isSafeInteger(generation.value) &&
+    generation.value >= 0 &&
+    reference?.kind === "keyword" &&
+    reference.value === "R"
+  );
 }
 
 /** A token with its byte range; `start` is past any whitespace and comments. */

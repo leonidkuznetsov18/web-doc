@@ -115,6 +115,8 @@ export interface DocxEngineReads {
 export interface DocxDraftDocument {
   readonly bytes: Uint8Array;
   readonly paragraph?: DocxElement;
+  /** Original target followed by paragraphs created by its replacement, in text order. */
+  readonly paragraphs: readonly DocxElement[];
 }
 
 /** Word's automatic text colour on a white page. */
@@ -491,11 +493,16 @@ export class DocxEditEngine implements EditEngine, DocxEngineReads {
       signal,
     );
     try {
-      await preview.apply(operations, signal);
+      const receipt = await preview.apply(operations, signal);
       const bytes = (await preview.materializeDocument("show", {}, signal))
         .bytes;
-      const paragraph = await preview.getElement(fields.target, signal);
-      return { bytes, ...(paragraph ? { paragraph } : {}) };
+      const paragraphs: DocxElement[] = [];
+      for (const id of [fields.target, ...receipt.createdIds]) {
+        const paragraph = await preview.getElement(id, signal);
+        if (paragraph?.kind === "paragraph") paragraphs.push(paragraph);
+      }
+      const paragraph = paragraphs[0];
+      return { bytes, paragraphs, ...(paragraph ? { paragraph } : {}) };
     } finally {
       await preview.dispose();
     }

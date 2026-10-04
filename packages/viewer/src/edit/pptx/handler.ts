@@ -172,6 +172,7 @@ export function createOoxmlEditHandler(): WorkerOperationHandler {
         const draft = await docx().previewDraft(fields, signal);
         return {
           bytes: draft.bytes.slice().buffer,
+          paragraphs: draft.paragraphs,
           ...(draft.paragraph ? { paragraph: draft.paragraph } : {}),
         };
       }

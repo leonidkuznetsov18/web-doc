@@ -40,6 +40,43 @@ function range(elementId: string, start: number, end = start) {
 }
 
 describe("DOCX read-only text draft preview", () => {
+  it("returns ordered split paragraph metadata through the worker without consuming live ids", async () => {
+    const pair = loopbackWorker(createOoxmlEditHandler());
+    const engine = await loadDocxEditEngine(
+      ORIGINAL,
+      { format: "docx", limits, signal },
+      { createWorker: () => pair.worker },
+    );
+    try {
+      const target = (await engine.getElements({}, signal))[0]?.id;
+      assert.ok(target);
+      const fields = {
+        target,
+        text: "\nX\n🙂\n",
+        range: range(target, 0),
+        insertionStyle: { bold: true, italic: true, underline: true },
+      };
+      const first = await engine.previewDraft(fields, signal);
+      const repeated = await engine.previewDraft(fields, signal);
+      assert.deepEqual(
+        first.paragraphs.map((paragraph) => paragraph.text),
+        ["", "X", "🙂", "Bold italic"],
+      );
+      assert.equal(first.paragraphs[0]?.id, target);
+      assert.deepEqual(repeated.paragraphs, first.paragraphs);
+      const committed = await engine.apply(
+        [{ op: "replaceText", ...fields }],
+        signal,
+      );
+      assert.deepEqual(
+        committed.createdIds,
+        first.paragraphs.slice(1).map((paragraph) => paragraph.id),
+      );
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("previews pending bold, italic and underline only on inserted text without changing live runs", async () => {
     const pair = loopbackWorker(createOoxmlEditHandler());
     const engine = await loadDocxEditEngine(

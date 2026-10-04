@@ -479,37 +479,50 @@ export class DocxSession implements DocxEditSession {
           "Draft rendering is unavailable",
         );
       const document = await docxReads(engine).previewDraft(draft, signal);
-      const pages = await previewDocument(document.bytes, targets, signal);
-      const paragraph = document.paragraph;
-      const page = [...pages.pages]
-        .sort((left, right) => left.pageIndex - right.pageIndex)
-        .find((page) =>
-          page.runs.some(
-            (run) => run.paragraphId === paragraphIdOf(draft.target),
-          ),
-        );
-      if (!paragraph || paragraph.kind !== "paragraph" || !page) return pages;
-      const lines = this.#lay(paragraph, [page]);
-      if (lines.length === 0) return pages;
-      const color =
-        typeof paragraph.textStyle?.color === "string" &&
-        paragraph.textStyle.color.startsWith("#")
-          ? paragraph.textStyle.color
-          : "#000000";
-      return {
-        ...pages,
-        layout: {
-          elementId: draft.target,
-          pageIndex: page.pageIndex,
-          frame: unionRects(lines.map((line) => line.box)),
-          lines: lines.map(
-            ({ pageIndex: _page, box: _box, ends: _ends, ...line }) => ({
-              ...line,
-              color,
-            }),
-          ),
-        },
-      };
+      const { alignmentPages, ...pages } = await previewDocument(
+        document.bytes,
+        targets,
+        signal,
+        document.paragraphs.map((paragraph) => paragraphIdOf(paragraph.id)),
+      );
+      const requested = [...pages.pages].sort(
+        (left, right) => left.pageIndex - right.pageIndex,
+      );
+      let offset = 0;
+      const paragraphs = document.paragraphs.map((paragraph) => {
+        const text = paragraph.text ?? "";
+        const draftRange = { start: offset, end: offset + text.length };
+        offset = draftRange.end + 1; // LF between ordered paragraphs, not a glyph.
+        const lines = this.#lay(paragraph, alignmentPages ?? requested);
+        const color =
+          typeof paragraph.textStyle?.color === "string" &&
+          paragraph.textStyle.color.startsWith("#")
+            ? paragraph.textStyle.color
+            : "#000000";
+        const layouts: TextLayout[] = [];
+        for (const page of requested) {
+          const placed = lines.filter(
+            (line) => line.pageIndex === page.pageIndex,
+          );
+          if (!placed.length) continue;
+          layouts.push({
+            elementId: paragraph.id,
+            pageIndex: page.pageIndex,
+            frame: unionRects(placed.map((line) => line.box)),
+            lines: placed.map(
+              ({ pageIndex: _page, box: _box, ends: _ends, ...line }) => ({
+                ...line,
+                color,
+              }),
+            ),
+          });
+        }
+        return { elementId: paragraph.id, text, draftRange, layouts };
+      });
+      const layout = paragraphs.find(
+        (paragraph) => paragraph.elementId === draft.target,
+      )?.layouts[0];
+      return { ...pages, paragraphs, ...(layout ? { layout } : {}) };
     });
   }
 

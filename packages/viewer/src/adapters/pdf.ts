@@ -444,13 +444,15 @@ class PdfJsBackend implements PdfBackend {
   ): Promise<readonly TextRun[]> {
     this.#assertOpen();
     const page = await this.#page(pageIndex);
-    if (signal?.aborted) throw abortError();
+    if (this.#closed || signal?.aborted) throw abortError();
     const viewport = page.getViewport({ scale: CSS_UNITS });
     const [content, annotations] = await Promise.all([
       raceAbort(page.getTextContent(), signal),
       raceAbort(page.getAnnotations({ intent: "display" }), signal),
     ]);
+    if (this.#closed || signal?.aborted) throw abortError();
     const links = await this.#links(annotations, viewport, signal);
+    if (this.#closed || signal?.aborted) throw abortError();
     const runs: TextRun[] = [];
     let logicalOffset = 0;
     for (const item of content.items) {

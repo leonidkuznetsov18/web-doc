@@ -1,0 +1,14 @@
+{
+  "tests/e2e/edit-ai.spec.ts": "2b18c4957f4cf0c8369d157625aa97abcdea6a1c55f7dac6bbedd88f54c342e1",
+  "tests/e2e/edit-pptx.spec.ts": "7b21553955845a1d23df4912ac0a82515a03d85418518124ff31b931b97c0b05",
+  "packages/viewer/src/viewer.ts": "97300c8056a81b814e73663b7b745d278f7c1f297bc486dc7c3169caeb4638a6",
+  "packages/viewer/src/adapters/office.ts": "377c9c36760971aa5a85649182876eb27bea88d3a062809ec6edd3371b04599b",
+  "packages/viewer/src/worker-client.ts": "1c6088215910ded0f2323ebbcbd25b1480389f4b7bf6974223a507a67aef23f4",
+  "packages/viewer/src/worker-endpoint.ts": "2a443ac9495049bff520b737d9cc4034062eba356d14c9706e1cf928b5969b1e",
+  "packages/viewer/src/ooxml-edit-worker.ts": "9de7da8e0ccce48de2b20931ca5025d1975eb851a4400d56a394c42c808c4c17",
+  "package-lock.json": "7eb5b93d86b5f8a633aa501df26b5cd55eefca2617608ba88fd4afa58d70d11a",
+  "playwright.matrix.config.ts": "b15a1c7d69060770116d81ecc5c65873f849a218998dfd5a72054491641ef500",
+  "packages/viewer/package.json": "05fb63bb6199b5c4506fdf8dfd284dcd2f731034d61c6e6886784b179801218a",
+  "packages/viewer/src/pdf-edit-worker.ts": "536676ed00e10d4ad42bd7b63e64b184cda757b469fea40464d2615754f4111f",
+  "packages/viewer/src/adapters/pdf.ts": "b8fc14ae3d5a02cd71fa0c1904b1246a61396e49d3ea788e025be23b14848d95"
+}

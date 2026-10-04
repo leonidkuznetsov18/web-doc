@@ -12,6 +12,7 @@ import {
 import { PdfEditDocument } from "../src/edit/pdf/engine/document.js";
 import type { PdfOperation } from "../src/index.js";
 import { extractPageText, fixturePdfium } from "./fixtures/pdf-builder.js";
+import { pdfSession } from "./fixtures/pdf-session.js";
 
 /*
  * The compaction pass of a full PDF save: a lexer over PDFium's output that
@@ -28,14 +29,18 @@ const CORPUS = new URL("../../.cache/corpus/", PACKAGE);
 const op = <T extends PdfOperation>(operation: T): T => operation;
 
 /** A classic PDF from object bodies; `trailer` names the catalog. */
-function classicPdf(objects: readonly string[], extraTrailer = ""): Uint8Array {
+function classicPdf(
+  objects: readonly string[],
+  extraTrailer = "",
+  offsetBase = 0,
+): Uint8Array {
   let out = "%PDF-1.7\n%âãÏÓ\n";
   const offsets: number[] = [];
   objects.forEach((body, index) => {
-    offsets.push(out.length);
+    offsets.push(out.length + offsetBase);
     out += `${index + 1} 0 obj\n${body}\nendobj\n`;
   });
-  const xref = out.length;
+  const xref = out.length + offsetBase;
   out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (const offset of offsets)
     out += `${String(offset).padStart(10, "0")} 00000 n \n`;
@@ -45,6 +50,41 @@ function classicPdf(objects: readonly string[], extraTrailer = ""): Uint8Array {
 
 const latin1 = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+
+/** A public synthetic input whose incremental PDFium save keeps an xref stream. */
+function xrefStreamPdf(
+  info: "linked" | "missing" = "linked",
+  infoBody = "<< /Producer (Synthetic incremental test) >>",
+): Uint8Array {
+  const text = "BT /F1 24 Tf 72 700 Td (#1) Tj ET";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    infoBody,
+  ];
+  let body = "%PDF-1.7\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(body.length);
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  offsets.push(body.length);
+  const entries = new Uint8Array(offsets.length * 7);
+  const view = new DataView(entries.buffer);
+  offsets.forEach((offset, index) => {
+    entries[index * 7] = index === 0 ? 0 : 1;
+    view.setUint32(index * 7 + 1, offset);
+    view.setUint16(index * 7 + 5, index === 0 ? 65535 : 0);
+  });
+  const xref = `${offsets.length - 1} 0 obj\n<< /Type /XRef /Size ${offsets.length} /Root 1 0 R${info === "linked" ? " /Info 6 0 R" : ""} /W [1 4 2] /Length ${entries.length} >>\nstream\n`;
+  const ending = `\nendstream\nendobj\nstartxref\n${body.length}\n%%EOF\n`;
+  return Uint8Array.from(body + xref + latin1(entries) + ending, (character) =>
+    character.charCodeAt(0),
+  );
+}
 
 async function pageTexts(bytes: Uint8Array): Promise<string[]> {
   const pdfium = await fixturePdfium();
@@ -95,13 +135,128 @@ async function pdfjsSummary(bytes: Uint8Array) {
 describe("pdf compaction", () => {
   const content = "BT /F1 12 Tf 72 700 Td (Kept) Tj ET";
 
+  for (const info of ["linked", "missing"] as const)
+    it(`saves an xref-stream input with ${info} Info incrementally without changing its prefix, page identities or history`, async () => {
+      const original = xrefStreamPdf(info);
+      const { session, end } = await pdfSession(original);
+      try {
+        await session.insertPage({ index: 0 });
+        await session.replaceText({ target: "p0:o0", text: "#2" });
+        const full = (await session.save({ mode: "full" })).bytes;
+        const state = session.state;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const saved = await session.save({ mode: "incremental" });
+          assert.deepEqual(saved.warnings, []);
+          assert.deepEqual(saved.bytes.subarray(0, original.length), original);
+          assert.deepEqual(session.state, state);
+          const reopened = new PdfEditDocument(
+            await fixturePdfium(),
+            saved.bytes,
+          );
+          try {
+            assert.equal(reopened.getElement("p0:o0")?.pageIndex, 1);
+            assert.equal(reopened.getElement("p0:o0")?.text, "#2");
+            assert.equal(await extractPageText(saved.bytes, 1), "#2");
+          } finally {
+            reopened.dispose();
+          }
+        }
+        assert.deepEqual((await session.save({ mode: "full" })).bytes, full);
+        await session.undo();
+        assert.equal((await session.getElement("p0:o0")).item?.text, "#1");
+        await session.redo();
+        assert.equal((await session.getElement("p0:o0")).item?.text, "#2");
+        const restored = (await session.save({ mode: "full" })).bytes;
+        const reopened = new PdfEditDocument(await fixturePdfium(), restored);
+        try {
+          assert.equal(reopened.getElement("p0:o0")?.pageIndex, 1);
+          assert.equal(reopened.getElement("p0:o0")?.text, "#2");
+          assert.equal(await extractPageText(restored, 1), "#2");
+        } finally {
+          reopened.dispose();
+        }
+        assert.deepEqual(
+          (await session.save({ mode: "full" })).bytes,
+          restored,
+        );
+      } finally {
+        await end();
+      }
+    });
+
+  it("links orphaned Info in an xref stream without changing any existing byte or offset", async () => {
+    const original = xrefStreamPdf(
+      "missing",
+      "<< /WebDocPageKeys (metadata) >>",
+    );
+    const linked = attachInfoDictionary(original, "WebDocPageKeys");
+    assert.equal(
+      latin1(linked).replace(" /Info 6 0 R ", ""),
+      latin1(original),
+      "only the Info reference is inserted; startxref, xref entries, stream data and Length stay identical",
+    );
+    assert.equal(await extractPageText(linked, 0), "#1");
+    assert.equal(attachInfoDictionary(linked, "WebDocPageKeys"), linked);
+  });
+
+  it("only trusts linked Info in the authoritative cross-reference dictionary", () => {
+    const bytes = xrefStreamPdf();
+    assert.equal(attachInfoDictionary(bytes, "WebDocPageKeys"), bytes);
+    const source = latin1(bytes);
+    const altered = (text: string) =>
+      Uint8Array.from(text, (character) => character.charCodeAt(0));
+    const typeless = source.replace("/Type /XRef ", "");
+    const typelessBytes = altered(typeless);
+    assert.equal(
+      attachInfoDictionary(typelessBytes, "WebDocPageKeys"),
+      typelessBytes,
+    );
+    for (const fake of [
+      "/Nested << /Info 6 0 R >>",
+      "/Note (/Info 6 0 R)",
+      "/Names [/Info 6 0 R]",
+    ])
+      assert.throws(
+        () =>
+          attachInfoDictionary(
+            altered(source.replace("/Info 6 0 R", fake)),
+            "WebDocPageKeys",
+          ),
+        PdfCompactionError,
+      );
+    for (const malformed of [
+      source.replace("/Type /XRef", "/Type /Metadata"),
+      source.replace(
+        /startxref\n\d+/,
+        `startxref\n${source.indexOf("6 0 obj")}`,
+      ),
+      source.replace(/startxref\n\d+/, "startxref\n99999999999999999999"),
+      source.replace(/startxref\n\d+/, "startxref\n0"),
+      typeless.replace("/W [1 4 2]", "/Widths [1 4 2]"),
+      typeless.replace("/W [1 4 2]", "/W [0 0 0]"),
+      typeless.replace("/W [1 4 2]", "/W [1 -1 2]"),
+      typeless.replace("/W [1 4 2]", "/W [1 4 2 0]"),
+      typeless.replace("/Size 8", "/Size 0"),
+      typeless.replace("/Size 8", "/OtherSize 8"),
+      typeless.replace("/Root 1 0 R", "/Root (1 0 R)"),
+      typeless.replace("/Root 1 0 R", "/Root 0 0 R"),
+      typeless.replace("/Root 1 0 R", "/Root 1 -1 R"),
+      typeless.replace("/Root 1 0 R", "/OtherRoot 1 0 R"),
+    ])
+      assert.throws(
+        () => attachInfoDictionary(altered(malformed), "WebDocPageKeys"),
+        PdfCompactionError,
+      );
+  });
+
   it("attaches orphaned page metadata without adopting names in nested values or streams", () => {
-    const bytes = classicPdf([
+    const objects = [
       "<< /Type /Catalog /Fake << /WebDocPageKeys (not Info) >> >>",
       "<< /Note (/WebDocPageKeys endobj trailer) >>",
       "<< /Length 20 >>\nstream\n/WebDocPageKeys fake!\nendstream",
       "<< /WebDocPageKeys (metadata) >>",
-    ]);
+    ];
+    const bytes = classicPdf(objects);
     const linked = attachInfoDictionary(bytes, "WebDocPageKeys");
     assert.match(latin1(linked), /\/Info 4 0 R/);
     assert.equal(
@@ -115,9 +270,10 @@ describe("pdf compaction", () => {
     const prefix = Uint8Array.from("<< /Type /XRef >>\n% signed bytes\n", (c) =>
       c.charCodeAt(0),
     );
-    const incremental = new Uint8Array(prefix.length + bytes.length);
+    const appended = classicPdf(objects, "", prefix.length);
+    const incremental = new Uint8Array(prefix.length + appended.length);
     incremental.set(prefix);
-    incremental.set(bytes, prefix.length);
+    incremental.set(appended, prefix.length);
     const repaired = attachInfoDictionary(
       incremental,
       "WebDocPageKeys",

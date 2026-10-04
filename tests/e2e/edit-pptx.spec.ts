@@ -9,6 +9,7 @@ import {
 import { defaultResourceLimits } from "../../packages/viewer/src/limits.js";
 import {
   buildDeck,
+  group,
   syntheticDeck,
   textShape,
 } from "../../packages/viewer/test/fixtures/pptx-builder.js";
@@ -204,6 +205,254 @@ test("keeps visible paint order for renderer-produced overflow hits", async ({
   expect(result.foregroundX).toBe(520);
   expect(result.untouched).toBe("Top");
 });
+
+for (const childSpace of ["explicit", "missing"] as const) {
+  test(`resizes rotated groups with ${childSpace} child space through the browser worker without shearing child paint or history`, async ({
+    page,
+  }) => {
+    await verifyGroupResizePaint(page, childSpace);
+  });
+}
+
+async function verifyGroupResizePaint(
+  page: Page,
+  childSpace: "explicit" | "missing",
+) {
+  const unit = 9525;
+  const groupXml = group({
+    id: 2,
+    x: 96 * unit,
+    y: 96 * unit,
+    cx: 96 * unit,
+    cy: 96 * unit,
+    rotation: 45,
+    flipH: true,
+    child: { x: 0, y: 0, cx: 96 * unit, cy: 96 * unit },
+    children: [
+      textShape({
+        id: 3,
+        x: 8 * unit,
+        y: 8 * unit,
+        cx: 24 * unit,
+        cy: 16 * unit,
+        paragraphs: [[]],
+        fill: '<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>',
+        line: "<a:ln><a:noFill/></a:ln>",
+      }),
+      textShape({
+        id: 4,
+        x: 60 * unit,
+        y: 60 * unit,
+        cx: 20 * unit,
+        cy: 28 * unit,
+        paragraphs: [[]],
+        fill: '<a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>',
+        line: "<a:ln><a:noFill/></a:ln>",
+      }),
+    ],
+  });
+  const shape =
+    childSpace === "missing"
+      ? groupXml.replace(
+          '<a:chOff x="0" y="0"/><a:chExt cx="914400" cy="914400"/>',
+          "",
+        )
+      : groupXml;
+  const original = buildDeck({ slides: [{ shapes: [shape] }] });
+  const workers: string[] = [];
+  page.on("worker", (worker) => workers.push(new URL(worker.url()).pathname));
+  await loadDeck(page, original);
+  const result = await page.evaluate(async () => {
+    const viewer = (window as typeof window & { __viewer: Viewer }).__viewer;
+    const session = await viewer.edit();
+    if (session.format !== "pptx") throw new Error("Expected PPTX session");
+    const canvas = document.createElement("canvas");
+    const paint = async () => {
+      await viewer.renderPage(0, canvas, { zoom: 1, devicePixelRatio: 1 });
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Expected slide canvas context");
+      const pixels = context.getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      ).data;
+      const colorBounds = (color: "red" | "blue") => {
+        let left = canvas.width,
+          top = canvas.height,
+          right = -1,
+          bottom = -1,
+          count = 0;
+        for (let y = 0; y < canvas.height; y += 1) {
+          for (let x = 0; x < canvas.width; x += 1) {
+            const offset = (y * canvas.width + x) * 4;
+            const red = pixels[offset],
+              green = pixels[offset + 1],
+              blue = pixels[offset + 2];
+            if (red === undefined || green === undefined || blue === undefined)
+              throw new Error("Incomplete raster pixel");
+            if (
+              green > 20 ||
+              (color === "red"
+                ? red < 240 || blue > 20
+                : blue < 240 || red > 20)
+            )
+              continue;
+            left = Math.min(left, x);
+            right = Math.max(right, x);
+            top = Math.min(top, y);
+            bottom = Math.max(bottom, y);
+            count += 1;
+          }
+        }
+        if (count === 0) throw new Error(`Missing ${color} child paint`);
+        return {
+          x: left,
+          y: top,
+          width: right - left + 1,
+          height: bottom - top + 1,
+          count,
+        };
+      };
+      return { pixels, red: colorBounds("red"), blue: colorBounds("blue") };
+    };
+    const equalBytes = (
+      a: Uint8Array | Uint8ClampedArray,
+      b: Uint8Array | Uint8ClampedArray,
+    ) => a.length === b.length && a.every((byte, index) => byte === b[index]);
+    const baseline = await paint();
+    const originalBytes = (await session.save()).bytes;
+    const initialState = session.state;
+    const before = (await session.getElement("sld1:2")).item;
+    if (!before) throw new Error("Expected group");
+    const rejected: boolean[] = [];
+    for (const dryRun of [false, true]) {
+      try {
+        await session.resizeElement(
+          {
+            target: before.id,
+            rect: { ...before.bounds, width: before.bounds.width * 2 },
+          },
+          { dryRun },
+        );
+        rejected.push(false);
+      } catch (error) {
+        rejected.push(
+          typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "invalid-operation",
+        );
+      }
+      if (
+        !equalBytes((await session.save()).bytes, originalBytes) ||
+        JSON.stringify(session.state) !== JSON.stringify(initialState) ||
+        !equalBytes((await paint()).pixels, baseline.pixels)
+      )
+        throw new Error("Rejected resize changed bytes, state or paint");
+    }
+    const rect = {
+      x: 70,
+      y: 70,
+      width: before.bounds.width * 2,
+      height: before.bounds.height * 2,
+    };
+    await session.resizeElement({ target: before.id, rect });
+    const resized = await paint();
+    const childBounds = async () => {
+      const red = (await session.getElement("sld1:3")).item;
+      const blue = (await session.getElement("sld1:4")).item;
+      if (!red || !blue) throw new Error("Expected both child elements");
+      return { red: red.bounds, blue: blue.bounds };
+    };
+    const editedChildren = await childBounds();
+    const editedBytes = (await session.save()).bytes;
+    await session.undo();
+    const undone =
+      equalBytes((await session.save()).bytes, originalBytes) &&
+      !session.state.canUndo &&
+      equalBytes((await paint()).pixels, baseline.pixels);
+    await viewer.load(editedBytes, { fileName: "resized-group.pptx" });
+    const reopened = await viewer.edit();
+    const reopenRed = (await reopened.getElement("sld1:3")).item;
+    const reopenBlue = (await reopened.getElement("sld1:4")).item;
+    const reopenedPaint = await paint();
+    return {
+      rejected,
+      undone,
+      initialGroup: before.bounds,
+      beforePaint: { red: baseline.red, blue: baseline.blue },
+      resizedPaint: { red: resized.red, blue: resized.blue },
+      editedChildren,
+      reopenedChildren: { red: reopenRed?.bounds, blue: reopenBlue?.bounds },
+      paintSurvivedReload: equalBytes(resized.pixels, reopenedPaint.pixels),
+    };
+  });
+  expect(workers).toContain("/workers/ooxml-edit-worker.js");
+  expect(result.rejected).toEqual([true, true]);
+  expect(result.undone).toBe(true);
+  expect(result.paintSurvivedReload).toBe(true);
+  expect(result.reopenedChildren).toEqual(result.editedChildren);
+  // A fully opaque pixel threshold erodes antialiased polygon tips. Doubling
+  // an already-eroded raster box is not a scale oracle. Derive the child
+  // polygons from the fixture's known 45° rotation and horizontal reflection.
+  const origin = 144 - 96 / Math.sqrt(2);
+  expect(result.initialGroup.x).toBeCloseTo(origin, 5);
+  expect(result.initialGroup.y).toBeCloseTo(origin, 5);
+  const children = {
+    red: { x: 8, y: 8, width: 24, height: 16 },
+    blue: { x: 60, y: 60, width: 20, height: 28 },
+  };
+  for (const color of ["red", "blue"] as const) {
+    const child = children[color];
+    const corners = [
+      { x: child.x, y: child.y },
+      { x: child.x + child.width, y: child.y },
+      { x: child.x, y: child.y + child.height },
+      { x: child.x + child.width, y: child.y + child.height },
+    ].map((point) => ({
+      x: 144 + (96 - point.x - point.y) / Math.sqrt(2),
+      y: 144 + (point.y - point.x) / Math.sqrt(2),
+    }));
+    const left = Math.min(...corners.map((point) => point.x));
+    const right = Math.max(...corners.map((point) => point.x));
+    const top = Math.min(...corners.map((point) => point.y));
+    const bottom = Math.max(...corners.map((point) => point.y));
+    for (const scale of [1, 2]) {
+      const raster =
+        scale === 1 ? result.beforePaint[color] : result.resizedPaint[color];
+      const offset = scale === 1 ? origin : 70;
+      const expected = {
+        x: offset + (left - origin) * scale,
+        y: offset + (top - origin) * scale,
+        width: (right - left) * scale,
+        height: (bottom - top) * scale,
+      };
+      expect(Math.abs(raster.x - expected.x)).toBeLessThanOrEqual(2);
+      expect(Math.abs(raster.y - expected.y)).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(raster.x + raster.width - expected.x - expected.width),
+      ).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(raster.y + raster.height - expected.y - expected.height),
+      ).toBeLessThanOrEqual(2);
+      // Fully covered pixels must include the polygon interior beyond a
+      // sqrt(2)-pixel boundary strip (pixel-cell diagonal + grid sampling).
+      const area = child.width * child.height * scale * scale;
+      const perimeter = 2 * (child.width + child.height) * scale;
+      expect(Math.abs(raster.count - area)).toBeLessThanOrEqual(
+        perimeter * Math.SQRT2 + 4,
+      );
+      if (scale === 2) {
+        const native = result.editedChildren[color];
+        expect(native.x).toBeCloseTo(expected.x, 3);
+        expect(native.y).toBeCloseTo(expected.y, 3);
+        expect(native.width).toBeCloseTo(expected.width, 3);
+        expect(native.height).toBeCloseTo(expected.height, 3);
+      }
+    }
+  }
+}
 
 test("starts the OOXML worker only on edit() and lists every shape with the renderer's geometry", async ({
   page,

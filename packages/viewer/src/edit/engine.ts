@@ -80,7 +80,9 @@ export interface EditSessionAccess {
     bytes: Uint8Array,
     options: DocumentPreviewRenderOptions,
     signal: AbortSignal,
-  ): Promise<DocumentPreviewPages>;
+    /** DOCX paragraph ids whose preceding runs are needed for unambiguous offsets. */
+    paragraphIds?: readonly string[],
+  ): Promise<DocumentPreviewRead>;
 }
 
 export interface DocumentPreviewRenderOptions {
@@ -100,6 +102,11 @@ export interface DocumentPreviewPages {
     readonly pageIndex: number;
     readonly runs: readonly TextRun[];
   }[];
+}
+
+/** Internal text alignment input from the same temporary handle, never extra raster pages. */
+export interface DocumentPreviewRead extends DocumentPreviewPages {
+  readonly alignmentPages?: DocumentPreviewPages["pages"];
 }
 
 /** Advertised by a `DocumentAdapter` that can edit some of its formats. */
