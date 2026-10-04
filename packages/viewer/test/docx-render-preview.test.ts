@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { DocumentAdapter, TextRun } from "../src/contracts.js";
+import type { DocumentAdapter, PageSize, TextRun } from "../src/contracts.js";
 import { DocxEditEngine } from "../src/edit/docx/engine.js";
 import { DocxSession } from "../src/edit/docx/session.js";
 import {
@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 import { buildDocx, paragraph, sectPr } from "./fixtures/docx-builder.js";
 
-/** The test adapter only records target identity; no raster output is simulated. */
+/** Records target dimensions and identity; no glyph raster output is simulated. */
 class RenderTarget extends EventTarget implements OffscreenCanvas {
   width = 1;
   height = 1;
@@ -30,7 +30,7 @@ class RenderTarget extends EventTarget implements OffscreenCanvas {
 
 const ORIGINAL = buildDocx({ body: paragraph("original") + sectPr() });
 
-function setup() {
+function setup(limits = defaultResourceLimits) {
   const renderedStyle: { current: DocxTextStyle | undefined } = {
     current: undefined,
   };
@@ -45,6 +45,7 @@ function setup() {
     failRender: boolean;
     afterRender?: () => void;
     pageCount?: number;
+    pageSizes?: readonly PageSize[] | null;
     textMap?: (
       engine: DocxEditEngine,
       pageIndex: number,
@@ -70,7 +71,11 @@ function setup() {
         format: "docx",
         unit: "page",
         pageCount: controls.pageCount ?? 1,
-        pageSizes: [{ width: 816, height: 1056 }],
+        ...(controls.pageSizes === null
+          ? {}
+          : {
+              pageSizes: controls.pageSizes ?? [{ width: 816, height: 1056 }],
+            }),
       };
     },
     async getTextMap(engine, pageIndex) {
@@ -94,11 +99,21 @@ function setup() {
         },
       ] satisfies TextRun[];
     },
-    async render(engine, target) {
+    async render(engine, target, viewport) {
       if (controls.failRender) throw new Error("Draft render failed");
       const element = (
         await engine.getElements({}, new AbortController().signal)
       )[0];
+      const size = controls.pageSizes?.[viewport.pageIndex] ?? {
+        width: 816,
+        height: 1056,
+      };
+      target.width = Math.ceil(
+        size.width * viewport.zoom * viewport.devicePixelRatio,
+      );
+      target.height = Math.ceil(
+        size.height * viewport.zoom * viewport.devicePixelRatio,
+      );
       renderedStyle.current = element?.textStyle;
       painted.push({ text: element?.text ?? "", target });
       controls.afterRender?.();
@@ -116,7 +131,7 @@ function setup() {
   };
   const viewer = ViewerClient.create({
     adapters: [adapter],
-    limits: defaultResourceLimits,
+    limits,
   }).createViewer();
   const events: string[] = [];
   for (const type of [
@@ -141,6 +156,245 @@ function setup() {
 }
 
 describe("DOCX renderer draft preview isolation", () => {
+  it("rejects a later over-budget draft page before mutating any earlier caller canvas", async () => {
+    const test = setup();
+    try {
+      await test.viewer.load(ORIGINAL, { fileName: "preview.docx" });
+      const session = await test.viewer.edit();
+      assert.ok(session.format === "docx");
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const state = session.state;
+      test.events.length = 0;
+      test.controls.pageCount = 2;
+      test.controls.pageSizes = [
+        { width: 10, height: 10 },
+        { width: 20, height: 20 },
+      ];
+      const first = new RenderTarget();
+      const second = new RenderTarget();
+      first.width = 13;
+      first.height = 17;
+      second.width = 19;
+      second.height = 23;
+      await assert.rejects(
+        session.previewTextPages(
+          { target, text: "draft" },
+          {
+            pages: [
+              { pageIndex: 0, target: first },
+              { pageIndex: 1, target: second },
+            ],
+            zoom: 1,
+            devicePixelRatio: 1,
+            maxPixelsPerPage: 100,
+          },
+        ),
+        { code: "resource-limit" },
+      );
+      assert.deepEqual(
+        [first.width, first.height, second.width, second.height],
+        [13, 17, 19, 23],
+      );
+      assert.deepEqual(test.painted, []);
+      assert.deepEqual(test.closed, [test.opened[1]]);
+      assert.deepEqual(session.state, state);
+      assert.deepEqual(test.events, []);
+      assert.deepEqual((await session.save()).bytes, ORIGINAL);
+    } finally {
+      await test.viewer.destroy();
+    }
+  });
+
+  it("rejects invalid explicit draft budgets before opening a temporary renderer and preserves history", async () => {
+    const test = setup();
+    try {
+      await test.viewer.load(ORIGINAL, { fileName: "preview.docx" });
+      const session = await test.viewer.edit();
+      assert.ok(session.format === "docx");
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const state = session.state;
+      test.events.length = 0;
+      for (const maxPixelsPerPage of [
+        0,
+        -1,
+        1.5,
+        NaN,
+        Infinity,
+        Number.MAX_SAFE_INTEGER + 1,
+      ]) {
+        const canvas = new RenderTarget();
+        await assert.rejects(
+          session.previewTextPages(
+            { target, text: "draft" },
+            { pages: [{ pageIndex: 0, target: canvas }], maxPixelsPerPage },
+          ),
+          { code: "invalid-operation" },
+        );
+        assert.deepEqual([canvas.width, canvas.height], [1, 1]);
+      }
+      assert.equal(test.opened.length, 1);
+      assert.deepEqual(test.painted, []);
+      assert.deepEqual(test.events, []);
+      assert.deepEqual(session.state, state);
+      assert.deepEqual((await session.save()).bytes, ORIGINAL);
+    } finally {
+      await test.viewer.destroy();
+    }
+  });
+
+  it("enforces explicit draft budgets using rounded raster dimensions and keeps metadata and cleanup", async () => {
+    const test = setup();
+    try {
+      await test.viewer.load(ORIGINAL, { fileName: "preview.docx" });
+      const session = await test.viewer.edit();
+      assert.ok(session.format === "docx");
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      const state = session.state;
+      test.events.length = 0;
+      test.controls.pageSizes = [{ width: 10.25, height: 20.25 }];
+      const refused = new RenderTarget();
+      await assert.rejects(
+        session.previewTextPages(
+          { target, text: "draft" },
+          {
+            pages: [{ pageIndex: 0, target: refused }],
+            zoom: 1,
+            devicePixelRatio: 2,
+            maxPixelsPerPage: 860,
+          },
+        ),
+        { code: "resource-limit" },
+      );
+      assert.deepEqual([refused.width, refused.height], [1, 1]);
+      const accepted = new RenderTarget();
+      const result = await session.previewTextPages(
+        { target, text: "draft" },
+        {
+          pages: [{ pageIndex: 0, target: accepted }],
+          zoom: 1,
+          devicePixelRatio: 2,
+          maxPixelsPerPage: 861,
+        },
+      );
+      assert.deepEqual([accepted.width, accepted.height], [21, 41]);
+      assert.equal(result.item?.paragraphs[0]?.text, "draft");
+      assert.deepEqual(result.item?.pageSizes, test.controls.pageSizes);
+      assert.deepEqual(test.painted, [{ text: "draft", target: accepted }]);
+      assert.deepEqual(test.closed, [test.opened[1], test.opened[2]]);
+      assert.deepEqual(test.events, []);
+      assert.deepEqual(session.state, state);
+    } finally {
+      await test.viewer.destroy();
+    }
+  });
+
+  it("cannot enlarge the runtime raster limit with an explicit draft budget", async () => {
+    const test = setup({ ...defaultResourceLimits, maxDecodedPixels: 200 });
+    try {
+      await test.viewer.load(ORIGINAL, { fileName: "preview.docx" });
+      const session = await test.viewer.edit();
+      assert.ok(session.format === "docx");
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      test.controls.pageSizes = [{ width: 20, height: 20 }];
+      const canvas = new RenderTarget();
+      await assert.rejects(
+        session.previewTextPages(
+          { target, text: "draft" },
+          {
+            pages: [{ pageIndex: 0, target: canvas }],
+            zoom: 1,
+            devicePixelRatio: 1,
+            maxPixelsPerPage: 500,
+          },
+        ),
+        { code: "resource-limit" },
+      );
+      assert.deepEqual([canvas.width, canvas.height], [1, 1]);
+      assert.deepEqual(test.painted, []);
+    } finally {
+      await test.viewer.destroy();
+    }
+  });
+
+  it("requires authoritative finite positive draft sizes only when an explicit raster budget is requested", async () => {
+    const test = setup();
+    try {
+      await test.viewer.load(ORIGINAL, { fileName: "preview.docx" });
+      const session = await test.viewer.edit();
+      assert.ok(session.format === "docx");
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      for (const size of [
+        null,
+        [],
+        [{ width: NaN, height: 10 }],
+        [{ width: 10, height: Infinity }],
+        [{ width: 0, height: 10 }],
+        [{ width: -1, height: 10 }],
+        [{ width: Number.MAX_VALUE, height: 1 }],
+      ]) {
+        test.controls.pageSizes = size;
+        const canvas = new RenderTarget();
+        await assert.rejects(
+          session.previewTextPages(
+            { target, text: "draft" },
+            {
+              pages: [{ pageIndex: 0, target: canvas }],
+              zoom: 2,
+              maxPixelsPerPage: 100,
+            },
+          ),
+          { code: "resource-limit" },
+        );
+        assert.deepEqual([canvas.width, canvas.height], [1, 1]);
+      }
+      assert.deepEqual(test.painted, []);
+      test.controls.pageSizes = null;
+      await session.previewTextPages(
+        { target, text: "default" },
+        { pages: [{ pageIndex: 0, target: new RenderTarget() }] },
+      );
+      assert.equal(test.painted.length, 1);
+    } finally {
+      await test.viewer.destroy();
+    }
+  });
+
+  it("preserves typed invalid-page rejection and cleanup with an explicit draft budget", async () => {
+    const test = setup();
+    try {
+      await test.viewer.load(ORIGINAL, { fileName: "preview.docx" });
+      const session = await test.viewer.edit();
+      assert.ok(session.format === "docx");
+      const target = (await session.getElements()).items[0]?.id;
+      assert.ok(target);
+      test.events.length = 0;
+      const state = session.state;
+      const canvas = new RenderTarget();
+      await assert.rejects(
+        session.previewTextPages(
+          { target, text: "draft" },
+          {
+            pages: [{ pageIndex: 1, target: canvas }],
+            maxPixelsPerPage: 8_000_000,
+          },
+        ),
+        { code: "render-failed", message: "Page index is out of range" },
+      );
+      assert.deepEqual([canvas.width, canvas.height], [1, 1]);
+      assert.deepEqual(test.painted, []);
+      assert.deepEqual(test.closed, [test.opened[1]]);
+      assert.deepEqual(session.state, state);
+      assert.deepEqual(test.events, []);
+    } finally {
+      await test.viewer.destroy();
+    }
+  });
+
   it("preserves empty split metadata and UTF-16 LF ranges, with per-page native layouts only where available", async () => {
     const test = setup();
     test.controls.pageCount = 2;

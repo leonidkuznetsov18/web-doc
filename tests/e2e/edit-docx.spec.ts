@@ -734,6 +734,29 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
       const before = document.createElement("canvas");
       await viewer.renderPage(0, before, { zoom: 1, devicePixelRatio: 1 });
       const liveBefore = before.toDataURL();
+      const blocked = document.createElement("canvas");
+      blocked.width = 13;
+      blocked.height = 17;
+      let blockedCode = "resolved";
+      try {
+        await session.previewTextPages(
+          { target: first.id, text: "Blocked draft" },
+          {
+            pages: [{ pageIndex: 0, target: blocked }],
+            zoom: 1,
+            devicePixelRatio: 1,
+            maxPixelsPerPage: 1,
+          },
+        );
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          typeof error.code === "string"
+        )
+          blockedCode = error.code;
+        else throw error;
+      }
       const cancelled = document.createElement("canvas");
       const controller = new AbortController();
       const stale = session
@@ -781,6 +804,7 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
           pages: [{ pageIndex: 0, target: draft }],
           zoom: 1,
           devicePixelRatio: 1,
+          maxPixelsPerPage: 8_000_000,
         },
       );
       if (!preview.item?.layout)
@@ -823,6 +847,8 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
         stateAfter: session.state,
         changes,
         cancelledResult: await stale,
+        blockedCode,
+        blockedDimensions: [blocked.width, blocked.height],
         mixedRuns: paragraphRuns.map((run) => ({
           text: run.text,
           fontWeight: run.fontWeight,
@@ -877,6 +903,8 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
   expect(result.stateAfter).toEqual(result.stateBefore);
   expect(result.changes).toEqual([]);
   expect(result.cancelledResult).toBe("aborted");
+  expect(result.blockedCode).toBe("resource-limit");
+  expect(result.blockedDimensions).toEqual([13, 17]);
   expect(
     result.mixedRuns.some(
       (run) =>

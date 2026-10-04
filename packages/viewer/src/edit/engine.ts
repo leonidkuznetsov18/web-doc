@@ -86,6 +86,8 @@ export interface EditSessionAccess {
 }
 
 export interface DocumentPreviewRenderOptions {
+  /** Per-page decoded raster pixels; a positive safe integer, capped by runtime maxDecodedPixels. */
+  readonly maxPixelsPerPage?: number;
   /** Detached targets owned by the caller; publish only after this read resolves. */
   readonly pages: readonly {
     readonly pageIndex: number;

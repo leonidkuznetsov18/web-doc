@@ -1245,6 +1245,24 @@ caller-owned canvases. Optional `zoom` and `devicePixelRatio` use the same
 units as `renderPage`. Only requested pages are rendered. Targets must have
 unique, valid page indices and satisfy the configured pixel limits.
 
+Optional `render.maxPixelsPerPage` adds a per-page raster budget. It must be a
+positive safe integer; invalid values reject with `invalid-operation`. The
+effective budget is the smaller of that value and the runtime
+`limits.maxDecodedPixels`. With an explicit budget, every requested draft
+page must expose finite positive natural dimensions. Missing or unusable
+sizes reject with `resource-limit`; they never use thumbnail dimensions to
+approve an unknown page. All requested pages are checked before any target
+is painted, using rounded raster width and height at the requested zoom and
+device pixel ratio. One over-budget page rejects the complete preview with
+`resource-limit`, leaving every caller-owned target untouched. Temporary
+renderer cleanup and the read-only session/history contract still apply.
+Omitting the option preserves the runtime's existing budget behavior.
+
+This budget lets an inline editor request metadata and draft pixels in one
+read, without a separate metadata-only renderer open just to inspect page
+sizes. The isolated edit preview is still prepared before viewer rendering
+validates this option; it does not mutate the live document.
+
 The read result contains `pageCount`, natural `pageSizes` when available,
 and requested pages with their renderer-provided text `runs`. Its optional
 `layout` describes the target paragraph on the first requested page that
@@ -1283,7 +1301,12 @@ the currently displayed document.
 const canvas = document.createElement("canvas");
 const draft = await session.previewTextPages(
   { target: paragraphId, text: insertedText, range },
-  { pages: [{ pageIndex, target: canvas }], zoom: 1, devicePixelRatio: 2 },
+  {
+    pages: [{ pageIndex, target: canvas }],
+    zoom: 1,
+    devicePixelRatio: 2,
+    maxPixelsPerPage: 8_000_000,
+  },
   { signal: controller.signal },
 );
 // Publish canvas and draft.item.layout together after checking request identity.

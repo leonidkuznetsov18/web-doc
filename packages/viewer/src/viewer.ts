@@ -1116,6 +1116,19 @@ export class DocumentViewer implements ViewerApi {
     paragraphIds?: readonly string[],
   ): Promise<DocumentPreviewRead> {
     const { adapter, info } = this.#assertReady();
+    const explicitPixelLimit = options.maxPixelsPerPage;
+    if (
+      explicitPixelLimit !== undefined &&
+      (!Number.isSafeInteger(explicitPixelLimit) || explicitPixelLimit <= 0)
+    )
+      throw new ViewerError(
+        "invalid-operation",
+        "Draft maxPixelsPerPage must be a positive safe integer",
+      );
+    const pixelLimit = Math.min(
+      explicitPixelLimit ?? this.#limits.maxDecodedPixels,
+      this.#limits.maxDecodedPixels,
+    );
     const generation = this.#generation;
     enforceContainerLimits(bytes, info.format, this.#limits);
     const assertCurrent = () => {
@@ -1160,11 +1173,26 @@ export class DocumentViewer implements ViewerApi {
           );
         requested.add(page.pageIndex);
         const size = draft.pageSizes?.[page.pageIndex];
+        if (
+          explicitPixelLimit !== undefined &&
+          (!size ||
+            !Number.isFinite(size.width) ||
+            !Number.isFinite(size.height) ||
+            size.width <= 0 ||
+            size.height <= 0 ||
+            !Number.isFinite(size.width * zoom) ||
+            !Number.isFinite(size.height * zoom))
+        )
+          throw new ViewerError(
+            "resource-limit",
+            "Draft page has no usable dimensions for its explicit raster budget",
+            { details: { pageIndex: page.pageIndex } },
+          );
         assertRenderBudget(
           (size?.width ?? THUMBNAIL_BASE_WIDTH) * zoom,
           (size?.height ?? THUMBNAIL_BASE_HEIGHT) * zoom,
           devicePixelRatio,
-          this.#limits.maxDecodedPixels,
+          pixelLimit,
         );
       }
       const pages: DocumentPreviewPages["pages"][number][] = [];
