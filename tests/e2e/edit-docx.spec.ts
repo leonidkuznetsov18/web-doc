@@ -830,6 +830,15 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
           font: run.font,
         })),
         layoutLines: preview.item.layout.lines.length,
+        previewParagraphs: preview.item.paragraphs.map((paragraph) => ({
+          elementId: paragraph.elementId,
+          text: paragraph.text,
+          draftRange: paragraph.draftRange,
+          pages: paragraph.layouts.map((layout) => layout.pageIndex),
+        })),
+        targetId: first.id,
+        legacyMatchesParagraph:
+          preview.item.layout === preview.item.paragraphs[0]?.layouts[0],
         followingYBefore: following.bounds.y,
         followingYAfter: movedFollowing?.y,
         lastDraftLineBottom: Math.max(
@@ -890,6 +899,15 @@ test("read-only DOCX draft pages preserve mixed-run raster fidelity and reflow w
         (run.fontStyle === "italic" || run.font?.includes("italic")),
     ),
   ).toBe(true);
+  expect(result.previewParagraphs).toEqual([
+    {
+      elementId: result.targetId,
+      text: originalText + inserted,
+      draftRange: { start: 0, end: originalText.length + inserted.length },
+      pages: [0],
+    },
+  ]);
+  expect(result.legacyMatchesParagraph).toBe(true);
   expect(result.layoutLines).toBeGreaterThan(3);
   expect(result.followingYAfter).toBeGreaterThan(result.followingYBefore);
   expect(result.followingYAfter).toBeGreaterThanOrEqual(
@@ -950,6 +968,7 @@ test("read-only DOCX leading newline preview paints the native split and retains
         zoom: 1,
         devicePixelRatio: 1,
       });
+      if (!pages.item) throw new Error("Draft page metadata missing");
       const bytePreview = await session.previewText(fields);
       if (!bytePreview.item) throw new Error("Draft bytes missing");
       const module = (await import("/main.js")) as {
@@ -1013,7 +1032,23 @@ test("read-only DOCX leading newline preview paints the native split and retains
           insertedStyle,
           tailStyle,
           paragraphs: elements.map((element) => element.text),
-          pageCount: pages.item?.pageCount,
+          pageCount: pages.item.pageCount,
+          previewParagraphs: pages.item.paragraphs.map((paragraph) => ({
+            elementId: paragraph.elementId,
+            text: paragraph.text,
+            draftRange: paragraph.draftRange,
+            layouts: paragraph.layouts.map((layout) => ({
+              elementId: layout.elementId,
+              pageIndex: layout.pageIndex,
+              lineRanges: layout.lines.map((line) => ({
+                start: line.range.start.offset,
+                end: line.range.end.offset,
+              })),
+              hasGeometry: layout.frame.width > 0 && layout.frame.height > 0,
+            })),
+          })),
+          splitIds: [empty.id, last.id],
+          legacyLayoutMissing: pages.item.layout === undefined,
           stateBefore,
           stateAfter: session.state,
           changes,
@@ -1042,6 +1077,29 @@ test("read-only DOCX leading newline preview paints the native split and retains
   }
   expect(result.draftPixels === result.expectedPixels).toBe(true);
   expect(result.draftPixels === result.bytesPixels).toBe(true);
+  expect(
+    result.previewParagraphs.map((paragraph) => paragraph.elementId),
+  ).toEqual(result.splitIds);
+  expect(
+    result.previewParagraphs.map(({ text, draftRange }) => ({
+      text,
+      draftRange,
+    })),
+  ).toEqual([
+    { text: "", draftRange: { start: 0, end: 0 } },
+    { text: "XAB", draftRange: { start: 1, end: 4 } },
+  ]);
+  // The current public renderer reports text geometry, not empty paragraph marks.
+  expect(result.previewParagraphs[0]?.layouts).toEqual([]);
+  expect(result.legacyLayoutMissing).toBe(true);
+  expect(result.previewParagraphs[1]?.layouts).toEqual([
+    {
+      elementId: result.splitIds[1],
+      pageIndex: 0,
+      lineRanges: [{ start: 0, end: 3 }],
+      hasGeometry: true,
+    },
+  ]);
   expect(result.emptyStyle).toMatchObject({
     bold: true,
     italic: true,

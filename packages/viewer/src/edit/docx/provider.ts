@@ -58,9 +58,11 @@ export class DocxEditEngineClient
     const draft = await this.request<{
       readonly bytes: ArrayBuffer;
       readonly paragraph?: DocxDraftDocument["paragraph"];
+      readonly paragraphs: DocxDraftDocument["paragraphs"];
     }>("edit-docx-preview-text", { fields }, signal);
     return {
       bytes: new Uint8Array(draft.bytes),
+      paragraphs: draft.paragraphs,
       ...(draft.paragraph ? { paragraph: draft.paragraph } : {}),
     };
   }

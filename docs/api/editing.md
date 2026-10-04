@@ -1236,8 +1236,7 @@ All inserted fragments and new paragraph marks inherit the insertion style,
 while the untouched suffix retains its existing runs on the last paragraph.
 The original target id stays with the first paragraph; `createdIds` lists
 new paragraph ids in text order (one per LF). A split may change the draft
-page count and move text across pages; layout covers the target paragraph
-on the first requested page containing it.
+page count and move text across pages.
 
 For an in-document editor, `previewTextPages(fields, render, options?)`
 also renders the draft through the viewer's document adapter. `render.pages`
@@ -1249,10 +1248,28 @@ unique, valid page indices and satisfy the configured pixel limits.
 The read result contains `pageCount`, natural `pageSizes` when available,
 and requested pages with their renderer-provided text `runs`. Its optional
 `layout` describes the target paragraph on the first requested page that
-contains it. Layout supports caret and selection geometry; draft canvas
+contains it, for backward compatibility. `paragraphs` lists the original
+target followed by every created paragraph in text order, including empty
+paragraphs. Each entry contains `elementId`, `text`, `draftRange` and
+`layouts` for all requested pages where its text has geometry. `draftRange`
+uses UTF-16 offsets in the complete draft text joined with LF; layout
+ranges and glyph offsets stay paragraph-local. Add `draftRange.start` to
+translate a local offset to the inline field's draft. LF separates paragraphs
+and has no glyph. Empty layouts explicitly mean geometry is unavailable
+or the paragraph is outside the requested pages: the current renderer
+does not provide empty-paragraph caret geometry. Callers must preserve
+empty paragraph metadata and check geometry availability, rather than
+invent a caret position.
+
+Layout supports caret and selection geometry; draft canvas
 pixels remain authoritative for mixed text styles. Both the paragraph
 metadata and pixels describe the same isolated draft. XML parsing stays in
 the edit worker; the session joins that metadata with rendered text runs.
+To disambiguate repeated text on a later requested page, it also reads
+the target paragraphs' preceding runs through that page from the same
+temporary renderer handle. This bounded scan paints no extra pages and
+does not retain unrelated preceding runs. Cancellation covers these reads
+and temporary-handle cleanup.
 
 Preview rendering never replaces the live document, invalidates its text
 caches or emits viewer progress, layout or document-change events. The

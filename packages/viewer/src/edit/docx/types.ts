@@ -21,9 +21,24 @@ import type {
 } from "../engine.js";
 
 export type DocxTextPreviewOptions = DocumentPreviewRenderOptions;
+export interface DocxPreviewParagraph {
+  readonly elementId: string;
+  readonly text: string;
+  /** Half-open UTF-16 range in the complete draft text, with LF between paragraphs.
+   * Layout ranges/glyph offsets stay paragraph-local; add draftRange.start to
+   * translate them to the inline field's draft text.
+   */
+  readonly draftRange: Readonly<{ start: number; end: number }>;
+  /** Geometry on requested pages only. Empty when the renderer has no visible
+   * text geometry (including empty paragraphs), or the paragraph is not requested.
+   * Empty paragraphs remain in metadata; callers must not fabricate caret geometry.
+   */
+  readonly layouts: readonly TextLayout[];
+}
 export interface DocxTextPreview extends DocumentPreviewPages {
   /** Target paragraph geometry from the same draft as the rendered pages. */
   readonly layout?: TextLayout;
+  readonly paragraphs: readonly DocxPreviewParagraph[];
 }
 
 /*

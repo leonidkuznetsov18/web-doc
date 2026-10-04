@@ -36,6 +36,7 @@ import type {
 } from "./edit/types.js";
 import type {
   DocumentPreviewPages,
+  DocumentPreviewRead,
   DocumentPreviewRenderOptions,
   EditEngineProvider,
 } from "./edit/engine.js";
@@ -1028,8 +1029,8 @@ export class DocumentViewer implements ViewerApi {
         getTextRuns: (pageIndex, signal) =>
           this.#getTextRuns(pageIndex, signal),
         cachedPages: () => [...this.#textMaps.keys()],
-        previewDocument: (bytes, render, signal) =>
-          this.#previewDocument(bytes, render, signal),
+        previewDocument: (bytes, render, signal, paragraphIds) =>
+          this.#previewDocument(bytes, render, signal, paragraphIds),
       });
       this.#session = { core, session };
       this.#emit("editstatechange", {
@@ -1112,7 +1113,8 @@ export class DocumentViewer implements ViewerApi {
     bytes: Uint8Array,
     options: DocumentPreviewRenderOptions,
     signal: AbortSignal,
-  ): Promise<DocumentPreviewPages> {
+    paragraphIds?: readonly string[],
+  ): Promise<DocumentPreviewRead> {
     const { adapter, info } = this.#assertReady();
     const generation = this.#generation;
     enforceContainerLimits(bytes, info.format, this.#limits);
@@ -1166,9 +1168,33 @@ export class DocumentViewer implements ViewerApi {
         );
       }
       const pages: DocumentPreviewPages["pages"][number][] = [];
+      const requestedRuns = new Map<number, readonly TextRun[]>();
+      const alignmentPages: DocumentPreviewPages["pages"][number][] = [];
+      if (paragraphIds?.length && requested.size) {
+        const ids = new Set(paragraphIds);
+        // A later page may repeat earlier text. Collect the target's preceding
+        // runs from this handle to align UTF-16 offsets without guessing which
+        // occurrence it draws. Only requested pages paint; unrelated runs are
+        // released per page. A renderer with source offsets can avoid this scan.
+        const last = Math.max(...requested);
+        for (let pageIndex = 0; pageIndex <= last; pageIndex++) {
+          assertCurrent();
+          const runs =
+            (await adapter.getTextMap?.(temporary, pageIndex, signal)) ?? [];
+          assertCurrent();
+          if (requested.has(pageIndex)) requestedRuns.set(pageIndex, runs);
+          const matching = runs.filter(
+            (run) => run.paragraphId !== undefined && ids.has(run.paragraphId),
+          );
+          if (matching.length)
+            alignmentPages.push({ pageIndex, runs: matching });
+        }
+      }
       for (const page of options.pages) {
         const runs =
-          (await adapter.getTextMap?.(temporary, page.pageIndex, signal)) ?? [];
+          requestedRuns.get(page.pageIndex) ??
+          (await adapter.getTextMap?.(temporary, page.pageIndex, signal)) ??
+          [];
         assertCurrent();
         await this.#runtime.fonts.ensureRuns(runs, () => {}, signal);
         await this.#runtime.renderScheduler.run("visible", signal, () =>
@@ -1186,6 +1212,7 @@ export class DocumentViewer implements ViewerApi {
         pageCount: draft.pageCount,
         ...(draft.pageSizes ? { pageSizes: draft.pageSizes } : {}),
         pages,
+        ...(paragraphIds ? { alignmentPages } : {}),
       };
     } finally {
       await adapter.close(temporary);
