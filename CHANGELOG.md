@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.15.4](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.3...v0.15.4) (2026-10-16)
+
+### Bug fixes
+
+* **viewer:** decode svg images natively in browsers ([38b25f3](https://github.com/leonidkuznetsov18/web-doc/commit/38b25f315908f5b4c73fd4bbe3b78b1d4641faf2))
+
 ## [0.15.3](https://github.com/leonidkuznetsov18/web-doc/compare/v0.15.2...v0.15.3) (2026-10-04)
 
 ### Performance
