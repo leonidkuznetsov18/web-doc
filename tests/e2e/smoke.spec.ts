@@ -1628,39 +1628,34 @@ test("cancels and bounds Word 97 DOC conversion in the package worker", async ({
 test("opens PDF, raster, TIFF, SVG, and delimited data through built-in adapters", async ({
   page,
 }) => {
+  const externalRequests: string[] = [];
+  await page.route("https://svg-resource.invalid/**", async (route) => {
+    externalRequests.push(route.request().url());
+    await route.abort();
+  });
   await page.goto("/");
   const result = await page.evaluate(async () => {
-    const { ViewerClient } = (await import("/main.js")) as {
-      ViewerClient: {
-        create(options: { assetBaseUrl: URL }): {
-          createViewer(): {
-            load(
-              source: Uint8Array,
-              options: { fileName: string },
-            ): Promise<void>;
-            readonly state: {
-              status: string;
-              format?: string;
-              pageCount: number;
-            };
-            destroy(): Promise<void>;
-          };
-          destroy(): Promise<void>;
-        };
-      };
-    };
+    const { ViewerClient } =
+      (await import("/main.js")) as typeof import("../../packages/viewer/src/index.js");
     const fromBase64 = (value: string): Uint8Array =>
       Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     const pdf = new Uint8Array(
       await (await fetch("/corpus/hello.pdf")).arrayBuffer(),
     );
+    const pngCanvas = document.createElement("canvas");
+    pngCanvas.width = 32;
+    pngCanvas.height = 16;
+    const pngContext = pngCanvas.getContext("2d");
+    if (!pngContext) throw new Error("PNG fixture context is unavailable");
+    pngContext.fillStyle = "#ff0000";
+    pngContext.fillRect(0, 0, 16, 16);
+    pngContext.fillStyle = "#00ff00";
+    pngContext.fillRect(16, 0, 16, 16);
     const cases = [
       { fileName: "hello.pdf", data: pdf },
       {
         fileName: "pixel.png",
-        data: fromBase64(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
-        ),
+        data: fromBase64(pngCanvas.toDataURL("image/png").split(",")[1]!),
       },
       {
         fileName: "page.tiff",
@@ -1670,9 +1665,17 @@ test("opens PDF, raster, TIFF, SVG, and delimited data through built-in adapters
       },
       {
         fileName: "safe.svg",
-        data: new TextEncoder().encode(
-          '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script/><rect width="10" height="10"/></svg>',
-        ),
+        data: new TextEncoder().encode(`
+          <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16"
+            onload="document.documentElement.dataset.svgExecuted='yes'">
+            <script>document.documentElement.dataset.svgExecuted='yes'</script>
+            <style>@import url(https://svg-resource.invalid/style.css);</style>
+            <foreignObject width="32" height="16"><iframe xmlns="http://www.w3.org/1999/xhtml" src="https://svg-resource.invalid/frame"/></foreignObject>
+            <image href="https://svg-resource.invalid/image.png" width="32" height="16"/>
+            <defs><rect id="green" width="16" height="16" fill="#00ff00"/></defs>
+            <rect width="16" height="16" fill="#ff0000"/>
+            <use href="#green" x="16"/>
+          </svg>`),
       },
       {
         fileName: "data.csv",
@@ -1687,17 +1690,43 @@ test("opens PDF, raster, TIFF, SVG, and delimited data through built-in adapters
       assetBaseUrl: new URL("/", location.href),
     });
     const output = [];
-    for (const fixture of cases) {
-      const viewer = client.createViewer();
-      await viewer.load(fixture.data, { fileName: fixture.fileName });
-      output.push({ ...viewer.state });
-      await viewer.destroy();
+    try {
+      for (const fixture of cases) {
+        const viewer = client.createViewer();
+        const warnings: string[] = [];
+        viewer.on("warning", (warning) => warnings.push(warning.code));
+        try {
+          await viewer.load(fixture.data, { fileName: fixture.fileName });
+          const pixels: number[][] = [];
+          if (viewer.state.format === "svg" || viewer.state.format === "png") {
+            const canvas = document.createElement("canvas");
+            await viewer.renderPage(0, canvas, {
+              devicePixelRatio: 1,
+              zoom: 1,
+            });
+            const context = canvas.getContext("2d");
+            if (!context)
+              throw new Error("Rendered canvas context is unavailable");
+            pixels.push(
+              [...context.getImageData(8, 8, 1, 1).data],
+              [...context.getImageData(24, 8, 1, 1).data],
+            );
+          }
+          output.push({ ...viewer.state, pixels, warnings });
+        } finally {
+          await viewer.destroy();
+        }
+      }
+    } finally {
+      await client.destroy();
     }
-    await client.destroy();
-    return output;
+    return {
+      states: output,
+      executed: document.documentElement.dataset.svgExecuted,
+    };
   });
 
-  expect(result.map((state) => state.format)).toEqual([
+  expect(result.states.map((state) => state.format)).toEqual([
     "pdf",
     "png",
     "tiff",
@@ -1705,10 +1734,21 @@ test("opens PDF, raster, TIFF, SVG, and delimited data through built-in adapters
     "csv",
     "tsv",
   ]);
-  for (const state of result) {
+  for (const state of result.states) {
     expect(state.status).toBe("ready");
     expect(state.pageCount).toBeGreaterThan(0);
+    if (state.format === "svg" || state.format === "png") {
+      expect(state.pixels).toEqual([
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+      ]);
+    }
   }
+  expect(
+    result.states.find((state) => state.format === "svg")?.warnings,
+  ).toContain("external-resource-blocked");
+  expect(result.executed).toBeUndefined();
+  expect(externalRequests).toEqual([]);
 });
 
 test("converts and renders Word 97 comments and numbering in browser WASM", async ({

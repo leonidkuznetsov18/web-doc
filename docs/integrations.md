@@ -95,3 +95,7 @@ const client = ViewerClient.create({
 ```
 
 Copy `assets/`, `workers/`, and `fonts/` from package `dist/` below that URL. Serve `.wasm` as `application/wasm`, `.js` as JavaScript modules, `.woff2` as `font/woff2`, and enable Brotli/gzip with immutable hashed deployment URLs. Workers are ESM and CSP-compatible without `eval`; allow the self-host origin in `worker-src`, `script-src`, `font-src` and `connect-src` as applicable.
+
+SVG rendering uses a sanitized, opaque data URL with the native image decoder.
+Allow `data:` in `img-src` when enabling SVG documents. Raster image fallback
+decoding requires `blob:` in `img-src` when `createImageBitmap` is unavailable.

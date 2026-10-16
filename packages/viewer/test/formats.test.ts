@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import type { TestContext } from "node:test";
 
 import type {
   AdapterOpenContext,
@@ -20,6 +21,7 @@ import {
   parseDelimitedText,
   sanitizeSvg,
 } from "../src/index.js";
+import { drawEncodedImage } from "../src/adapters/bitmap.js";
 
 const originalCreateImageBitmap = globalThis.createImageBitmap;
 let closedBitmaps = 0;
@@ -98,6 +100,56 @@ describe("CSV and TSV", () => {
 });
 
 describe("SVG security", () => {
+  it("renders sanitized SVG with the native decoder and an opaque source", async (t) => {
+    let decodedSource = "";
+    installNativeImageDecoder(t, async (source) => {
+      decodedSource = source;
+    });
+    t.mock.method(globalThis, "createImageBitmap", async () => {
+      throw new Error("SVG must not use the bitmap decoder");
+    });
+    t.mock.method(URL, "createObjectURL", () => {
+      throw new Error("SVG must not create a same-origin object URL");
+    });
+    const adapter = new SvgDocumentAdapter();
+    const handle = await adapter.open(
+      new TextEncoder().encode(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3" onload="steal()"><title>Логотип #1</title><rect fill="#00ff00" width="2" height="3"/></svg>',
+      ),
+      context("svg"),
+    );
+    const canvas = fakeCanvas();
+    await adapter.render(handle, canvas, {
+      pageIndex: 0,
+      zoom: 2,
+      devicePixelRatio: 1,
+    });
+    assert.ok(decodedSource.startsWith("data:image/svg+xml,"));
+    const decodedSvg = decodeURIComponent(decodedSource.split(",")[1]!);
+    assert.match(decodedSvg, /Логотип #1/);
+    assert.match(decodedSvg, /fill="#00ff00"/);
+    assert.doesNotMatch(decodedSvg, /onload|steal/);
+    assert.equal(canvas.width, 4);
+    assert.equal(canvas.height, 6);
+  });
+
+  it("normalizes native SVG decode failures", async (t) => {
+    installNativeImageDecoder(t, async () => {
+      throw new Error("Unsupported image");
+    });
+    const revoked = t.mock.method(URL, "revokeObjectURL", () => {});
+    await assert.rejects(
+      drawEncodedImage(
+        new TextEncoder().encode("<svg/>"),
+        "image/svg+xml",
+        fakeCanvas(),
+        { dpr: 1 },
+      ),
+      isCode("invalid-file"),
+    );
+    assert.equal(revoked.mock.callCount(), 0);
+  });
+
   it("removes scripts, event handlers, foreign content, and external references", () => {
     const sanitized = sanitizeSvg(`
       <svg xmlns="http://www.w3.org/2000/svg" onload="steal()">
@@ -207,6 +259,7 @@ describe("PDF adapter", () => {
 
 describe("image adapter", () => {
   it("uses native browser decoding for raster images", async () => {
+    const beforeClosed = closedBitmaps;
     const adapter = new ImageDocumentAdapter();
     const handle = await adapter.open(png(2, 3), context("png"));
     const info = await adapter.getInfo(handle);
@@ -220,7 +273,39 @@ describe("image adapter", () => {
       devicePixelRatio: 1,
     });
     assert.deepEqual(await adapter.getTextMap(), []);
+    assert.equal(closedBitmaps - beforeClosed, 2);
   });
+
+  for (const fails of [false, true]) {
+    it(`releases raster fallback object URLs after ${fails ? "failure" : "painting"}`, async (t) => {
+      installNativeImageDecoder(t, async (source) => {
+        assert.equal(source, "blob:raster-fallback");
+        if (fails) throw new Error("Unsupported image");
+      });
+      const decoder = globalThis.createImageBitmap;
+      Object.defineProperty(globalThis, "createImageBitmap", {
+        configurable: true,
+        value: undefined,
+      });
+      t.after(() => {
+        Object.defineProperty(globalThis, "createImageBitmap", {
+          configurable: true,
+          value: decoder,
+        });
+      });
+      t.mock.method(URL, "createObjectURL", () => "blob:raster-fallback");
+      const revoked = t.mock.method(URL, "revokeObjectURL", () => {});
+      const rendered = drawEncodedImage(png(2, 3), "image/png", fakeCanvas(), {
+        dpr: 1,
+      });
+      if (fails) await assert.rejects(rendered, isCode("invalid-file"));
+      else assert.deepEqual(await rendered, { width: 2, height: 3 });
+      assert.equal(revoked.mock.callCount(), 1);
+      assert.deepEqual(revoked.mock.calls[0]?.arguments, [
+        "blob:raster-fallback",
+      ]);
+    });
+  }
 
   it("exposes multi-page TIFF and releases its worker backend", async () => {
     let closed = 0;
@@ -373,4 +458,29 @@ function fakeCanvas(): HTMLCanvasElement | OffscreenCanvas {
 
 function isCode(code: string): (error: unknown) => boolean {
   return (error) => error instanceof ViewerError && error.code === code;
+}
+
+function installNativeImageDecoder(
+  t: TestContext,
+  decode: (source: string) => Promise<void>,
+): void {
+  for (const [name, value] of Object.entries({
+    document: {},
+    Image: class {
+      src = "";
+      decoding = "auto";
+      naturalWidth = 2;
+      naturalHeight = 3;
+      decode(): Promise<void> {
+        return decode(this.src);
+      }
+    },
+  })) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name);
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+    t.after(() => {
+      if (previous) Object.defineProperty(globalThis, name, previous);
+      else Reflect.deleteProperty(globalThis, name);
+    });
+  }
 }

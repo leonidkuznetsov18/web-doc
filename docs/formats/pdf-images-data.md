@@ -75,6 +75,11 @@ SVG is decoded only after sanitization. The sanitizer:
 
 This deliberately blocks external images, fonts, data URLs and CSS. A modified document emits `external-resource-blocked`. There is no default resource resolver or network fetch.
 
+The sanitized document is encoded as an opaque `data:image/svg+xml` image and
+decoded with `Image.decode()` before painting to canvas. This avoids browser
+differences in SVG `createImageBitmap` support. Hosts must allow `data:` in
+`img-src` for SVG rendering. This does not permit data URLs inside SVG content.
+
 ## CSV/TSV parsing rules
 
 The worker recognizes UTF-8 (with or without BOM), UTF-16LE/BE BOM, then uses Windows-1252 only when input is invalid UTF-8 and emits `fidelity-degraded`. CSV delimiter detection compares comma, tab and semicolon outside quoted fields; `.tsv` always uses tab. RFC-style doubled quotes, quoted newlines, CRLF, empty cells and trailing empty fields are preserved as strings. No number, date or formula inference occurs.

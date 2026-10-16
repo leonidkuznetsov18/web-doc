@@ -66,7 +66,8 @@ async function decodeImage(blob: Blob): Promise<{
   readonly height: number;
   readonly close: () => void;
 }> {
-  if (typeof createImageBitmap === "function") {
+  const isSvg = blob.type === "image/svg+xml";
+  if (!isSvg && typeof createImageBitmap === "function") {
     const bitmap = await createImageBitmap(blob, {
       imageOrientation: "from-image",
     });
@@ -82,20 +83,24 @@ async function decodeImage(blob: Blob): Promise<{
       "render-failed",
       "No browser image decoder is available",
     );
-  const url = URL.createObjectURL(blob);
+  const objectUrl = isSvg ? null : URL.createObjectURL(blob);
   try {
     const image = new Image();
     image.decoding = "async";
-    image.src = url;
+    image.src =
+      objectUrl ??
+      `data:image/svg+xml,${encodeURIComponent(await blob.text())}`;
     await image.decode();
     return {
       source: image,
       width: image.naturalWidth,
       height: image.naturalHeight,
-      close: () => URL.revokeObjectURL(url),
+      close: () => {
+        if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+      },
     };
   } catch (error) {
-    URL.revokeObjectURL(url);
+    if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     throw new ViewerError("invalid-file", "Browser image decode failed", {
       cause: error,
     });
